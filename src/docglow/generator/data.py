@@ -173,6 +173,7 @@ def build_docglow_data(
     column_lineage_workers: int | None = None,
     exclude_packages: bool = True,
     slim: bool = False,
+    enable_erd: bool = False,
 ) -> dict[str, Any]:
     """Transform loaded artifacts into the unified DocglowData payload.
 
@@ -201,6 +202,7 @@ def build_docglow_data(
         column_lineage_workers=column_lineage_workers,
         exclude_packages=exclude_packages,
         slim=slim,
+        enable_erd=enable_erd,
     )
 
     stages = default_stages(ctx)

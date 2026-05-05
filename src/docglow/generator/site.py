@@ -36,6 +36,7 @@ def generate_site(
     slim: bool = False,
     head_script: str | None = None,
     column_lineage_workers: int | None = None,
+    enable_erd: bool = False,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
 
@@ -82,6 +83,7 @@ def generate_site(
         column_lineage_workers=column_lineage_workers,
         exclude_packages=exclude_packages,
         slim=slim,
+        enable_erd=enable_erd,
     )
 
     # Run column insights if enabled

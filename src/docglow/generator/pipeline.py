@@ -41,6 +41,7 @@ class PipelineContext:
     column_lineage_workers: int | None = None
     exclude_packages: bool = True
     slim: bool = False
+    enable_erd: bool = False
 
     # Lookup maps (populated by build_lookups stage)
     run_results_by_id: dict[str, Any] = field(default_factory=dict)
@@ -63,6 +64,7 @@ class PipelineContext:
     column_lineage: dict[str, Any] | None = None
     ai_context: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    relationships: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
