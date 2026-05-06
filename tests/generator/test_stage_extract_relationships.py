@@ -1169,8 +1169,8 @@ class TestMetaWalkerEdgeCases:
         assert rel["kind"] == "inferred"
 
 
-class TestMetaAndTestComposition:
-    """U4 uses naive concat — both lists appear together in ctx.relationships."""
+class TestNonOverlappingTestAndMeta:
+    """U5: test + meta entries on different (from, to) keys both appear."""
 
     def test_test_entries_and_meta_entries_both_appear(self) -> None:
         # Test-walker entry: order_items.order_id → orders.order_id
@@ -1216,6 +1216,364 @@ class TestMetaAndTestComposition:
         sources = [r["inference_source"] for r in ctx.relationships]
         assert sources.count("test") == 1
         assert sources.count("meta") == 1
+
+
+# ---------------------------------------------------------------------------
+# Composition (DOC-213 U5)
+# ---------------------------------------------------------------------------
+
+
+class TestComposition:
+    """`_compose` merges test + meta entries with conflict rules + dedupe."""
+
+    def test_test_alone_emits_test_source(self) -> None:
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        rel = _relationships_test(
+            test_uid="test.myproj.rel",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        ctx = _make_context([orders, order_items, rel])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        assert ctx.relationships[0]["inference_source"] == "test"
+
+    def test_meta_alone_emits_meta_source(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "customers", "field": "id"}]}}
+            },
+        )
+        ctx = _make_context([customers, orders])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        assert ctx.relationships[0]["inference_source"] == "meta"
+
+    def test_test_plus_meta_same_4tuple_merges_into_both(self) -> None:
+        """Test + meta on the same (from_uid, from_col, to_uid, to_col) → single 'both' entry.
+
+        Per the plan + U4-handoff resolutions:
+          - label adopted from meta (test entries always have label=None)
+          - status preserved from test (meta entries always have status="none")
+          - id recomputed via relationship_id(..., "both") so it differs from
+            either single-source contributor.
+        """
+        from docglow.generator.erd import relationship_id
+
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "label": "placed by"},
+                        ]
+                    }
+                }
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_orders_customers",
+            parent_name="customers",
+            child_name="orders",
+            parent_field="id",
+            child_column="customer_id",
+        )
+        run_result = RunResult(unique_id="test.myproj.rel_orders_customers", status="success")
+        ctx = _make_context([customers, orders, rel_test], run_results=[run_result])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["inference_source"] == "both"
+        # Test wins: status, severity, test_unique_id.
+        assert rel["status"] == "pass"
+        assert rel["severity"] == "error"
+        assert rel["test_unique_id"] == "test.myproj.rel_orders_customers"
+        # Meta contributes: label, meta_file_path.
+        assert rel["label"] == "placed by"
+        assert rel["meta_file_path"] == "models/marts/orders.yml"
+        # id recomputed with source="both" — distinct from either contributor.
+        expected_both_id = relationship_id(
+            "model.myproj.orders", "customer_id", "model.myproj.customers", "id", "both"
+        )
+        test_only_id = relationship_id(
+            "model.myproj.orders", "customer_id", "model.myproj.customers", "id", "test"
+        )
+        meta_only_id = relationship_id(
+            "model.myproj.orders", "customer_id", "model.myproj.customers", "id", "meta"
+        )
+        assert rel["id"] == expected_both_id
+        assert rel["id"] != test_only_id
+        assert rel["id"] != meta_only_id
+
+    def test_severity_precedence_test_wins_on_merge(self) -> None:
+        """test severity=error + meta severity=warn → merged severity = 'error'."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "severity": "warn"},
+                        ]
+                    }
+                }
+            },
+        )
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_orders_customers",
+            parent_name="customers",
+            child_name="orders",
+            parent_field="id",
+            child_column="customer_id",
+            severity="ERROR",
+        )
+        ctx = _make_context([customers, orders, rel_test])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        assert ctx.relationships[0]["inference_source"] == "both"
+        assert ctx.relationships[0]["severity"] == "error"
+
+    def test_kind_handoff_meta_kind_overrides_endpoints_on_merge(self) -> None:
+        """test kind=inferred + meta kind=many_to_many → merged kind=many_to_many.
+
+        Endpoints must reflect the meta override (one_or_many / one_or_many)
+        even though the test entry was emitted with `inferred` semantics.
+        """
+        tags = _model_node(
+            "model.myproj.tags",
+            "tags",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        post_tags = _model_node_with_meta(
+            "model.myproj.post_tags",
+            "post_tags",
+            columns_meta={
+                "tag_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "tags", "field": "id", "kind": "many_to_many"},
+                        ]
+                    }
+                }
+            },
+        )
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_pt_tags",
+            parent_name="tags",
+            child_name="post_tags",
+            parent_field="id",
+            child_column="tag_id",
+        )
+        ctx = _make_context([tags, post_tags, rel_test])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["inference_source"] == "both"
+        assert rel["kind"] == "many_to_many"
+        assert rel["child_endpoint"] == "one_or_many"
+        assert rel["parent_endpoint"] == "one_or_many"
+
+    def test_conflict_on_to_column_emits_both_with_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """test says (customers, customer_id), meta says (customers, id) →
+        2 entries (different keys), warning logged naming both file paths."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={
+                "id": ManifestColumnInfo(name="id"),
+                "customer_id": ManifestColumnInfo(name="customer_id"),
+            },
+        )
+        # Meta says parent column is `id`.
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "customers", "field": "id"}]}}
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        # Test says parent column is `customer_id`.
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_orders_customers",
+            parent_name="customers",
+            child_name="orders",
+            parent_field="customer_id",
+            child_column="customer_id",
+        )
+        ctx = _make_context([customers, orders, rel_test])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        # Both surfaced — different keys.
+        assert len(ctx.relationships) == 2
+        sources = sorted(r["inference_source"] for r in ctx.relationships)
+        assert sources == ["meta", "test"]
+        # Warning identifies the conflict.
+        warning_msgs = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert any("conflict" in m.lower() or "models/marts/orders.yml" in m for m in warning_msgs)
+
+    def test_duplicate_meta_entries_within_column_survive_composition(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Case 11: U4 last-wins gives us one entry; composition must not collapse it further."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "kind": "one_to_one"},
+                            {"to": "customers", "field": "id", "kind": "many_to_many"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        # Last-wins from U4 preserved through compose.
+        assert ctx.relationships[0]["kind"] == "many_to_many"
+
+    def test_ghost_edges_to_distinct_models_preserved(self) -> None:
+        """Two ghost edges from same column to two different nonexistent models → 2 entries."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "missing_a", "field": "id"},
+                            {"to": "missing_b", "field": "id"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([orders])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 2
+        ghost_targets = {r["to_model_name"] for r in ctx.relationships}
+        assert ghost_targets == {"missing_a", "missing_b"}
+        # Both ghost edges share to_unique_id="" but were not collapsed.
+        assert all(r["to_unique_id"] == "" for r in ctx.relationships)
+
+    def test_ghost_edges_from_different_columns_to_same_missing_model_preserved(self) -> None:
+        """Two ghost edges from different child columns to the same nonexistent model → 2 entries.
+
+        Key includes to_model_name + child column, so both survive composition.
+        """
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "missing_x", "field": "id"}]}},
+                "shipper_id": {"docglow": {"relationships": [{"to": "missing_x", "field": "id"}]}},
+            },
+        )
+        ctx = _make_context([orders])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 2
+        from_cols = {r["from_column"] for r in ctx.relationships}
+        assert from_cols == {"customer_id", "shipper_id"}
+        assert all(r["to_model_name"] == "missing_x" for r in ctx.relationships)
+
+    def test_deterministic_ordering_across_runs(self) -> None:
+        """Same input twice → identical dict lists in identical order."""
+
+        def build_nodes() -> list[ManifestNode]:
+            customers = _model_node(
+                "model.myproj.customers",
+                "customers",
+                columns={"id": ManifestColumnInfo(name="id")},
+            )
+            orders = _model_node(
+                "model.myproj.orders",
+                "orders",
+                columns={"order_id": ManifestColumnInfo(name="order_id")},
+            )
+            order_items = _model_node_with_meta(
+                "model.myproj.order_items",
+                "order_items",
+                columns_meta={
+                    "customer_id": {
+                        "docglow": {"relationships": [{"to": "customers", "field": "id"}]}
+                    }
+                },
+            )
+            rel_test = _relationships_test(
+                test_uid="test.myproj.rel_oi_orders",
+                parent_name="orders",
+                child_name="order_items",
+                parent_field="order_id",
+                child_column="order_id",
+            )
+            return [customers, orders, order_items, rel_test]
+
+        ctx_a = _make_context(build_nodes())
+        ctx_b = _make_context(build_nodes())
+        stage_extract_relationships(ctx_a)
+        stage_extract_relationships(ctx_b)
+
+        assert ctx_a.relationships == ctx_b.relationships
 
 
 # Quiet linter: `Any` is used in helper signatures

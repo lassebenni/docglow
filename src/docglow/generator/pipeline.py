@@ -149,6 +149,7 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
         _build_columns_index,
         _build_parent_lookup,
         _build_test_index,
+        _compose,
         _extract_from_meta,
         _extract_from_test,
     )
@@ -170,11 +171,10 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
         if entry is not None:
             test_entries.append(entry)
 
-    # DOC-213 U4: walk meta.docglow.relationships. Naive concat for now —
-    # U5 will replace with proper compose-and-dedupe.
     meta_entries = _extract_from_meta(manifest, parent_lookup, test_index, columns_by_uid)
 
-    ctx.relationships = test_entries + meta_entries
+    # DOC-213 U5: compose test + meta entries with merge-and-dedupe.
+    ctx.relationships = _compose(test_entries, meta_entries)
 
 
 def stage_filter_nodes(ctx: PipelineContext) -> None:

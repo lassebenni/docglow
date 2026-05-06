@@ -512,3 +512,159 @@ def _extract_from_meta(
                     entries.append(entry)
 
     return entries
+
+
+# ---------------------------------------------------------------------------
+# Worker helpers for stage_extract_relationships (DOC-213 U5)
+# ---------------------------------------------------------------------------
+
+
+def _compose(
+    test_entries: list[dict[str, Any]],
+    meta_entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge test + meta ErdRelationship dicts with conflict + dedupe rules.
+
+    Algorithm (origin §5.4 + plan U5 + U4-handoff resolutions):
+
+    - Real-target rows (`to_unique_id != ""`) are bucketed by the 4-tuple
+      `(from_unique_id, from_column, to_unique_id, to_column)`. Test entries
+      are inserted first; meta entries either upgrade an existing test row to
+      `inference_source="both"` (test wins on `severity`/`status`/
+      `test_unique_id`; meta contributes `label`/`meta_file_path`; meta's
+      `kind` is adopted only when the test entry's `kind == "inferred"`,
+      otherwise the test's `kind` is kept; if the adopted `kind` is one of
+      `{"one_to_one","one_to_many","many_to_many"}` we re-run
+      `apply_meta_kind_override` on the merged endpoints) or land as a new
+      `meta` entry under their own key.
+
+    - Ghost edges (`to_unique_id == ""`, meta-only) are tracked separately
+      keyed on `(from_unique_id, from_column, to_model_name, to_column)` so
+      that two ghosts pointing at distinct missing models — or two ghosts
+      from different child columns to the same missing model — both survive.
+      Tests cannot produce ghost edges, so this branch never merges.
+
+    - Soft conflict warning (origin §5.4): if a `(from_unique_id, from_column)`
+      pair has both a test-only entry and a meta-only entry that disagree on
+      the parent (i.e. they did NOT merge into "both"), log a warning naming
+      the meta file path. Both rows are still surfaced.
+
+    - Result is sorted ascending by
+      `(from_unique_id, from_column, to_unique_id, to_column)` for
+      deterministic snapshots.
+
+    `id` is recomputed via `relationship_id(..., "both")` on every merge so
+    the merged hash is stable and distinct from either single-source
+    contributor (the source string is part of the hash).
+    """
+
+    merged: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    ghosts: list[dict[str, Any]] = []
+    seen_ghost_keys: set[tuple[str, str, str, str]] = set()
+
+    for entry in test_entries:
+        key: tuple[str, str, str, str] = (
+            entry["from_unique_id"],
+            entry["from_column"],
+            entry["to_unique_id"],
+            entry["to_column"],
+        )
+        merged[key] = dict(entry)
+
+    for entry in meta_entries:
+        if entry["to_unique_id"] == "":
+            # Ghost edge: keyed on child + to_model_name + parent column so
+            # distinct missing parents and distinct child columns are kept apart.
+            ghost_key: tuple[str, str, str, str] = (
+                entry["from_unique_id"],
+                entry["from_column"],
+                entry["to_model_name"],
+                entry["to_column"],
+            )
+            if ghost_key in seen_ghost_keys:
+                # U4 already enforced last-wins within a column; cross-column
+                # ghosts to the same target are distinct keys above.
+                continue
+            seen_ghost_keys.add(ghost_key)
+            ghosts.append(dict(entry))
+            continue
+
+        key = (
+            entry["from_unique_id"],
+            entry["from_column"],
+            entry["to_unique_id"],
+            entry["to_column"],
+        )
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = dict(entry)
+            continue
+
+        # Upgrade to "both" — test wins on severity/status/test_unique_id;
+        # meta contributes label and meta_file_path.
+        merged_entry = dict(existing)
+        merged_entry["label"] = entry.get("label")
+        merged_entry["meta_file_path"] = entry.get("meta_file_path")
+        merged_entry["inference_source"] = "both"
+
+        # Kind handoff: if the test entry was "inferred", adopt meta's kind.
+        if existing.get("kind") == "inferred":
+            merged_entry["kind"] = entry.get("kind", "inferred")
+
+        # If the now-active kind is a meta-shape override, re-apply endpoint
+        # rewriting on top of the merged row.
+        active_kind = merged_entry.get("kind")
+        if active_kind in _VALID_META_KINDS:
+            child_ep, parent_ep = apply_meta_kind_override(
+                merged_entry["child_endpoint"],
+                merged_entry["parent_endpoint"],
+                active_kind,
+            )
+            merged_entry["child_endpoint"] = child_ep
+            merged_entry["parent_endpoint"] = parent_ep
+
+        # Re-issue id with source="both" — relationship_id hashes the source.
+        merged_entry["id"] = relationship_id(
+            merged_entry["from_unique_id"],
+            merged_entry["from_column"],
+            merged_entry["to_unique_id"],
+            merged_entry["to_column"],
+            "both",
+        )
+
+        merged[key] = merged_entry
+
+    # Soft conflict check (origin §5.4): same (from, from_column) shared by a
+    # test-only row and a meta-only row that did not merge. Surface both, warn.
+    by_child: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in merged.values():
+        bucket_key = (row["from_unique_id"], row["from_column"])
+        by_child.setdefault(bucket_key, []).append(row)
+    for (child_uid, child_col), rows in by_child.items():
+        sources = {r["inference_source"] for r in rows}
+        if "test" in sources and "meta" in sources and "both" not in sources:
+            meta_paths = sorted(
+                {
+                    r.get("meta_file_path") or "<unknown path>"
+                    for r in rows
+                    if r["inference_source"] == "meta"
+                }
+            )
+            logger.warning(
+                "test/meta relationship conflict on %s.%s — both surfaced; "
+                "test wins per origin §5.4 (meta file(s): %s)",
+                child_uid,
+                child_col,
+                ", ".join(meta_paths),
+            )
+
+    result = list(merged.values()) + ghosts
+    result.sort(
+        key=lambda r: (
+            r["from_unique_id"],
+            r["from_column"],
+            r["to_unique_id"],
+            r["to_column"],
+        )
+    )
+    return result
