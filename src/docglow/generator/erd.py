@@ -318,3 +318,197 @@ def _extract_from_test(
         "is_synthetic": False,
         "parent_column_exists": parent_column_exists,
     }
+
+
+# ---------------------------------------------------------------------------
+# Worker helpers for stage_extract_relationships (DOC-213 U4)
+# ---------------------------------------------------------------------------
+
+
+_VALID_META_KINDS = frozenset({"one_to_one", "one_to_many", "many_to_many"})
+
+
+def _extract_from_meta(
+    manifest: Manifest,
+    parent_lookup: dict[str, str],
+    test_index: dict[tuple[str, str], set[str]],
+    columns_by_uid: dict[str, set[str]],
+) -> list[dict[str, Any]]:
+    """Walk `manifest.nodes[*].columns[*].meta.docglow.relationships`.
+
+    Emits one ErdRelationship-shaped dict per declaration. See origin §5.4 for
+    the schema. Mirrors `_extract_from_test`'s output shape so downstream
+    consumers don't need to special-case meta vs test entries.
+
+    Returns entries in declaration order (dict insertion order on
+    `manifest.nodes` then `node.columns` then list position). U5 will replace
+    naive concat with a proper compose-and-dedupe across test + meta.
+    """
+    entries: list[dict[str, Any]] = []
+
+    for child_uid, node in manifest.nodes.items():
+        if node.resource_type != "model":
+            continue
+
+        # Open Question 2: warn-and-ignore model-level meta.docglow.relationships.
+        model_meta_docglow = node.meta.get("docglow") if isinstance(node.meta, dict) else None
+        if isinstance(model_meta_docglow, dict) and "relationships" in model_meta_docglow:
+            logger.debug(
+                "model-level docglow.relationships ignored on %s (%s) — "
+                "declare on a column instead",
+                node.unique_id,
+                node.original_file_path or "<unknown path>",
+            )
+
+        for child_column, column in node.columns.items():
+            col_meta = column.meta if isinstance(column.meta, dict) else {}
+            docglow_block = col_meta.get("docglow")
+            if not isinstance(docglow_block, dict):
+                continue
+            raw_rels = docglow_block.get("relationships")
+            if raw_rels is None:
+                continue
+            file_path = node.original_file_path or None
+            if not isinstance(raw_rels, list):
+                logger.warning(
+                    "meta.docglow.relationships on %s.%s must be a list, got %s — skipping (%s)",
+                    node.unique_id,
+                    child_column,
+                    type(raw_rels).__name__,
+                    file_path or "<unknown path>",
+                )
+                continue
+
+            # Track entries within this single column's list to implement
+            # last-wins for duplicate (to, field) tuples (case 11).
+            seen_keys: dict[tuple[str, str], int] = {}
+
+            for raw_entry in raw_rels:
+                if not isinstance(raw_entry, dict):
+                    logger.warning(
+                        "meta.docglow.relationships entry on %s.%s must be a dict, "
+                        "got %s — skipping (%s)",
+                        node.unique_id,
+                        child_column,
+                        type(raw_entry).__name__,
+                        file_path or "<unknown path>",
+                    )
+                    continue
+
+                to_value = raw_entry.get("to")
+                field_value = raw_entry.get("field")
+                if not isinstance(to_value, str) or not to_value:
+                    logger.warning(
+                        "meta.docglow.relationships on %s.%s missing/invalid `to` — skipping (%s)",
+                        node.unique_id,
+                        child_column,
+                        file_path or "<unknown path>",
+                    )
+                    continue
+                if not isinstance(field_value, str) or not field_value:
+                    logger.warning(
+                        "meta.docglow.relationships on %s.%s missing/invalid `field` — "
+                        "skipping (%s)",
+                        node.unique_id,
+                        child_column,
+                        file_path or "<unknown path>",
+                    )
+                    continue
+
+                # Optional kind — validate against allowed values.
+                kind_raw = raw_entry.get("kind")
+                kind_value: str | None = None
+                if kind_raw is not None:
+                    if isinstance(kind_raw, str) and kind_raw in _VALID_META_KINDS:
+                        kind_value = kind_raw
+                    else:
+                        logger.warning(
+                            "meta.docglow.relationships on %s.%s has unknown kind=%r — "
+                            "falling back to inferred (%s)",
+                            node.unique_id,
+                            child_column,
+                            kind_raw,
+                            file_path or "<unknown path>",
+                        )
+
+                # Optional severity — default warn, lowercased.
+                severity_raw = raw_entry.get("severity")
+                severity_value = (
+                    str(severity_raw).lower() if isinstance(severity_raw, str) else "warn"
+                )
+
+                # Optional label.
+                label_raw = raw_entry.get("label")
+                label_value = label_raw if isinstance(label_raw, str) else None
+
+                # Resolve parent.
+                parent_uid = parent_lookup.get(to_value, "")
+                if not parent_uid:
+                    logger.warning(
+                        "meta.docglow.relationships on %s.%s points at unknown model %r "
+                        "(ghost edge) — emitted with empty to_unique_id (%s)",
+                        node.unique_id,
+                        child_column,
+                        to_value,
+                        file_path or "<unknown path>",
+                    )
+
+                # Inference: sibling tests on parent / child columns.
+                child_col_lower = child_column.lower()
+                parent_col_lower = field_value.lower()
+                child_not_null = "not_null" in test_index.get((child_uid, child_col_lower), set())
+                parent_unique = (
+                    "unique" in test_index.get((parent_uid, parent_col_lower), set())
+                    if parent_uid
+                    else False
+                )
+                child_endpoint, parent_endpoint = infer_endpoints(child_not_null, parent_unique)
+                child_endpoint, parent_endpoint = apply_meta_kind_override(
+                    child_endpoint, parent_endpoint, kind_value
+                )
+
+                parent_column_exists = (
+                    parent_col_lower in columns_by_uid.get(parent_uid, set())
+                    if parent_uid
+                    else False
+                )
+
+                entry = {
+                    "id": relationship_id(child_uid, child_column, parent_uid, field_value, "meta"),
+                    "from_unique_id": child_uid,
+                    "from_column": child_column,
+                    "to_unique_id": parent_uid,
+                    "to_column": field_value,
+                    "to_model_name": to_value,
+                    "kind": kind_value or "inferred",
+                    "child_endpoint": child_endpoint,
+                    "parent_endpoint": parent_endpoint,
+                    "inference_source": "meta",
+                    "severity": severity_value,
+                    "status": "none",
+                    "label": label_value,
+                    "test_unique_id": None,
+                    "meta_file_path": file_path,
+                    "is_synthetic": False,
+                    "parent_column_exists": parent_column_exists,
+                }
+
+                # Case 11: same (to, field) within the same column → last-wins.
+                dedupe_key = (to_value, field_value)
+                if dedupe_key in seen_keys:
+                    prior_idx = seen_keys[dedupe_key]
+                    logger.warning(
+                        "duplicate meta.docglow.relationships entry on %s.%s for "
+                        "to=%r field=%r — last-wins (%s)",
+                        node.unique_id,
+                        child_column,
+                        to_value,
+                        field_value,
+                        file_path or "<unknown path>",
+                    )
+                    entries[prior_idx] = entry
+                else:
+                    seen_keys[dedupe_key] = len(entries)
+                    entries.append(entry)
+
+    return entries

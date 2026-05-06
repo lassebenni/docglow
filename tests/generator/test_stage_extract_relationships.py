@@ -42,6 +42,8 @@ def _model_node(
     *,
     package: str = "myproj",
     columns: dict[str, ManifestColumnInfo] | None = None,
+    original_file_path: str = "",
+    meta: dict[str, Any] | None = None,
 ) -> ManifestNode:
     return ManifestNode(
         unique_id=unique_id,
@@ -50,6 +52,36 @@ def _model_node(
         package_name=package,
         columns=columns or {},
         config=NodeConfig(materialized="view"),
+        original_file_path=original_file_path,
+        meta=meta or {},
+    )
+
+
+def _model_node_with_meta(
+    unique_id: str,
+    name: str,
+    *,
+    package: str = "myproj",
+    columns_meta: dict[str, dict[str, Any]] | None = None,
+    original_file_path: str = "",
+    model_level_meta: dict[str, Any] | None = None,
+) -> ManifestNode:
+    """Build a model node where each column carries the given `meta` dict.
+
+    `columns_meta` maps column-name → meta dict. The column object itself is
+    constructed from name + meta. Use this to set up `meta.docglow.relationships`
+    entries for U4 tests.
+    """
+    columns: dict[str, ManifestColumnInfo] = {}
+    for col_name, col_meta in (columns_meta or {}).items():
+        columns[col_name] = ManifestColumnInfo(name=col_name, meta=col_meta)
+    return _model_node(
+        unique_id,
+        name,
+        package=package,
+        columns=columns,
+        original_file_path=original_file_path,
+        meta=model_level_meta,
     )
 
 
@@ -734,6 +766,456 @@ class TestJaffleShopIntegration:
         stage_transform_nodes(ctx)
         stage_extract_relationships(ctx)
         assert ctx.relationships == []
+
+
+# ---------------------------------------------------------------------------
+# Meta walker (DOC-213 U4)
+# ---------------------------------------------------------------------------
+
+
+class TestMetaWalker:
+    """meta.docglow.relationships emits one dict per declaration."""
+
+    def test_single_meta_entry_emits_one_dict(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id"},
+                        ]
+                    }
+                }
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        ctx = _make_context([customers, orders])
+
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["inference_source"] == "meta"
+        assert rel["status"] == "none"
+        assert rel["from_unique_id"] == "model.myproj.orders"
+        assert rel["from_column"] == "customer_id"
+        assert rel["to_unique_id"] == "model.myproj.customers"
+        assert rel["to_column"] == "id"
+        assert rel["to_model_name"] == "customers"
+        assert rel["test_unique_id"] is None
+        assert rel["meta_file_path"] == "models/marts/orders.yml"
+        assert rel["is_synthetic"] is False
+        assert rel["severity"] == "warn"  # default
+        assert rel["label"] is None
+        assert rel["kind"] == "inferred"  # no kind specified
+        assert rel["parent_column_exists"] is True
+        assert isinstance(rel["id"], str) and len(rel["id"]) == 12
+
+    def test_kind_many_to_many_overrides_endpoints(self) -> None:
+        tags = _model_node(
+            "model.myproj.tags",
+            "tags",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        post_tags = _model_node_with_meta(
+            "model.myproj.post_tags",
+            "post_tags",
+            columns_meta={
+                "tag_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "tags", "field": "id", "kind": "many_to_many"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([tags, post_tags])
+
+        stage_extract_relationships(ctx)
+
+        rel = ctx.relationships[0]
+        assert rel["child_endpoint"] == "one_or_many"
+        assert rel["parent_endpoint"] == "one_or_many"
+        assert rel["kind"] == "many_to_many"
+
+    def test_no_kind_no_siblings_falls_back(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+
+        stage_extract_relationships(ctx)
+
+        rel = ctx.relationships[0]
+        assert rel["child_endpoint"] == "zero_or_one"
+        assert rel["parent_endpoint"] == "zero_or_many"
+
+    def test_severity_default_warn(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "customers", "field": "id"}]}}
+            },
+        )
+        ctx = _make_context([customers, orders])
+        stage_extract_relationships(ctx)
+        assert ctx.relationships[0]["severity"] == "warn"
+
+    def test_severity_error_respected_and_lowercased(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "severity": "ERROR"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+        stage_extract_relationships(ctx)
+        assert ctx.relationships[0]["severity"] == "error"
+
+    def test_label_passed_through(self) -> None:
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {
+                                "to": "customers",
+                                "field": "id",
+                                "label": "placed by",
+                            },
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+        stage_extract_relationships(ctx)
+        assert ctx.relationships[0]["label"] == "placed by"
+
+    def test_meta_uses_sibling_tests_for_inference(self) -> None:
+        """Meta declarations should still benefit from sibling unique/not_null tests."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "customers", "field": "id"}]}}
+            },
+        )
+        unique_on_customers = _column_test(
+            test_uid="test.myproj.unique_customers_id",
+            model_name="customers",
+            column="id",
+            kind="unique",
+        )
+        not_null_on_orders = _column_test(
+            test_uid="test.myproj.notnull_orders_customer_id",
+            model_name="orders",
+            column="customer_id",
+            kind="not_null",
+        )
+
+        ctx = _make_context([customers, orders, unique_on_customers, not_null_on_orders])
+        stage_extract_relationships(ctx)
+
+        rel = ctx.relationships[0]
+        assert rel["child_endpoint"] == "one_and_only_one"
+        assert rel["parent_endpoint"] == "one_or_many"
+
+
+class TestMetaWalkerEdgeCases:
+    """Edge cases per origin §7 (cases 8, 11, 12) + structural malformations."""
+
+    def test_ghost_edge_to_nonexistent_model(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Case 8: meta points at a model that doesn't exist."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "nonexistent_model", "field": "id"},
+                        ]
+                    }
+                }
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        ctx = _make_context([orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["to_unique_id"] == ""
+        assert rel["to_model_name"] == "nonexistent_model"
+        assert rel["parent_column_exists"] is False
+        # A warning was logged identifying the file.
+        assert any("nonexistent_model" in r.getMessage() for r in caplog.records)
+
+    def test_duplicate_entries_last_wins(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Case 11: two entries on same column with same (to,field) — last wins."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "kind": "one_to_one"},
+                            {"to": "customers", "field": "id", "kind": "many_to_many"},
+                        ]
+                    }
+                }
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        ctx = _make_context([customers, orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        # Only one entry (last-wins).
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["kind"] == "many_to_many"
+        # Warning was emitted.
+        assert any(
+            "models/marts/orders.yml" in r.getMessage() or "duplicate" in r.getMessage().lower()
+            for r in caplog.records
+        )
+
+    def test_model_level_meta_ignored(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Open Question 2: model-level meta.docglow.relationships → ignored."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={"customer_id": {}},
+            model_level_meta={
+                "docglow": {
+                    "relationships": [
+                        {"to": "customers", "field": "id"},
+                    ]
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+
+        with caplog.at_level("DEBUG", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        # Nothing emitted from model-level meta — and nothing crashed.
+        assert ctx.relationships == []
+
+    def test_non_list_relationships_value_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """`relationships: 'customers'` (str instead of list) → warn, skip."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {"relationships": "customers"},  # not a list
+                }
+            },
+            original_file_path="models/marts/orders.yml",
+        )
+        ctx = _make_context([orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        assert ctx.relationships == []
+        assert any(
+            "list" in r.getMessage().lower() or "customer_id" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_missing_required_to_field_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Meta entry missing `to` → skipped with warning."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"field": "id"},  # no `to`
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        assert ctx.relationships == []
+        assert any(caplog.records)
+
+    def test_missing_required_field_skipped(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Meta entry missing `field` → skipped with warning."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers"},  # no `field`
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([orders])
+
+        with caplog.at_level("WARNING", logger="docglow.generator.erd"):
+            stage_extract_relationships(ctx)
+
+        assert ctx.relationships == []
+        assert any(caplog.records)
+
+    def test_unknown_kind_falls_back_to_inferred(self) -> None:
+        """Unknown `kind` value logs warning + uses inferred endpoints."""
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "customer_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "customers", "field": "id", "kind": "bogus_kind"},
+                        ]
+                    }
+                }
+            },
+        )
+        ctx = _make_context([customers, orders])
+        stage_extract_relationships(ctx)
+        rel = ctx.relationships[0]
+        # Falls back to inferred endpoints when kind is unrecognized.
+        assert rel["child_endpoint"] == "zero_or_one"
+        assert rel["parent_endpoint"] == "zero_or_many"
+        assert rel["kind"] == "inferred"
+
+
+class TestMetaAndTestComposition:
+    """U4 uses naive concat — both lists appear together in ctx.relationships."""
+
+    def test_test_entries_and_meta_entries_both_appear(self) -> None:
+        # Test-walker entry: order_items.order_id → orders.order_id
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_oi_orders",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        # Meta-walker entry: orders.customer_id → customers.id
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        # Replace `orders` with one that ALSO has meta on customer_id, since
+        # the original `orders` only has `order_id`. Use a separate model to
+        # avoid interfering with the test entry.
+        sales = _model_node_with_meta(
+            "model.myproj.sales",
+            "sales",
+            columns_meta={
+                "customer_id": {"docglow": {"relationships": [{"to": "customers", "field": "id"}]}}
+            },
+        )
+
+        ctx = _make_context([orders, order_items, rel_test, customers, sales])
+        stage_extract_relationships(ctx)
+
+        # Naive concat: 1 test entry + 1 meta entry.
+        assert len(ctx.relationships) == 2
+        sources = [r["inference_source"] for r in ctx.relationships]
+        assert sources.count("test") == 1
+        assert sources.count("meta") == 1
 
 
 # Quiet linter: `Any` is used in helper signatures
