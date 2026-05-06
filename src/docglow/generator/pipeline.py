@@ -132,6 +132,46 @@ def stage_transform_nodes(ctx: PipelineContext) -> None:
             ctx.snapshots[unique_id] = data
 
 
+# DOC-213: ERD relationship extraction. Walks `relationships`-typed test
+# nodes, resolves parent/child unique_ids, runs crow's-foot inference, and
+# writes a list of ErdRelationship-shaped dicts to ctx.relationships.
+def stage_extract_relationships(ctx: PipelineContext) -> None:
+    """Extract ERD relationships from `relationships` test nodes.
+
+    Gated on `ctx.enable_erd`; safe to call when disabled (no-op). DOC-214 will
+    wrap the dicts in `ErdRelationship` instances and wire them into the JSON
+    payload; this stage is intentionally type-light.
+    """
+    if not ctx.enable_erd:
+        return
+
+    from docglow.generator.erd import (
+        _build_columns_index,
+        _build_parent_lookup,
+        _build_test_index,
+        _extract_from_test,
+    )
+
+    manifest = ctx.artifacts.manifest
+    parent_lookup = _build_parent_lookup(manifest)
+    test_index = _build_test_index(manifest)
+    columns_by_uid = _build_columns_index(manifest)
+
+    entries: list[dict[str, Any]] = []
+    for node in manifest.nodes.values():
+        if node.resource_type != "test":
+            continue
+        if not node.test_metadata or node.test_metadata.name != "relationships":
+            continue
+        entry = _extract_from_test(
+            node, parent_lookup, test_index, columns_by_uid, ctx.run_results_by_id
+        )
+        if entry is not None:
+            entries.append(entry)
+
+    ctx.relationships = entries
+
+
 def stage_filter_nodes(ctx: PipelineContext) -> None:
     """Apply --select / --exclude filtering to models, seeds, snapshots."""
     if not ctx.select and not ctx.exclude:
@@ -352,6 +392,11 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
         PipelineStage("filter_nodes", stage_filter_nodes),
         PipelineStage("transform_sources", stage_transform_sources),
         PipelineStage("transform_exposures_metrics", stage_transform_exposures_metrics),
+        PipelineStage(
+            "extract_relationships",
+            stage_extract_relationships,
+            enabled=ctx.enable_erd,
+        ),
         PipelineStage("build_lineage", stage_build_lineage),
         PipelineStage("build_search_index", stage_build_search_index),
         PipelineStage("compute_health", stage_compute_health),
