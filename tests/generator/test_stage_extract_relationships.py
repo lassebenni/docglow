@@ -8,6 +8,8 @@ run-results join). Jaffle-shop integration is the safety net.
 
 from __future__ import annotations
 
+import statistics
+import time
 from pathlib import Path
 from typing import Any
 
@@ -1574,6 +1576,81 @@ class TestComposition:
         stage_extract_relationships(ctx_b)
 
         assert ctx_a.relationships == ctx_b.relationships
+
+
+# ---------------------------------------------------------------------------
+# Performance budget (DOC-213 U6)
+# ---------------------------------------------------------------------------
+
+
+class TestPerfBudget:
+    """CI-safe wall-clock gate on stage_extract_relationships.
+
+    Production target is 250ms at 200 models / 500 relationships
+    (asserted manually via `scripts/bench_erd_extraction.py`). Here we run
+    a smaller fixture (50 models / 100 relationships) and assert ≤ 60ms
+    median across 5 iterations — 1/4 the production scale and budget,
+    leaving plenty of headroom for noisy CI runners.
+    """
+
+    def test_perf_budget(self) -> None:
+        num_models = 50
+        nodes: list[ManifestNode] = []
+
+        # Build 50 models, each with `id` and `parent_id`. Chain them so
+        # model_i.parent_id → model_{i-1}.id via a relationships test.
+        for i in range(num_models):
+            nodes.append(
+                _model_node(
+                    f"model.myproj.m{i}",
+                    f"m{i}",
+                    columns={
+                        "id": ManifestColumnInfo(name="id"),
+                        "parent_id": ManifestColumnInfo(name="parent_id"),
+                    },
+                )
+            )
+
+        # ~100 relationships tests: every model gets a "parent_id → prev.id"
+        # test, plus a second "id → m0.id" edge for every model except m0.
+        for i in range(num_models):
+            parent_idx = (i - 1) % num_models
+            nodes.append(
+                _relationships_test(
+                    test_uid=f"test.myproj.rel_m{i}_parent",
+                    parent_name=f"m{parent_idx}",
+                    child_name=f"m{i}",
+                    parent_field="id",
+                    child_column="parent_id",
+                )
+            )
+            if i != 0:
+                nodes.append(
+                    _relationships_test(
+                        test_uid=f"test.myproj.rel_m{i}_to_m0",
+                        parent_name="m0",
+                        child_name=f"m{i}",
+                        parent_field="id",
+                        child_column="id",
+                    )
+                )
+
+        ctx = _make_context(nodes)
+
+        timings_ms: list[float] = []
+        for _ in range(5):
+            ctx.relationships = []
+            t0 = time.perf_counter()
+            stage_extract_relationships(ctx)
+            timings_ms.append((time.perf_counter() - t0) * 1000)
+
+        median_ms = statistics.median(timings_ms)
+        # Sanity: we did emit relationships (≈100).
+        assert len(ctx.relationships) > 0
+        assert median_ms <= 60.0, (
+            f"perf budget exceeded: {median_ms:.2f}ms > 60ms "
+            f"(timings={[f'{t:.2f}' for t in timings_ms]})"
+        )
 
 
 # Quiet linter: `Any` is used in helper signatures
