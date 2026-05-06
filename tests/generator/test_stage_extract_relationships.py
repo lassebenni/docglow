@@ -1746,5 +1746,287 @@ class TestSerialization:
         assert result["relationships"] == []
 
 
+# ---------------------------------------------------------------------------
+# Per-model annotation (DOC-214 U2)
+# ---------------------------------------------------------------------------
+
+
+class TestModelAnnotation:
+    """stage_extract_relationships writes relationships_count + relationships_summary
+    onto each model dict. Bidirectional partner counting; top-3 by edge count
+    desc, alphabetical secondary; empty for models with no relationships."""
+
+    def test_single_outgoing_fk_annotates_both_endpoints(self) -> None:
+        """m1 -> m2: both ends get count 1, summary lists the partner."""
+        m1 = _model_node(
+            "model.myproj.m1",
+            "m1",
+            columns={"m2_id": ManifestColumnInfo(name="m2_id")},
+        )
+        m2 = _model_node(
+            "model.myproj.m2",
+            "m2",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        rel = _relationships_test(
+            test_uid="test.myproj.rel_m1_m2",
+            parent_name="m2",
+            child_name="m1",
+            parent_field="id",
+            child_column="m2_id",
+        )
+        ctx = _make_context([m1, m2, rel])
+
+        stage_extract_relationships(ctx)
+
+        m1_dict = ctx.models["model.myproj.m1"]
+        m2_dict = ctx.models["model.myproj.m2"]
+        assert m1_dict["relationships_count"] == 1
+        assert m1_dict["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.m2", "edge_count": 1}
+        ]
+        assert m2_dict["relationships_count"] == 1
+        assert m2_dict["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.m1", "edge_count": 1}
+        ]
+
+    def test_chain_m1_m2_m3_bidirectional_counts(self) -> None:
+        """m1 -> m2 -> m3: m2 has 2 partners (m1, m3), m1 and m3 each have 1."""
+        m1 = _model_node(
+            "model.myproj.m1",
+            "m1",
+            columns={"m2_id": ManifestColumnInfo(name="m2_id")},
+        )
+        m2 = _model_node(
+            "model.myproj.m2",
+            "m2",
+            columns={
+                "id": ManifestColumnInfo(name="id"),
+                "m3_id": ManifestColumnInfo(name="m3_id"),
+            },
+        )
+        m3 = _model_node(
+            "model.myproj.m3",
+            "m3",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        rel_m1_m2 = _relationships_test(
+            test_uid="test.myproj.rel_m1_m2",
+            parent_name="m2",
+            child_name="m1",
+            parent_field="id",
+            child_column="m2_id",
+        )
+        rel_m2_m3 = _relationships_test(
+            test_uid="test.myproj.rel_m2_m3",
+            parent_name="m3",
+            child_name="m2",
+            parent_field="id",
+            child_column="m3_id",
+        )
+        ctx = _make_context([m1, m2, m3, rel_m1_m2, rel_m2_m3])
+
+        stage_extract_relationships(ctx)
+
+        assert ctx.models["model.myproj.m1"]["relationships_count"] == 1
+        assert ctx.models["model.myproj.m1"]["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.m2", "edge_count": 1}
+        ]
+        assert ctx.models["model.myproj.m3"]["relationships_count"] == 1
+        assert ctx.models["model.myproj.m3"]["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.m2", "edge_count": 1}
+        ]
+        assert ctx.models["model.myproj.m2"]["relationships_count"] == 2
+        assert ctx.models["model.myproj.m2"]["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.m1", "edge_count": 1},
+            {"partner_unique_id": "model.myproj.m3", "edge_count": 1},
+        ]
+
+    def test_isolated_model_has_zero_count_and_empty_summary(self) -> None:
+        """A model not referenced in any relationship must still get the keys."""
+        m1 = _model_node(
+            "model.myproj.m1",
+            "m1",
+            columns={"m2_id": ManifestColumnInfo(name="m2_id")},
+        )
+        m2 = _model_node(
+            "model.myproj.m2",
+            "m2",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        m_isolated = _model_node(
+            "model.myproj.m_isolated",
+            "m_isolated",
+            columns={"x": ManifestColumnInfo(name="x")},
+        )
+        rel = _relationships_test(
+            test_uid="test.myproj.rel",
+            parent_name="m2",
+            child_name="m1",
+            parent_field="id",
+            child_column="m2_id",
+        )
+        ctx = _make_context([m1, m2, m_isolated, rel])
+
+        stage_extract_relationships(ctx)
+
+        iso = ctx.models["model.myproj.m_isolated"]
+        assert iso["relationships_count"] == 0
+        assert iso["relationships_summary"] == []
+
+    def test_top_3_cap_with_5_partners(self) -> None:
+        """A hub model with 5 outgoing FKs gets a summary of exactly 3 entries."""
+        partners = [
+            _model_node(
+                f"model.myproj.p{i}",
+                f"p{i}",
+                columns={"id": ManifestColumnInfo(name="id")},
+            )
+            for i in range(5)
+        ]
+        hub_columns = {f"p{i}_id": ManifestColumnInfo(name=f"p{i}_id") for i in range(5)}
+        hub = _model_node("model.myproj.hub", "hub", columns=hub_columns)
+        rels = [
+            _relationships_test(
+                test_uid=f"test.myproj.rel_hub_p{i}",
+                parent_name=f"p{i}",
+                child_name="hub",
+                parent_field="id",
+                child_column=f"p{i}_id",
+            )
+            for i in range(5)
+        ]
+        ctx = _make_context([hub, *partners, *rels])
+
+        stage_extract_relationships(ctx)
+
+        hub_dict = ctx.models["model.myproj.hub"]
+        assert hub_dict["relationships_count"] == 5
+        assert len(hub_dict["relationships_summary"]) == 3
+
+    def test_tied_counts_resolve_alphabetically(self) -> None:
+        """Two partners with equal counts are ordered by partner_unique_id asc."""
+        a = _model_node(
+            "model.myproj.a",
+            "a",
+            columns={
+                "b_id": ManifestColumnInfo(name="b_id"),
+                "c_id": ManifestColumnInfo(name="c_id"),
+            },
+        )
+        b = _model_node(
+            "model.myproj.b",
+            "b",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        c = _model_node(
+            "model.myproj.c",
+            "c",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        rel_a_b = _relationships_test(
+            test_uid="test.myproj.rel_a_b",
+            parent_name="b",
+            child_name="a",
+            parent_field="id",
+            child_column="b_id",
+        )
+        rel_a_c = _relationships_test(
+            test_uid="test.myproj.rel_a_c",
+            parent_name="c",
+            child_name="a",
+            parent_field="id",
+            child_column="c_id",
+        )
+        ctx = _make_context([a, b, c, rel_a_b, rel_a_c])
+
+        stage_extract_relationships(ctx)
+
+        a_dict = ctx.models["model.myproj.a"]
+        assert a_dict["relationships_summary"] == [
+            {"partner_unique_id": "model.myproj.b", "edge_count": 1},
+            {"partner_unique_id": "model.myproj.c", "edge_count": 1},
+        ]
+
+    def test_ghost_edge_increments_count_but_no_summary_entry(self) -> None:
+        """meta-only relationship to a non-existent model (to_unique_id == "")
+        increments the from-model's count but contributes no summary entry."""
+        orders = _model_node_with_meta(
+            "model.myproj.orders",
+            "orders",
+            columns_meta={
+                "phantom_id": {
+                    "docglow": {
+                        "relationships": [
+                            {"to": "phantom_table", "field": "id"},
+                        ]
+                    }
+                }
+            },
+            original_file_path="models/orders.yml",
+        )
+        ctx = _make_context([orders])
+
+        stage_extract_relationships(ctx)
+
+        # Ghost edge survived composition
+        assert any(r["to_unique_id"] == "" for r in ctx.relationships)
+
+        orders_dict = ctx.models["model.myproj.orders"]
+        assert orders_dict["relationships_count"] >= 1
+        # The empty-uid sentinel must not leak into the summary.
+        assert all(
+            entry["partner_unique_id"] != "" for entry in orders_dict["relationships_summary"]
+        )
+
+    def test_enable_erd_false_does_not_annotate(self) -> None:
+        """With ERD disabled, the stage is a no-op — no annotation keys appear."""
+        m1 = _model_node(
+            "model.myproj.m1",
+            "m1",
+            columns={"m2_id": ManifestColumnInfo(name="m2_id")},
+        )
+        m2 = _model_node(
+            "model.myproj.m2",
+            "m2",
+            columns={"id": ManifestColumnInfo(name="id")},
+        )
+        rel = _relationships_test(
+            test_uid="test.myproj.rel",
+            parent_name="m2",
+            child_name="m1",
+            parent_field="id",
+            child_column="m2_id",
+        )
+        ctx = _make_context([m1, m2, rel], enable_erd=False)
+
+        stage_extract_relationships(ctx)
+
+        for uid in ("model.myproj.m1", "model.myproj.m2"):
+            assert "relationships_count" not in ctx.models[uid]
+            assert "relationships_summary" not in ctx.models[uid]
+
+    def test_jaffle_shop_real_fixture_annotations(self) -> None:
+        """End-to-end: jaffle-shop annotations match the known relationship topology.
+
+        order_items has 1 partner (orders, outgoing FK).
+        orders has 2 partners: order_items (incoming) + stg_customers (outgoing).
+        """
+        artifacts = load_artifacts(Path("examples/jaffle-shop"))
+        ctx = PipelineContext(artifacts=artifacts, enable_erd=True)
+        stage_build_lookups(ctx)
+        stage_transform_nodes(ctx)
+        stage_extract_relationships(ctx)
+
+        order_items = ctx.models["model.jaffle_shop.order_items"]
+        assert order_items["relationships_count"] == 1
+        assert order_items["relationships_summary"][0]["partner_unique_id"] == (
+            "model.jaffle_shop.orders"
+        )
+
+        orders = ctx.models["model.jaffle_shop.orders"]
+        assert orders["relationships_count"] == 2
+
+
 # Quiet linter: `Any` is used in helper signatures
 _ = Any

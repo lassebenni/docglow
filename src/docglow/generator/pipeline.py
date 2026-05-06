@@ -149,6 +149,7 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
         return
 
     from docglow.generator.erd import (
+        _annotate_models,
         _build_columns_index,
         _build_parent_lookup,
         _build_test_index,
@@ -178,6 +179,9 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
 
     # DOC-213 U5: compose test + meta entries with merge-and-dedupe.
     ctx.relationships = _compose(test_entries, meta_entries)
+
+    # DOC-214 U2: annotate each model with relationships_count + relationships_summary.
+    _annotate_models(ctx.relationships, ctx.models)
 
 
 def stage_filter_nodes(ctx: PipelineContext) -> None:

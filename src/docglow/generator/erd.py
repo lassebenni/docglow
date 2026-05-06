@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections import Counter, defaultdict
 from typing import Any
 
 from docglow.artifacts.manifest import Manifest, ManifestNode
@@ -668,3 +669,78 @@ def _compose(
         )
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Per-model annotation (DOC-214 U2)
+# ---------------------------------------------------------------------------
+
+
+# Sentinel partner uid for ghost edges (`to_unique_id == ""`). Counted toward
+# the from-model's total but stripped from `relationships_summary` because no
+# resolvable partner exists. See DOC-214 U2 plan §Approach.
+_GHOST_PARTNER_SENTINEL = ""
+
+# Top-N cap for `relationships_summary` (origin §6.4 "top 3 partners").
+_SUMMARY_TOP_N = 3
+
+
+def _annotate_models(
+    relationships: list[dict[str, Any]],
+    models: dict[str, Any],
+) -> None:
+    """Mutate each model dict in ``models`` to carry per-model ERD partner stats.
+
+    Adds two keys to every model dict:
+
+    - ``relationships_count: int`` — total partner-edges this model
+      participates in. Bidirectional: a single relationship row contributes
+      to BOTH endpoints' counts. Ghost edges (``to_unique_id == ""``) count
+      toward the from-model's total but produce no resolvable partner.
+    - ``relationships_summary: list[RelationshipSummary]`` — top-3 partners
+      sorted by ``(edge_count desc, partner_unique_id asc)``. Ghost-sentinel
+      partners are excluded.
+
+    Models with no relationships still receive ``relationships_count: 0`` and
+    ``relationships_summary: []`` — explicit absence, not missing keys, so
+    frontend consumers can distinguish "no FKs" from "ERD disabled" (the
+    latter omits both keys entirely).
+
+    Mutation in place mirrors the existing pipeline pattern (see ``_compose``
+    operating on bucketed dicts). Re-running this helper on the same context
+    overwrites prior annotations rather than accumulating.
+    """
+    partner_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for rel in relationships:
+        from_uid = rel["from_unique_id"]
+        to_uid = rel["to_unique_id"]
+        if from_uid and to_uid:
+            partner_counts[from_uid][to_uid] += 1
+            partner_counts[to_uid][from_uid] += 1
+        elif from_uid:
+            # Ghost edge: count toward `from_uid`'s total, no resolvable partner.
+            partner_counts[from_uid][_GHOST_PARTNER_SENTINEL] += 1
+
+    for uid in models:
+        counts = partner_counts.get(uid)
+        if not counts:
+            models[uid]["relationships_count"] = 0
+            models[uid]["relationships_summary"] = []
+            continue
+
+        total = sum(counts.values())
+        # Strip ghost-sentinel before sorting; it contributes to total but not
+        # to surfaced partners.
+        resolvable = [
+            (partner_uid, count)
+            for partner_uid, count in counts.items()
+            if partner_uid != _GHOST_PARTNER_SENTINEL
+        ]
+        resolvable.sort(key=lambda pc: (-pc[1], pc[0]))
+        summary = [
+            {"partner_unique_id": partner_uid, "edge_count": count}
+            for partner_uid, count in resolvable[:_SUMMARY_TOP_N]
+        ]
+
+        models[uid]["relationships_count"] = total
+        models[uid]["relationships_summary"] = summary
