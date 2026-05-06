@@ -26,6 +26,7 @@ from docglow.artifacts.manifest import (
 )
 from docglow.artifacts.manifest import TestMetadata as _TestMetadata  # avoid pytest collection
 from docglow.artifacts.run_results import RunResult, RunResults
+from docglow.generator.data import build_docglow_data
 from docglow.generator.pipeline import (
     PipelineContext,
     context_to_dict,
@@ -769,6 +770,71 @@ class TestJaffleShopIntegration:
         stage_transform_nodes(ctx)
         stage_extract_relationships(ctx)
         assert ctx.relationships == []
+
+    def test_full_payload_round_trip(self) -> None:
+        """End-to-end contract gate (DOC-214 U4): U1 + U2 + U3 wire together
+        through `build_docglow_data` against real jaffle-shop artifacts.
+
+        With `enable_erd=True`: top-level `relationships` populated with the
+        three known edges, and per-model `relationships_count` /
+        `relationships_summary` reflect the topology.
+        With `enable_erd=False`: neither the top-level key nor the per-model
+        annotation keys appear anywhere — byte-identical commitment.
+        """
+        artifacts = load_artifacts(Path("examples/jaffle-shop"))
+
+        # --- enable_erd=True --------------------------------------------------
+        result_enabled = build_docglow_data(artifacts, enable_erd=True)
+
+        assert "relationships" in result_enabled
+        assert len(result_enabled["relationships"]) == 3
+
+        edges = {
+            (r["from_unique_id"], r["from_column"], r["to_unique_id"], r["to_column"])
+            for r in result_enabled["relationships"]
+        }
+        expected_edges = {
+            (
+                "model.jaffle_shop.order_items",
+                "order_id",
+                "model.jaffle_shop.orders",
+                "order_id",
+            ),
+            (
+                "model.jaffle_shop.orders",
+                "customer_id",
+                "model.jaffle_shop.stg_customers",
+                "customer_id",
+            ),
+            (
+                "model.jaffle_shop.stg_order_items",
+                "order_id",
+                "model.jaffle_shop.stg_orders",
+                "order_id",
+            ),
+        }
+        assert edges == expected_edges
+
+        # Per-model annotations from U2.
+        order_items = result_enabled["models"]["model.jaffle_shop.order_items"]
+        assert order_items["relationships_count"] == 1
+        assert len(order_items["relationships_summary"]) == 1
+        assert order_items["relationships_summary"][0]["partner_unique_id"] == (
+            "model.jaffle_shop.orders"
+        )
+
+        orders = result_enabled["models"]["model.jaffle_shop.orders"]
+        # Incoming from order_items + outgoing to stg_customers.
+        assert orders["relationships_count"] == 2
+
+        # --- enable_erd=False -------------------------------------------------
+        result_disabled = build_docglow_data(artifacts, enable_erd=False)
+
+        assert "relationships" not in result_disabled
+        # Pick a model that gets annotated when ERD is on; verify it's clean here.
+        oi_disabled = result_disabled["models"]["model.jaffle_shop.order_items"]
+        assert "relationships_count" not in oi_disabled
+        assert "relationships_summary" not in oi_disabled
 
 
 # ---------------------------------------------------------------------------
