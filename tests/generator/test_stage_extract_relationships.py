@@ -28,6 +28,7 @@ from docglow.artifacts.manifest import TestMetadata as _TestMetadata  # avoid py
 from docglow.artifacts.run_results import RunResult, RunResults
 from docglow.generator.pipeline import (
     PipelineContext,
+    context_to_dict,
     stage_build_lookups,
     stage_extract_relationships,
     stage_transform_nodes,
@@ -1651,6 +1652,98 @@ class TestPerfBudget:
             f"perf budget exceeded: {median_ms:.2f}ms > 60ms "
             f"(timings={[f'{t:.2f}' for t in timings_ms]})"
         )
+
+
+# ---------------------------------------------------------------------------
+# Serialization (DOC-214 U1)
+# ---------------------------------------------------------------------------
+
+
+class TestSerialization:
+    """context_to_dict serializes ctx.relationships gated on enable_erd."""
+
+    # All fields _compose emits (mirrored verbatim by ErdRelationship TypedDict).
+    EXPECTED_KEYS = {
+        "id",
+        "from_unique_id",
+        "from_column",
+        "to_unique_id",
+        "to_column",
+        "to_model_name",
+        "kind",
+        "child_endpoint",
+        "parent_endpoint",
+        "inference_source",
+        "severity",
+        "status",
+        "label",
+        "test_unique_id",
+        "meta_file_path",
+        "is_synthetic",
+        "parent_column_exists",
+    }
+
+    def _build_ctx_with_one_relationship(self, *, enable_erd: bool = True) -> PipelineContext:
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        rel_test = _relationships_test(
+            test_uid="test.myproj.rel_oi_orders",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        return _make_context([orders, order_items, rel_test], enable_erd=enable_erd)
+
+    def test_payload_contains_relationships_when_enabled(self) -> None:
+        ctx = self._build_ctx_with_one_relationship(enable_erd=True)
+        stage_extract_relationships(ctx)
+
+        result = context_to_dict(ctx)
+
+        assert "relationships" in result
+        assert isinstance(result["relationships"], list)
+        assert len(result["relationships"]) == 1
+
+    def test_each_emitted_dict_has_full_erd_relationship_shape(self) -> None:
+        ctx = self._build_ctx_with_one_relationship(enable_erd=True)
+        stage_extract_relationships(ctx)
+
+        result = context_to_dict(ctx)
+        rel = result["relationships"][0]
+
+        assert set(rel.keys()) == self.EXPECTED_KEYS, (
+            f"missing keys: {self.EXPECTED_KEYS - set(rel.keys())}, "
+            f"extra keys: {set(rel.keys()) - self.EXPECTED_KEYS}"
+        )
+
+    def test_disabled_omits_relationships_key_entirely(self) -> None:
+        ctx = self._build_ctx_with_one_relationship(enable_erd=False)
+        # Stage is a no-op when disabled, but call it anyway to mirror the
+        # real pipeline ordering.
+        stage_extract_relationships(ctx)
+
+        result = context_to_dict(ctx)
+
+        assert "relationships" not in result
+
+    def test_enabled_with_empty_relationships_includes_empty_list(self) -> None:
+        ctx = self._build_ctx_with_one_relationship(enable_erd=True)
+        # Force the relationship list empty without going through the stage.
+        ctx.relationships = []
+
+        result = context_to_dict(ctx)
+
+        assert "relationships" in result
+        assert result["relationships"] == []
 
 
 # Quiet linter: `Any` is used in helper signatures

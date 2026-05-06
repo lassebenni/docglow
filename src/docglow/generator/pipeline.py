@@ -64,6 +64,9 @@ class PipelineContext:
     column_lineage: dict[str, Any] | None = None
     ai_context: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # DOC-214: Each entry conforms to docglow.generator.data.ErdRelationship.
+    # Kept as list[dict[str, Any]] here to avoid a circular import with data.py;
+    # the TypedDict in data.py is the canonical wire shape.
     relationships: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -432,7 +435,7 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
     key in the chat panel UI, which stores it in localStorage. This
     prevents accidental key exposure in deployed static sites.
     """
-    return {
+    result: dict[str, Any] = {
         "metadata": ctx.metadata,
         "models": ctx.models,
         "sources": ctx.sources,
@@ -454,3 +457,8 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
             },
         },
     }
+    # DOC-214: serialize relationships only when ERD is enabled. Byte-identical
+    # payload commitment when --enable-erd is off (see plan R4).
+    if ctx.enable_erd:
+        result["relationships"] = ctx.relationships
+    return result
