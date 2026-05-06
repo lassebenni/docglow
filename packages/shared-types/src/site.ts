@@ -4,6 +4,7 @@
  */
 
 import type { ArtifactVersions, ColumnLineageData } from "./artifacts.js";
+import type { ErdRelationship } from "./erd.js";
 import type { HealthData } from "./health.js";
 import type { LineageData, SearchEntry } from "./lineage.js";
 import type { DocglowExposure, DocglowMetric, DocglowModel, DocglowSource } from "./models.js";
@@ -57,6 +58,13 @@ export interface DocglowData {
   readonly lineage: LineageData;
   readonly column_lineage?: ColumnLineageData;
   readonly health: HealthData;
+  /**
+   * ERD relationships extracted from dbt `relationships` tests and
+   * `meta.docglow.relationships` declarations. The key is omitted entirely
+   * (not just empty) when ERD inference is disabled (`--enable-erd` flag
+   * not passed), so consumers must guard with `data.relationships ?? []`.
+   */
+  readonly relationships?: ErdRelationship[];
   readonly search_index: SearchEntry[];
   readonly ai_context: AiContext | null;
   readonly ai_key: string | null;

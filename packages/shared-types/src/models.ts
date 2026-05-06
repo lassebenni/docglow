@@ -4,6 +4,8 @@
  * by both the OSS frontend and the cloud dashboard.
  */
 
+import type { RelationshipSummary } from "./erd.js";
+
 // -- Columns -----------------------------------------------------------------
 
 export interface ColumnInsights {
@@ -114,6 +116,18 @@ export interface DocglowModel {
   readonly test_results: TestResult[];
   readonly last_run: LastRun | null;
   readonly catalog_stats: CatalogStats;
+  /**
+   * Total number of ERD relationships (bidirectional: incoming + outgoing FKs)
+   * connecting this model to other models. Omitted entirely when ERD
+   * inference is disabled (`--enable-erd` flag not passed).
+   */
+  readonly relationships_count?: number;
+  /**
+   * Top partners by edge count (capped at 3, sorted by `edge_count` desc
+   * with `partner_unique_id` ascending as tiebreak). Omitted entirely
+   * when ERD inference is disabled.
+   */
+  readonly relationships_summary?: RelationshipSummary[];
 }
 
 // -- Sources -----------------------------------------------------------------
