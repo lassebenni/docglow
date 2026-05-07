@@ -3,11 +3,56 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from docglow.artifacts.loader import LoadedArtifacts
 from docglow.config import UiConfig
 from docglow.generator.layers import LineageLayerConfig
+
+
+# DOC-214: Wire-shape TypedDicts for the ERD relationship contract.
+# These mirror the dict shape produced by `docglow.generator.erd._compose`
+# verbatim — TypedDict (not frozen dataclass) is a deliberate choice so DOC-213's
+# tested `_compose` output flows straight into the JSON payload without an
+# extra construction step. See the DOC-214 plan, "Key Technical Decisions".
+class ErdRelationship(TypedDict):
+    """One ERD relationship row in `docglow-data.json` (top-level `relationships`).
+
+    Field set is the union of everything `_compose` emits: 17 fields. Optional
+    string fields (`label`, `test_unique_id`, `meta_file_path`) are `str | None`.
+    Ghost edges (meta-declared edges with no resolvable parent) carry an empty
+    string in `to_unique_id`; consumers should treat empty `to_unique_id` as
+    "unresolved partner".
+    """
+
+    id: str
+    from_unique_id: str
+    from_column: str
+    to_unique_id: str
+    to_column: str
+    to_model_name: str
+    kind: Literal["one_to_one", "one_to_many", "many_to_many", "inferred"]
+    child_endpoint: Literal["one_and_only_one", "zero_or_one", "one_or_many", "zero_or_many"]
+    parent_endpoint: Literal["one_and_only_one", "zero_or_one", "one_or_many", "zero_or_many"]
+    inference_source: Literal["test", "meta", "both"]
+    severity: Literal["error", "warn", "info"]
+    status: Literal["pass", "fail", "warn", "not_run", "none"]
+    label: str | None
+    test_unique_id: str | None
+    meta_file_path: str | None
+    is_synthetic: bool
+    parent_column_exists: bool
+
+
+class RelationshipSummary(TypedDict):
+    """Per-model summary entry: top-N partners by edge count.
+
+    Populated by DOC-214 U2 onto each model dict; exposed here so the wire
+    contract is type-checked end-to-end.
+    """
+
+    partner_unique_id: str
+    edge_count: int
 
 
 @dataclass(frozen=True)
@@ -155,6 +200,10 @@ class DocglowData:
     lineage: dict[str, Any]
     health: dict[str, Any]
     search_index: list[dict[str, Any]]
+    # DOC-214: ERD relationships extracted by stage_extract_relationships. Empty
+    # list when --enable-erd is off; the JSON payload omits the key entirely
+    # in that case (see context_to_dict).
+    relationships: list[ErdRelationship] = field(default_factory=list)
 
 
 def build_docglow_data(
@@ -173,6 +222,7 @@ def build_docglow_data(
     column_lineage_workers: int | None = None,
     exclude_packages: bool = True,
     slim: bool = False,
+    enable_erd: bool = False,
 ) -> dict[str, Any]:
     """Transform loaded artifacts into the unified DocglowData payload.
 
@@ -201,6 +251,7 @@ def build_docglow_data(
         column_lineage_workers=column_lineage_workers,
         exclude_packages=exclude_packages,
         slim=slim,
+        enable_erd=enable_erd,
     )
 
     stages = default_stages(ctx)

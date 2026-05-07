@@ -41,6 +41,7 @@ class PipelineContext:
     column_lineage_workers: int | None = None
     exclude_packages: bool = True
     slim: bool = False
+    enable_erd: bool = False
 
     # Lookup maps (populated by build_lookups stage)
     run_results_by_id: dict[str, Any] = field(default_factory=dict)
@@ -63,6 +64,10 @@ class PipelineContext:
     column_lineage: dict[str, Any] | None = None
     ai_context: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # DOC-214: Each entry conforms to docglow.generator.data.ErdRelationship.
+    # Kept as list[dict[str, Any]] here to avoid a circular import with data.py;
+    # the TypedDict in data.py is the canonical wire shape.
+    relationships: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,55 @@ def stage_transform_nodes(ctx: PipelineContext) -> None:
             ctx.seeds[unique_id] = data
         else:
             ctx.snapshots[unique_id] = data
+
+
+# DOC-213: ERD relationship extraction. Walks `relationships`-typed test
+# nodes, resolves parent/child unique_ids, runs crow's-foot inference, and
+# writes a list of ErdRelationship-shaped dicts to ctx.relationships.
+def stage_extract_relationships(ctx: PipelineContext) -> None:
+    """Extract ERD relationships from `relationships` test nodes.
+
+    Gated on `ctx.enable_erd`; safe to call when disabled (no-op). DOC-214 will
+    wrap the dicts in `ErdRelationship` instances and wire them into the JSON
+    payload; this stage is intentionally type-light.
+    """
+    if not ctx.enable_erd:
+        return
+
+    from docglow.generator.erd import (
+        _annotate_models,
+        _build_columns_index,
+        _build_parent_lookup,
+        _build_test_index,
+        _compose,
+        _extract_from_meta,
+        _extract_from_test,
+    )
+
+    manifest = ctx.artifacts.manifest
+    parent_lookup = _build_parent_lookup(manifest)
+    test_index = _build_test_index(manifest)
+    columns_by_uid = _build_columns_index(manifest)
+
+    test_entries: list[dict[str, Any]] = []
+    for node in manifest.nodes.values():
+        if node.resource_type != "test":
+            continue
+        if not node.test_metadata or node.test_metadata.name != "relationships":
+            continue
+        entry = _extract_from_test(
+            node, parent_lookup, test_index, columns_by_uid, ctx.run_results_by_id
+        )
+        if entry is not None:
+            test_entries.append(entry)
+
+    meta_entries = _extract_from_meta(manifest, parent_lookup, test_index, columns_by_uid)
+
+    # DOC-213 U5: compose test + meta entries with merge-and-dedupe.
+    ctx.relationships = _compose(test_entries, meta_entries)
+
+    # DOC-214 U2: annotate each model with relationships_count + relationships_summary.
+    _annotate_models(ctx.relationships, ctx.models)
 
 
 def stage_filter_nodes(ctx: PipelineContext) -> None:
@@ -350,6 +404,11 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
         PipelineStage("filter_nodes", stage_filter_nodes),
         PipelineStage("transform_sources", stage_transform_sources),
         PipelineStage("transform_exposures_metrics", stage_transform_exposures_metrics),
+        PipelineStage(
+            "extract_relationships",
+            stage_extract_relationships,
+            enabled=ctx.enable_erd,
+        ),
         PipelineStage("build_lineage", stage_build_lineage),
         PipelineStage("build_search_index", stage_build_search_index),
         PipelineStage("compute_health", stage_compute_health),
@@ -380,7 +439,7 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
     key in the chat panel UI, which stores it in localStorage. This
     prevents accidental key exposure in deployed static sites.
     """
-    return {
+    result: dict[str, Any] = {
         "metadata": ctx.metadata,
         "models": ctx.models,
         "sources": ctx.sources,
@@ -402,3 +461,8 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
             },
         },
     }
+    # DOC-214: serialize relationships only when ERD is enabled. Byte-identical
+    # payload commitment when --enable-erd is off (see plan R4).
+    if ctx.enable_erd:
+        result["relationships"] = ctx.relationships
+    return result

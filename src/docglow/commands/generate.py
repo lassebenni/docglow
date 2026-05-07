@@ -84,6 +84,12 @@ from docglow.cloud_hint import maybe_show_hint
     default=None,
     help="Exit with code 1 if health score is below this threshold (0-100)",
 )
+@click.option(
+    "--enable-erd",
+    is_flag=True,
+    default=False,
+    help="Extract relationship data for the ERD view (DOC-213, opt-in until v0.8)",
+)
 def generate(
     project_dir: Path,
     target_dir: Path | None,
@@ -109,6 +115,7 @@ def generate(
     workers: int | None,
     verbose: bool,
     fail_under: float | None,
+    enable_erd: bool,
 ) -> None:
     """Generate the documentation site."""
     from docglow.cli import _parse_connection, _setup_logging, console
@@ -210,6 +217,7 @@ def generate(
                 slim=slim,
                 head_script=head_script.read_text(encoding="utf-8") if head_script else None,
                 column_lineage_workers=workers,
+                enable_erd=enable_erd,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")
             if static:

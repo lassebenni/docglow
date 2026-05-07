@@ -50,6 +50,17 @@ export type {
   TestStatus,
 } from "./lineage.js";
 
+// ERD relationship types
+export type {
+  ErdEndpoint,
+  ErdInferenceSource,
+  ErdKind,
+  ErdRelationship,
+  ErdSeverity,
+  ErdStatus,
+  RelationshipSummary,
+} from "./erd.js";
+
 // Site data (docglow-data.json) types
 export type {
   AiCompactModel,
