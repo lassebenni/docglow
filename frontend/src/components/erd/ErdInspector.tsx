@@ -28,6 +28,12 @@ export interface ErdInspectorProps {
   readonly relationships: readonly ErdRelationship[]
   readonly selectedEdgeId: string | null
   readonly selectedNodeId: string | null
+  /**
+   * Called from the node-branch relationship list to re-route to the edge
+   * inspector. Wired by `ErdCanvas` to a setter that also clears the node
+   * selection (mutual exclusion — see DOC-216 U2).
+   */
+  readonly onSelectEdge?: (id: string) => void
 }
 
 /* ------------------------------------------------------------------ */
@@ -84,6 +90,35 @@ export function basenameUniqueId(uniqueId: string | null): string | null {
   if (!uniqueId) return null
   const parts = uniqueId.split('.')
   return parts[parts.length - 1] ?? uniqueId
+}
+
+/**
+ * Partition a relationships list into the outgoing (`from_unique_id ===
+ * uid`) and incoming (`to_unique_id === uid`) buckets for a given node.
+ *
+ * Self-referential relationships (`from_unique_id === to_unique_id ===
+ * uid`) appear in **both** buckets, since the node both references and is
+ * referenced by itself — this matches the user's mental model when
+ * scanning §5.7's "references / referenced by" lists.
+ *
+ * Order is preserved from the input array in each bucket — callers
+ * typically pass `relationships` from `DocglowData` which is already
+ * sorted by the backend.
+ */
+export function partitionRelationshipsForNode(
+  uniqueId: string,
+  relationships: readonly ErdRelationship[],
+): {
+  readonly outgoing: readonly ErdRelationship[]
+  readonly incoming: readonly ErdRelationship[]
+} {
+  const outgoing: ErdRelationship[] = []
+  const incoming: ErdRelationship[] = []
+  for (const rel of relationships) {
+    if (rel.from_unique_id === uniqueId) outgoing.push(rel)
+    if (rel.to_unique_id === uniqueId) incoming.push(rel)
+  }
+  return { outgoing, incoming }
 }
 
 /* ------------------------------------------------------------------ */
@@ -226,19 +261,257 @@ function EmptyInspector() {
   )
 }
 
-interface NodeInspectorProps {
-  readonly nodeId: string
+/** Status → dot color (mirrors edge inspector's STATUS_TONE → CSS var). */
+const STATUS_DOT_COLOR: Record<ErdStatus, string> = {
+  pass: 'var(--color-success)',
+  fail: 'var(--color-danger)',
+  warn: 'var(--color-warning)',
+  not_run: 'var(--text-muted)',
+  none: 'var(--text-muted)',
 }
 
-function NodeInspectorStub({ nodeId }: NodeInspectorProps) {
+interface NodeInspectorProps {
+  readonly model: DocglowModel | null
+  readonly nodeId: string
+  readonly outgoing: readonly ErdRelationship[]
+  readonly incoming: readonly ErdRelationship[]
+  readonly models: Readonly<Record<string, DocglowModel>>
+  readonly onSelectEdge?: (id: string) => void
+}
+
+interface RelationshipRowProps {
+  readonly rel: ErdRelationship
+  readonly leftLabel: string
+  readonly rightLabel: string
+  readonly onSelectEdge?: (id: string) => void
+}
+
+function RelationshipRow({
+  rel,
+  leftLabel,
+  rightLabel,
+  onSelectEdge,
+}: RelationshipRowProps) {
+  const handleClick = () => onSelectEdge?.(rel.id)
   return (
-    <div
-      className="px-5 pt-6 pb-5 text-sm"
-      style={{ color: 'var(--text-muted)' }}
-      data-testid="erd-inspector-node-stub"
-      data-node-id={nodeId}
-    >
-      Node inspector ships next (U2).
+    <li>
+      <button
+        type="button"
+        onClick={handleClick}
+        className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded transition-colors"
+        style={{
+          fontFamily:
+            'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+          fontSize: 12,
+          color: 'var(--text)',
+          background: 'transparent',
+          border: '1px solid transparent',
+          cursor: 'pointer',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'var(--bg-surface)'
+          e.currentTarget.style.borderColor = 'var(--border)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'transparent'
+          e.currentTarget.style.borderColor = 'transparent'
+        }}
+        data-erd-rel-id={rel.id}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            display: 'inline-block',
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: STATUS_DOT_COLOR[rel.status],
+            flexShrink: 0,
+          }}
+        />
+        <span className="truncate" style={{ flex: 1, minWidth: 0 }}>
+          <span>{leftLabel}</span>
+          <span style={{ color: 'var(--text-muted)' }}> → </span>
+          <span>{rightLabel}</span>
+        </span>
+      </button>
+    </li>
+  )
+}
+
+function NodeInspector({
+  model,
+  nodeId,
+  outgoing,
+  incoming,
+  models,
+  onSelectEdge,
+}: NodeInspectorProps) {
+  const modelName = model ? model.name : (basenameUniqueId(nodeId) ?? nodeId)
+  const totalRels = outgoing.length + incoming.length
+  const sectionLabelStyle: React.CSSProperties = {
+    color: 'var(--text-muted)',
+    fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+    fontSize: 10,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  }
+  const emptySublineStyle: React.CSSProperties = {
+    color: 'var(--text-muted)',
+    fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+    fontSize: 12,
+    paddingLeft: 8,
+  }
+
+  return (
+    <div className="flex flex-col" data-testid="erd-inspector-node">
+      {/* Dateline */}
+      <div
+        className="px-5 pt-6 pb-2 flex items-center gap-2"
+        style={{
+          color: 'var(--text-muted)',
+          fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+          fontSize: 10,
+          letterSpacing: '0.12em',
+          textTransform: 'uppercase',
+        }}
+      >
+        <span>node</span>
+      </div>
+
+      {/* Headline */}
+      <h2
+        className="px-5 pb-3 leading-tight flex items-center gap-2"
+        style={{
+          fontSize: 18,
+          fontWeight: 600,
+          letterSpacing: '-0.01em',
+          color: 'var(--text)',
+        }}
+        data-testid="erd-inspector-node-headline"
+      >
+        <span
+          className="inline-flex items-center justify-center rounded font-bold shrink-0"
+          aria-label="model"
+          style={{
+            background: '#2563eb',
+            color: 'white',
+            width: 16,
+            height: 16,
+            fontSize: 10,
+          }}
+        >
+          M
+        </span>
+        <span
+          style={{
+            fontFamily:
+              'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+            fontSize: 15,
+            color: 'var(--text)',
+          }}
+        >
+          {modelName}
+        </span>
+      </h2>
+
+      {/* Subhead — relationship count */}
+      <div
+        className="px-5 pb-4"
+        style={{
+          color: 'var(--text-muted)',
+          fontFamily:
+            'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+          fontSize: 11,
+        }}
+      >
+        {totalRels} {totalRels === 1 ? 'relationship' : 'relationships'}
+      </div>
+
+      {/* Both groups empty — show a muted note. */}
+      {totalRels === 0 && (
+        <div
+          className="px-5 pb-5 text-sm"
+          style={{ color: 'var(--text-muted)', lineHeight: 1.55 }}
+          data-testid="erd-inspector-node-empty"
+        >
+          This model has no relationships.
+        </div>
+      )}
+
+      {/* References (outgoing) */}
+      {totalRels > 0 && (
+        <section
+          className="px-5 pb-4"
+          data-testid="erd-inspector-node-references"
+        >
+          <div style={sectionLabelStyle}>references</div>
+          {outgoing.length === 0 ? (
+            <div style={emptySublineStyle}>(none)</div>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {outgoing.map((rel) => {
+                const toName =
+                  rel.to_model_name ||
+                  resolveModelName(rel.to_unique_id, models)
+                return (
+                  <RelationshipRow
+                    key={rel.id}
+                    rel={rel}
+                    leftLabel={rel.from_column}
+                    rightLabel={`${toName}.${rel.to_column}`}
+                    onSelectEdge={onSelectEdge}
+                  />
+                )
+              })}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Referenced by (incoming) */}
+      {totalRels > 0 && (
+        <section
+          className="px-5 pb-4"
+          data-testid="erd-inspector-node-referenced-by"
+        >
+          <div style={sectionLabelStyle}>referenced by</div>
+          {incoming.length === 0 ? (
+            <div style={emptySublineStyle}>(none)</div>
+          ) : (
+            <ul className="flex flex-col gap-0.5">
+              {incoming.map((rel) => {
+                const fromName = resolveModelName(rel.from_unique_id, models)
+                return (
+                  <RelationshipRow
+                    key={rel.id}
+                    rel={rel}
+                    leftLabel={`${fromName}.${rel.from_column}`}
+                    rightLabel={rel.to_column}
+                    onSelectEdge={onSelectEdge}
+                  />
+                )
+              })}
+            </ul>
+          )}
+        </section>
+      )}
+
+      {/* Footer */}
+      <div
+        className="px-5 py-3 mt-auto flex items-center gap-2"
+        style={{
+          borderTop: '1px solid var(--border)',
+          color: 'var(--text-muted)',
+          fontFamily:
+            'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+          fontSize: 11,
+          letterSpacing: '0.04em',
+        }}
+      >
+        <span>relationships: {totalRels}</span>
+      </div>
     </div>
   )
 }
@@ -597,12 +870,15 @@ export function ErdInspector({
   relationships,
   selectedEdgeId,
   selectedNodeId,
+  onSelectEdge,
 }: ErdInspectorProps) {
   const selectedEdge = selectedEdgeId
     ? relationships.find((r) => r.id === selectedEdgeId) ?? null
     : null
 
   let body: React.ReactNode
+  // Edge wins over node when both are non-null — safety net; mutual
+  // exclusion at the source means this is unreachable in practice.
   if (selectedEdge) {
     body = (
       <EdgeInspector
@@ -615,7 +891,20 @@ export function ErdInspector({
       />
     )
   } else if (selectedNodeId) {
-    body = <NodeInspectorStub nodeId={selectedNodeId} />
+    const { outgoing, incoming } = partitionRelationshipsForNode(
+      selectedNodeId,
+      relationships,
+    )
+    body = (
+      <NodeInspector
+        model={models[selectedNodeId] ?? null}
+        nodeId={selectedNodeId}
+        outgoing={outgoing}
+        incoming={incoming}
+        models={models}
+        onSelectEdge={onSelectEdge}
+      />
+    )
   } else {
     body = <EmptyInspector />
   }
