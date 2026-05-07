@@ -94,6 +94,19 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
   const setDefaultState = useErdStore((s) => s.setDefaultState)
 
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+
+  // Mutual-exclusion wrappers — selecting one clears the other so the
+  // inspector branches don't fight (§5.7). The edge-priority safety net
+  // in `ErdInspector` covers the (theoretically unreachable) double-set.
+  const selectEdge = useCallback((id: string) => {
+    setSelectedNodeId(null)
+    setSelectedEdgeId(id)
+  }, [])
+  const selectNode = useCallback((uid: string) => {
+    setSelectedEdgeId(null)
+    setSelectedNodeId(uid)
+  }, [])
 
   const modelUids = useMemo(() => Object.keys(models), [models])
 
@@ -155,7 +168,10 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
     }
   }, [modelUids, positions])
 
-  const clearSelection = useCallback(() => setSelectedEdgeId(null), [])
+  const clearSelection = useCallback(() => {
+    setSelectedEdgeId(null)
+    setSelectedNodeId(null)
+  }, [])
 
   const hasRelationships = relationships.length > 0
 
@@ -205,7 +221,7 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
                     fromSide={pair.fromSide}
                     toSide={pair.toSide}
                     selected={selectedEdgeId === rel.id}
-                    onSelect={setSelectedEdgeId}
+                    onSelect={selectEdge}
                   />
                 ))}
               </svg>
@@ -220,6 +236,8 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
                     model={models[uid]}
                     relationships={relationships}
                     position={pos}
+                    selected={selectedNodeId === uid}
+                    onSelect={selectNode}
                   />
                 )
               })}
@@ -227,13 +245,15 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
           )}
         </div>
 
-        {/* Right rail — editorial inspector (DOC-216 U1). U2 will plumb the
-            real selectedNodeId from ErdNode click handlers. */}
+        {/* Right rail — editorial inspector. Node selection arrives from
+            `ErdNode` click handlers; edge selection from `ErdEdge`. The
+            inspector renders edge → node → empty in priority order. */}
         <ErdInspector
           models={models}
           relationships={relationships}
           selectedEdgeId={selectedEdgeId}
-          selectedNodeId={null}
+          selectedNodeId={selectedNodeId}
+          onSelectEdge={selectEdge}
         />
       </div>
     </div>

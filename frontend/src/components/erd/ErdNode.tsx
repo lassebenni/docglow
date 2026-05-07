@@ -33,6 +33,11 @@ export interface ErdNodeProps {
   readonly relationships: readonly ErdRelationship[]
   readonly position: { readonly x: number; readonly y: number }
   readonly selected?: boolean
+  /**
+   * Called with `model.unique_id` when the card is clicked. The selection
+   * is bundled with the cycle (cycle-state still fires); see DOC-216 U2.
+   */
+  readonly onSelect?: (uid: string) => void
 }
 
 /**
@@ -141,7 +146,7 @@ function ColumnRow({ column, flags, isFirst }: ColumnRowProps) {
   )
 }
 
-export function ErdNode({ model, relationships, position, selected }: ErdNodeProps) {
+export function ErdNode({ model, relationships, position, selected, onSelect }: ErdNodeProps) {
   const storeState = useErdStore((s) => s.getEffectiveState(model.unique_id))
 
   const keyColumns = useMemo(
@@ -170,8 +175,9 @@ export function ErdNode({ model, relationships, position, selected }: ErdNodePro
     (e: React.MouseEvent) => {
       e.stopPropagation()
       useErdStore.getState().cycleNode(model.unique_id, keyColumns.size > 0)
+      onSelect?.(model.unique_id)
     },
-    [model.unique_id, keyColumns.size],
+    [model.unique_id, keyColumns.size, onSelect],
   )
 
   const relationshipsCount = model.relationships_count ?? 0
