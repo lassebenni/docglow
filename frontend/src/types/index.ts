@@ -116,3 +116,56 @@ export interface LineageBadgeConfig {
 export interface UiConfig {
   readonly lineage_badge: LineageBadgeConfig;
 }
+
+// ERD types added after @docglow/shared-types v0.1.0 (see packages/shared-types/src/erd.ts).
+// These local definitions + module augmentations will be removed once shared-types is republished.
+
+export type ErdKind = "one_to_one" | "one_to_many" | "many_to_many" | "inferred";
+
+export type ErdEndpoint =
+  | "one_and_only_one"
+  | "zero_or_one"
+  | "one_or_many"
+  | "zero_or_many";
+
+export type ErdInferenceSource = "test" | "meta" | "both";
+
+export type ErdSeverity = "error" | "warn" | "info";
+
+export type ErdStatus = "pass" | "fail" | "warn" | "not_run" | "none";
+
+export interface ErdRelationship {
+  readonly id: string;
+  readonly from_unique_id: string;
+  readonly from_column: string;
+  readonly to_unique_id: string;
+  readonly to_column: string;
+  readonly to_model_name: string;
+  readonly kind: ErdKind;
+  readonly child_endpoint: ErdEndpoint;
+  readonly parent_endpoint: ErdEndpoint;
+  readonly inference_source: ErdInferenceSource;
+  readonly severity: ErdSeverity;
+  readonly status: ErdStatus;
+  readonly label: string | null;
+  readonly test_unique_id: string | null;
+  readonly meta_file_path: string | null;
+  readonly is_synthetic: boolean;
+  readonly parent_column_exists: boolean;
+}
+
+export interface RelationshipSummary {
+  readonly partner_unique_id: string;
+  readonly edge_count: number;
+}
+
+declare module "@docglow/shared-types" {
+  interface DocglowData {
+    readonly relationships?: ErdRelationship[];
+  }
+
+  interface DocglowModel {
+    readonly relationships_count?: number;
+    readonly relationships_summary?: RelationshipSummary[];
+  }
+}

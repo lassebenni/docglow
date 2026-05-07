@@ -25,8 +25,7 @@ import { computeKeyColumns } from '../../utils/erdKeys'
 import { TABLE_W } from '../../utils/erdLayout'
 import { ROW_H_COL } from '../../utils/erdNodeDimensions'
 
-import type { DocglowColumn, DocglowModel } from '../../types'
-import type { ErdRelationship } from '@docglow/shared-types'
+import type { DocglowColumn, DocglowModel, ErdRelationship } from '../../types'
 
 export interface ErdNodeProps {
   readonly model: DocglowModel

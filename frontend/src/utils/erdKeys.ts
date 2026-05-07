@@ -14,8 +14,7 @@
  * `model.meta.docglow.relationships` here.
  */
 
-import type { DocglowModel } from '../types'
-import type { ErdRelationship } from '@docglow/shared-types'
+import type { DocglowModel, ErdRelationship } from '../types'
 
 const PK_TEST_NAMES = {
   unique: 'unique',

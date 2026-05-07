@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { computeKeyColumns } from '../utils/erdKeys'
-import type { DocglowModel, ColumnTest, DocglowColumn } from '../types'
-import type { ErdRelationship } from '@docglow/shared-types'
+import type { DocglowModel, ColumnTest, DocglowColumn, ErdRelationship } from '../types'
 
 function makeTest(test_name: string): ColumnTest {
   return {

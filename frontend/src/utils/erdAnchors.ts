@@ -31,8 +31,7 @@ import { TABLE_W, ROW_H_HEAD, type ErdNodePosition } from './erdLayout'
 import { computeColumnAnchorY } from './erdNodeDimensions'
 
 import type { ErdNodeState } from '../stores/erdStore'
-import type { DocglowModel } from '../types'
-import type { ErdRelationship } from '@docglow/shared-types'
+import type { DocglowModel, ErdRelationship } from '../types'
 
 export interface ErdAnchor {
   readonly x: number

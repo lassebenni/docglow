@@ -25,7 +25,7 @@
  */
 
 import { useCallback } from 'react'
-import type { ErdEndpoint, ErdRelationship, ErdStatus } from '@docglow/shared-types'
+import type { ErdEndpoint, ErdRelationship, ErdStatus } from '../../types'
 
 export interface ErdEdgeProps {
   readonly relationship: ErdRelationship

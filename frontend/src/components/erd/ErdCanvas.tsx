@@ -35,8 +35,7 @@ import {
 } from '../../utils/erdLayout'
 import { resolveErdAnchors } from '../../utils/erdAnchors'
 
-import type { DocglowModel } from '../../types'
-import type { ErdRelationship } from '@docglow/shared-types'
+import type { DocglowModel, ErdRelationship } from '../../types'
 
 export interface ErdCanvasProps {
   readonly models: Readonly<Record<string, DocglowModel>>
