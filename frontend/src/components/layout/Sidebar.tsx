@@ -279,6 +279,21 @@ export function Sidebar() {
 
         <div className="mt-3 pt-3 border-t border-[var(--border)] px-2">
           <button
+            onClick={() => navigate('/erd')}
+            className="w-full text-left px-2 py-1.5 text-sm rounded
+                       hover:bg-[var(--bg-surface)] transition-colors cursor-pointer
+                       flex items-center gap-2 text-[var(--text)]"
+          >
+            <svg className="w-4 h-4 text-[var(--text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="3" y="4" width="7" height="6" rx="1" strokeWidth={1.75} />
+              <rect x="14" y="4" width="7" height="6" rx="1" strokeWidth={1.75} />
+              <rect x="3" y="14" width="7" height="6" rx="1" strokeWidth={1.75} />
+              <rect x="14" y="14" width="7" height="6" rx="1" strokeWidth={1.75} />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.75} d="M10 7h4M10 17h4M6.5 10v4M17.5 10v4" />
+            </svg>
+            ERD
+          </button>
+          <button
             onClick={() => navigate('/lineage')}
             className="w-full text-left px-2 py-1.5 text-sm rounded
                        hover:bg-[var(--bg-surface)] transition-colors cursor-pointer

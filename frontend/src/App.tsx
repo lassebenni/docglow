@@ -5,6 +5,7 @@ import { SearchModal } from './components/search/SearchModal'
 import { Overview } from './pages/Overview'
 import { ModelPage } from './pages/ModelPage'
 import { SourcePage } from './pages/SourcePage'
+import { ErdPage } from './pages/ErdPage'
 import { LineagePage } from './pages/LineagePage'
 import { HealthPage } from './pages/HealthPage'
 import { LayersPage } from './pages/LayersPage'
@@ -66,6 +67,7 @@ function App() {
           <Route index element={<Overview />} />
           <Route path="/model/:id" element={<ModelPage />} />
           <Route path="/source/:id" element={<SourcePage />} />
+          <Route path="/erd" element={<ErdPage />} />
           <Route path="/lineage" element={<LineagePage />} />
           <Route path="/health" element={<HealthPage />} />
           <Route path="/layers" element={<LayersPage />} />
