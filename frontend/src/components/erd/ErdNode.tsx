@@ -14,9 +14,14 @@
  *     `full` (every column).
  *
  * React Flow integration:
- *   - Four invisible handles (`source-left`, `source-right`, `target-left`,
- *     `target-right`) so edges can attach on either side based on relative
- *     node positions, computed in `ErdCanvas`.
+ *   - Four generic header-level handles (`source-left`, `source-right`,
+ *     `target-left`, `target-right`) so edges can attach on either side at
+ *     the node midpoint — used for `compact`-state cards (header-only).
+ *   - Per-column handles inside each `ColumnRow`
+ *     (`source-left-${col}`, `source-right-${col}`, `target-left-${col}`,
+ *     `target-right-${col}`) so edges in `keys` / `full` state visually
+ *     anchor at the exact column row. Side selection still happens in
+ *     `ErdCanvas` based on relative node positions.
  *   - Position is set on the wrapping React Flow node container — this
  *     component renders at (0, 0) inside it. No `position` / `left` / `top`
  *     in this file.
@@ -103,8 +108,40 @@ function ColumnRow({ column, flags, isFirst }: ColumnRowProps) {
           ? 'color-mix(in oklab, var(--color-primary, #2563eb) 5%, transparent)'
           : 'transparent',
         fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+        position: 'relative',
       }}
     >
+      {/* Per-column handles — rendered as absolute children of the row, so
+          their default vertical anchor is the row's centerline. Edges that
+          reference these IDs visually attach to this exact column row. */}
+      <Handle
+        id={`target-left-${column.name}`}
+        type="target"
+        position={Position.Left}
+        className="!opacity-0 !w-0 !h-0 !border-0 !bg-transparent"
+        isConnectable={false}
+      />
+      <Handle
+        id={`source-left-${column.name}`}
+        type="source"
+        position={Position.Left}
+        className="!opacity-0 !w-0 !h-0 !border-0 !bg-transparent"
+        isConnectable={false}
+      />
+      <Handle
+        id={`target-right-${column.name}`}
+        type="target"
+        position={Position.Right}
+        className="!opacity-0 !w-0 !h-0 !border-0 !bg-transparent"
+        isConnectable={false}
+      />
+      <Handle
+        id={`source-right-${column.name}`}
+        type="source"
+        position={Position.Right}
+        className="!opacity-0 !w-0 !h-0 !border-0 !bg-transparent"
+        isConnectable={false}
+      />
       <span
         style={{
           color: indicatorColor,
