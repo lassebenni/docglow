@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { getModelErdSubgraph } from '../utils/erdSubgraph'
+import {
+  getModelErdSubgraph,
+  getReachableErdSubgraph,
+} from '../utils/erdSubgraph'
 import type { ErdRelationship } from '../types'
 
 /**
@@ -163,5 +166,142 @@ describe('getModelErdSubgraph', () => {
       'r-a',
       'r-b',
     ])
+  })
+})
+
+describe('getReachableErdSubgraph', () => {
+  it('depth 1 returns root + immediate neighbors', () => {
+    // orders ↔ customers, orders ↔ order_items. customers ↔ suppliers exists
+    // but is 2-hop from orders, so it must NOT appear at depth 1.
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', ORDERS, ORDER_ITEMS),
+      rel('r3', CUSTOMERS, SUPPLIERS),
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 1)
+    expect([...result.models].sort()).toEqual(
+      [ORDERS, CUSTOMERS, ORDER_ITEMS].sort(),
+    )
+    expect(result.relationships.map((r) => r.id).sort()).toEqual(['r1', 'r2'])
+    expect(result.models.has(SUPPLIERS)).toBe(false)
+  })
+
+  it('depth 2 returns 2-hop reachable set', () => {
+    // orders -- customers -- suppliers. From orders @ depth 2 → suppliers in.
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', CUSTOMERS, SUPPLIERS),
+      rel('r3', SUPPLIERS, PRODUCTS), // 3-hop — NOT included
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 2)
+    expect([...result.models].sort()).toEqual(
+      [ORDERS, CUSTOMERS, SUPPLIERS].sort(),
+    )
+    expect(result.relationships.map((r) => r.id).sort()).toEqual(['r1', 'r2'])
+    expect(result.models.has(PRODUCTS)).toBe(false)
+  })
+
+  it('depth 0 returns only the root, no relationships', () => {
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', ORDERS, ORDER_ITEMS),
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 0)
+    expect([...result.models]).toEqual([ORDERS])
+    expect(result.relationships).toEqual([])
+  })
+
+  it('root with zero relationships returns just the root, no relationships', () => {
+    // PRODUCTS appears nowhere in the relationship list.
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', CUSTOMERS, ORDER_ITEMS),
+    ]
+    const result = getReachableErdSubgraph(PRODUCTS, all, 3)
+    expect([...result.models]).toEqual([PRODUCTS])
+    expect(result.relationships).toEqual([])
+  })
+
+  it('root not in any model (typo / stale URL) degrades gracefully', () => {
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', ORDERS, ORDER_ITEMS),
+    ]
+    const ghostRoot = 'model.jaffle.does_not_exist'
+    const result = getReachableErdSubgraph(ghostRoot, all, 2)
+    expect([...result.models]).toEqual([ghostRoot])
+    expect(result.relationships).toEqual([])
+  })
+
+  it('treats relationships as undirected (target → source reachable)', () => {
+    // Edge declared as A → B. Root B at depth 1 must reach A.
+    const all: ErdRelationship[] = [rel('r1', ORDERS, CUSTOMERS)]
+    const result = getReachableErdSubgraph(CUSTOMERS, all, 1)
+    expect([...result.models].sort()).toEqual([CUSTOMERS, ORDERS].sort())
+    expect(result.relationships.map((r) => r.id)).toEqual(['r1'])
+  })
+
+  it('depth >= max-reachable returns the full connected component', () => {
+    // A ↔ B ↔ C ↔ D. depth 99 from A returns {A, B, C, D} and all 3 edges.
+    const A = 'model.x.a'
+    const B = 'model.x.b'
+    const C = 'model.x.c'
+    const D = 'model.x.d'
+    const all: ErdRelationship[] = [
+      rel('ab', A, B),
+      rel('bc', B, C),
+      rel('cd', C, D),
+    ]
+    const result = getReachableErdSubgraph(A, all, 99)
+    expect([...result.models].sort()).toEqual([A, B, C, D].sort())
+    expect(result.relationships.map((r) => r.id).sort()).toEqual([
+      'ab',
+      'bc',
+      'cd',
+    ])
+  })
+
+  it('disconnected components stay disconnected even at large depth', () => {
+    // Two islands: {orders, customers} and {products, suppliers}. No path
+    // between them; depth 99 from orders must NOT reach products/suppliers.
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', PRODUCTS, SUPPLIERS),
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 99)
+    expect([...result.models].sort()).toEqual([ORDERS, CUSTOMERS].sort())
+    expect(result.models.has(PRODUCTS)).toBe(false)
+    expect(result.models.has(SUPPLIERS)).toBe(false)
+    expect(result.relationships.map((r) => r.id)).toEqual(['r1'])
+  })
+
+  it('includes a self-referential relationship at root exactly once', () => {
+    const EMPLOYEES = 'model.hr.employees'
+    const all: ErdRelationship[] = [rel('r-self', EMPLOYEES, EMPLOYEES)]
+    const result = getReachableErdSubgraph(EMPLOYEES, all, 2)
+    expect([...result.models]).toEqual([EMPLOYEES])
+    expect(result.relationships).toHaveLength(1)
+    expect(result.relationships[0].id).toBe('r-self')
+  })
+
+  it('includes ghost relationships (parent_column_exists === false)', () => {
+    const all: ErdRelationship[] = [
+      rel('r-ghost', ORDERS, CUSTOMERS, { parent_column_exists: false }),
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 1)
+    expect(result.relationships.map((r) => r.id)).toEqual(['r-ghost'])
+    expect([...result.models].sort()).toEqual([ORDERS, CUSTOMERS].sort())
+  })
+
+  it('does not duplicate edges where both endpoints are reached at the same hop', () => {
+    // Two parallel relationships between the same pair of models — both
+    // must appear, but each only once. (Distinct ids → distinct relationships.)
+    const all: ErdRelationship[] = [
+      rel('r1', ORDERS, CUSTOMERS),
+      rel('r2', ORDERS, CUSTOMERS),
+    ]
+    const result = getReachableErdSubgraph(ORDERS, all, 1)
+    expect(result.relationships.map((r) => r.id).sort()).toEqual(['r1', 'r2'])
+    expect([...result.models].sort()).toEqual([ORDERS, CUSTOMERS].sort())
   })
 })
