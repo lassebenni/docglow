@@ -226,21 +226,31 @@ export function ErdEdge(props: EdgeProps) {
         strokeLinecap="round"
         strokeLinejoin="round"
       />
-      {/* Crow's-foot glyphs — child endpoint at fromAnchor, parent at toAnchor.
+      {/* Crow's-foot glyphs.
+          Per origin requirements §5.3, `child_endpoint` is the child's-POV
+          cardinality ("toward parent") — drawn AT the parent's end of the
+          line (toAnchor). `parent_endpoint` is the parent's-POV cardinality
+          ("toward child") — drawn AT the child's end (fromAnchor). This
+          yields standard Wikipedia crow's-foot orientation: the bar (||)
+          sits on the one/PK side, the fork (}|) on the many/FK side.
+          (The edge `source` is the child/FK and `target` is the parent/PK,
+          set by ErdCanvas — fromAnchor=child end, toAnchor=parent end.)
           Suppressed for ghost edges (no parent to mark) and self-loops (the
           curved geometry doesn't read with horizontal glyphs). */}
       {!isGhost && !isSelfRef && rel && (
         <>
+          {/* child's POV (e.g. "exactly one parent") drawn at the parent end */}
           <CrowsFoot
             endpoint={rel.child_endpoint}
-            anchor={fromAnchor}
-            side={fromSide}
-            stroke={stroke}
-          />
-          <CrowsFoot
-            endpoint={rel.parent_endpoint}
             anchor={toAnchor}
             side={toSide}
+            stroke={stroke}
+          />
+          {/* parent's POV (e.g. "one or many children") drawn at the child end */}
+          <CrowsFoot
+            endpoint={rel.parent_endpoint}
+            anchor={fromAnchor}
+            side={fromSide}
             stroke={stroke}
           />
         </>
