@@ -14,6 +14,7 @@ describe('erdStore', () => {
       defaultState: 'keys',
       expandedOverrides: {},
       layoutOverrides: {},
+      showOrphans: false,
     })
   })
 
@@ -28,6 +29,10 @@ describe('erdStore', () => {
 
     it('starts with empty layoutOverrides', () => {
       expect(useErdStore.getState().layoutOverrides).toEqual({})
+    })
+
+    it('starts with showOrphans = false (origin §5.6 default OFF)', () => {
+      expect(useErdStore.getState().showOrphans).toBe(false)
     })
 
     it('getEffectiveState returns defaultState for an unknown uid', () => {
@@ -113,6 +118,53 @@ describe('erdStore', () => {
       expect(useErdStore.getState().layoutOverrides).toEqual({
         proj_a: { 'm.a.x': { x: 10, y: 20 } },
       })
+    })
+
+    it('clears showOrphans back to false', () => {
+      useErdStore.getState().setShowOrphans(true)
+      useErdStore.getState().reset()
+      expect(useErdStore.getState().showOrphans).toBe(false)
+    })
+  })
+
+  describe('setShowOrphans', () => {
+    it('flips the toggle on', () => {
+      useErdStore.getState().setShowOrphans(true)
+      expect(useErdStore.getState().showOrphans).toBe(true)
+    })
+
+    it('flips the toggle back off', () => {
+      useErdStore.getState().setShowOrphans(true)
+      useErdStore.getState().setShowOrphans(false)
+      expect(useErdStore.getState().showOrphans).toBe(false)
+    })
+
+    it('does NOT persist to localStorage (session-scoped slice)', () => {
+      // Baseline: store does not need to write anything when nothing is
+      // persistable yet — confirm the partialize allowlist excludes
+      // showOrphans by checking the persisted shape after toggling.
+      const before = localStorage.getItem(ERD_STORE_PERSIST_KEY)
+      useErdStore.getState().setShowOrphans(true)
+      const after = localStorage.getItem(ERD_STORE_PERSIST_KEY)
+
+      // If the persist middleware did write anything, it must NOT contain
+      // showOrphans. (Zustand may still write a versioned envelope with an
+      // empty / unchanged `state` payload; that's fine.)
+      if (after !== null) {
+        const parsed = JSON.parse(after)
+        expect(parsed.state).not.toHaveProperty('showOrphans')
+      }
+      // The persisted blob shape must be unaffected by the toggle.
+      expect(after).toBe(before)
+    })
+
+    it('does not affect the persisted layoutOverrides slice', () => {
+      useErdStore.getState().setNodePosition('p', 'm.x', { x: 1, y: 2 })
+      const beforeRaw = localStorage.getItem(ERD_STORE_PERSIST_KEY)
+      useErdStore.getState().setShowOrphans(true)
+      useErdStore.getState().setShowOrphans(false)
+      const afterRaw = localStorage.getItem(ERD_STORE_PERSIST_KEY)
+      expect(afterRaw).toBe(beforeRaw)
     })
   })
 

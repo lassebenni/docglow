@@ -48,6 +48,7 @@ import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { computeErdLayout, type ErdNodePosition } from '../../utils/erdLayout'
 import { pickHandlePair, SELF_LOOP_HANDLES } from '../../utils/erdEdgeMapping'
+import { filterOrphans } from '../../utils/erdOrphanFilter'
 import { getProjectKey } from '../../utils/erdProjectKey'
 
 import type { DocglowModel, ErdRelationship } from '../../types'
@@ -115,6 +116,8 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
   const setDefaultState = useErdStore((s) => s.setDefaultState)
   const setNodePosition = useErdStore((s) => s.setNodePosition)
   const resetLayout = useErdStore((s) => s.resetLayout)
+  const showOrphans = useErdStore((s) => s.showOrphans)
+  const setShowOrphans = useErdStore((s) => s.setShowOrphans)
 
   // Project-scoped layout overrides. We resolve the project key from the
   // active payload — `_default_` if no payload (e.g. early-mount or tests).
@@ -134,7 +137,14 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
     setSelectedEdgeId(id)
   }, [])
 
-  const modelUids = useMemo(() => Object.keys(models), [models])
+  // Pre-filter orphans BEFORE layout so hidden orphans don't reserve grid
+  // slots (origin §5.6). `relationships_count` is treated as authoritative —
+  // missing/null is interpreted as orphan. See `utils/erdOrphanFilter.ts`.
+  const totalModelCount = useMemo(() => Object.keys(models).length, [models])
+  const modelUids = useMemo(
+    () => filterOrphans(Object.keys(models), models, showOrphans),
+    [models, showOrphans],
+  )
 
   const positions = useMemo<Record<string, ErdNodePosition>>(() => {
     const counts: Record<string, number> = {}
@@ -264,6 +274,23 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
       {/* Top bar */}
       <div className="flex items-center gap-3 px-3 py-2 border-b border-[var(--border)] shrink-0">
         <SegmentedControl value={defaultState} onChange={setDefaultState} />
+        <button
+          type="button"
+          onClick={() => setShowOrphans(!showOrphans)}
+          aria-pressed={showOrphans}
+          title={
+            showOrphans
+              ? 'Hide tables with no declared relationships'
+              : 'Show tables with no declared relationships'
+          }
+          className={`px-3 py-1 text-xs rounded border cursor-pointer transition-colors ${
+            showOrphans
+              ? 'bg-primary text-white border-primary'
+              : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)]'
+          }`}
+        >
+          Show isolated tables
+        </button>
         {hasOverrides && (
           <button
             type="button"
@@ -275,7 +302,10 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
           </button>
         )}
         <span className="text-xs text-[var(--text-muted)] ml-auto">
-          {modelUids.length} tables &middot; {relationships.length} relationships
+          {modelUids.length === totalModelCount
+            ? `${modelUids.length} tables`
+            : `${modelUids.length}/${totalModelCount} tables`}{' '}
+          &middot; {relationships.length} relationships
         </span>
       </div>
 
