@@ -114,6 +114,13 @@ def _build_test_index(manifest: Manifest) -> dict[tuple[str, str], set[str]]:
 
     A relationships test on a column also depends on whether the column has
     sibling `unique` / `not_null` tests; this index makes both lookups O(1).
+
+    `dbt_constraints.primary_key` and `dbt_constraints.unique_key` are aliased
+    to `unique` so cardinality inference downstream treats a column with a
+    dbt_constraints PK/UK exactly like one with a built-in `unique` test.
+    This benefits both built-in `relationships` tests and dbt_constraints
+    `foreign_key` tests — projects that use the dbt_constraints package get
+    the same parent-side cardinality refinement automatically.
     """
     index: dict[tuple[str, str], set[str]] = {}
     for node in manifest.nodes.values():
@@ -130,6 +137,16 @@ def _build_test_index(manifest: Manifest) -> dict[tuple[str, str], set[str]]:
         ref_name = _ref_name(last_ref)
         if ref_name is None:
             continue
+
+        # Alias dbt_constraints.primary_key / unique_key to "unique" so that
+        # cardinality inference picks them up alongside built-in unique tests.
+        test_name = node.test_metadata.name
+        if node.test_metadata.namespace == "dbt_constraints" and test_name in (
+            "primary_key",
+            "unique_key",
+        ):
+            test_name = "unique"
+
         # Look up the model unique_id by simple name across all node types.
         for uid, candidate in manifest.nodes.items():
             if (
@@ -137,7 +154,7 @@ def _build_test_index(manifest: Manifest) -> dict[tuple[str, str], set[str]]:
                 and candidate.name == ref_name
             ):
                 key = (uid, node.column_name.lower())
-                index.setdefault(key, set()).add(node.test_metadata.name)
+                index.setdefault(key, set()).add(test_name)
                 break
         else:
             # Could be a source — sources don't typically take unique/not_null
@@ -145,7 +162,7 @@ def _build_test_index(manifest: Manifest) -> dict[tuple[str, str], set[str]]:
             for uid, source in manifest.sources.items():
                 if source.name == ref_name:
                     key = (uid, node.column_name.lower())
-                    index.setdefault(key, set()).add(node.test_metadata.name)
+                    index.setdefault(key, set()).add(test_name)
                     break
     return index
 
@@ -307,6 +324,141 @@ def _extract_from_test(
         "to_unique_id": parent_uid,
         "to_column": parent_field_str,
         "to_model_name": parent_name or "",
+        "kind": "inferred",
+        "child_endpoint": child_endpoint,
+        "parent_endpoint": parent_endpoint,
+        "inference_source": "test",
+        "severity": severity,
+        "status": status,
+        "label": None,
+        "test_unique_id": test_node.unique_id,
+        "meta_file_path": None,
+        "is_synthetic": False,
+        "parent_column_exists": parent_column_exists,
+    }
+
+
+def _extract_from_dbt_constraints_fk(
+    test_node: ManifestNode,
+    parent_lookup: dict[str, str],
+    test_index: dict[tuple[str, str], set[str]],
+    columns_by_uid: dict[str, set[str]],
+    run_results_by_id: dict[str, RunResult],
+) -> dict[str, Any] | None:
+    """Build one ErdRelationship-shaped dict from a `dbt_constraints.foreign_key` test.
+
+    Single-column FKs only — model-level (composite) FKs declared via
+    `fk_column_names` / `pk_column_names` are debug-logged and skipped.
+
+    Mirrors the output shape of `_extract_from_test` and returns the same
+    `inference_source='test'` bucket; the originating test type is preserved
+    on the `test_unique_id` field for downstream consumers that need to
+    distinguish.
+
+    Returns None on cross-package, malformed, composite, or otherwise
+    unsupported tests (logged at debug level).
+    """
+    metadata = test_node.test_metadata
+    if metadata is None:
+        return None
+    if metadata.namespace != "dbt_constraints" or metadata.name != "foreign_key":
+        return None
+
+    kwargs = metadata.kwargs or {}
+
+    # Composite FK detection — column-level only is supported for v1.
+    if "fk_column_names" in kwargs or "pk_column_names" in kwargs:
+        logger.debug(
+            "skipping composite dbt_constraints.foreign_key test %s "
+            "(multi-column FKs not supported)",
+            test_node.unique_id,
+        )
+        return None
+
+    child_column = test_node.column_name or ""
+    if not child_column:
+        # Model-level test without a column_name is treated as composite/unsupported.
+        logger.debug(
+            "skipping model-level dbt_constraints.foreign_key test %s (no column_name)",
+            test_node.unique_id,
+        )
+        return None
+
+    pk_column_name = kwargs.get("pk_column_name")
+    pk_table_name = kwargs.get("pk_table_name")
+    if not pk_column_name or not pk_table_name:
+        logger.debug(
+            "skipping dbt_constraints.foreign_key test %s "
+            "with missing pk_column_name/pk_table_name",
+            test_node.unique_id,
+        )
+        return None
+    parent_field_str = str(pk_column_name)
+
+    # dbt_constraints compiles the FK test with refs=[parent_model, child_model]
+    # — same shape as a built-in relationships test, so reuse the resolution.
+    refs = list(test_node.refs)
+    if len(refs) < 2:
+        logger.debug(
+            "skipping dbt_constraints.foreign_key test %s with refs=%s (expected parent+child)",
+            test_node.unique_id,
+            refs,
+        )
+        return None
+
+    parent_ref, child_ref = refs[0], refs[1]
+    if _ref_package(parent_ref) is not None or _ref_package(child_ref) is not None:
+        logger.debug(
+            "skipping cross-package dbt_constraints.foreign_key test %s",
+            test_node.unique_id,
+        )
+        return None
+
+    parent_name = _ref_name(parent_ref)
+    child_name = _ref_name(child_ref)
+    if parent_name is None or child_name is None:
+        return None
+    parent_uid = parent_lookup.get(parent_name)
+    child_uid = parent_lookup.get(child_name)
+
+    if not parent_uid or not child_uid:
+        logger.debug(
+            "skipping dbt_constraints.foreign_key test %s — "
+            "could not resolve parent=%s or child=%s",
+            test_node.unique_id,
+            parent_name,
+            child_name,
+        )
+        return None
+
+    # Inference: sibling tests on parent column / child column. The test_index
+    # already aliases dbt_constraints.primary_key/unique_key → "unique", so a
+    # parent column with a PK declaration produces parent_unique=True.
+    parent_col_lower = parent_field_str.lower()
+    child_col_lower = child_column.lower()
+    parent_unique = "unique" in test_index.get((parent_uid, parent_col_lower), set())
+    child_not_null = "not_null" in test_index.get((child_uid, child_col_lower), set())
+    child_endpoint, parent_endpoint = infer_endpoints(child_not_null, parent_unique)
+
+    # Run results join.
+    run_result = run_results_by_id.get(test_node.unique_id)
+    status = "not_run"
+    if run_result:
+        status = normalize_test_status(run_result.status)
+
+    # Severity from config (uppercase in dbt output → lowercase normalized).
+    severity_raw = getattr(test_node.config, "severity", None) or "error"
+    severity = str(severity_raw).lower()
+
+    parent_column_exists = parent_col_lower in columns_by_uid.get(parent_uid, set())
+
+    return {
+        "id": relationship_id(child_uid, child_column, parent_uid, parent_field_str, "test"),
+        "from_unique_id": child_uid,
+        "from_column": child_column,
+        "to_unique_id": parent_uid,
+        "to_column": parent_field_str,
+        "to_model_name": parent_name,
         "kind": "inferred",
         "child_endpoint": child_endpoint,
         "parent_endpoint": parent_endpoint,
