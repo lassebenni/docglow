@@ -85,14 +85,18 @@ function CrowsFoot({ endpoint, anchor, side, stroke, opacity = 1 }: CrowsFootPro
   const innerX = anchor.x + dir * GLYPH_OFFSET
   const outerX = anchor.x + dir * GLYPH_OFFSET * 2
 
-  const outerKind: 'bar' | 'circle' | 'fork' =
-    endpoint === 'one_and_only_one'
-      ? 'bar'
-      : endpoint === 'zero_or_one'
-        ? 'circle'
-        : 'fork'
-  const innerKind: 'bar' | 'circle' =
-    endpoint === 'zero_or_many' ? 'circle' : 'bar'
+  // Standard crow's-foot notation (Wikipedia):
+  //   - INNER glyph (closer to the table edge) carries the CARDINALITY:
+  //       fork ("crow's foot") for "many", bar for "one".
+  //   - OUTER glyph (further along the line, back from the table) carries
+  //     the OPTIONALITY: circle for "zero allowed", bar for "mandatory".
+  // The fork's vertex sits at innerX (back from the table) and the three
+  // prongs converge AT the table edge (anchor.x), so the foot "opens up"
+  // toward the table.
+  const innerKind: 'bar' | 'fork' =
+    endpoint === 'one_or_many' || endpoint === 'zero_or_many' ? 'fork' : 'bar'
+  const outerKind: 'bar' | 'circle' =
+    endpoint === 'zero_or_one' || endpoint === 'zero_or_many' ? 'circle' : 'bar'
 
   const renderPrimitive = (kind: 'bar' | 'circle' | 'fork', x: number, key: string) => {
     if (kind === 'bar') {
@@ -124,11 +128,14 @@ function CrowsFoot({ endpoint, anchor, side, stroke, opacity = 1 }: CrowsFootPro
         />
       )
     }
+    // Fork: vertex at `x` (= innerX, back from the table along the line);
+    // three prongs converge AT the table edge (`anchor.x`) with vertical
+    // spread `± GLYPH_HALF`. The foot opens toward the table.
     return (
       <g key={key} stroke={stroke} strokeWidth={1.25} opacity={opacity} fill="none">
-        <line x1={innerX} y1={anchor.y} x2={x} y2={anchor.y - GLYPH_HALF} />
-        <line x1={innerX} y1={anchor.y} x2={x} y2={anchor.y} />
-        <line x1={innerX} y1={anchor.y} x2={x} y2={anchor.y + GLYPH_HALF} />
+        <line x1={x} y1={anchor.y} x2={anchor.x} y2={anchor.y - GLYPH_HALF} />
+        <line x1={x} y1={anchor.y} x2={anchor.x} y2={anchor.y} />
+        <line x1={x} y1={anchor.y} x2={anchor.x} y2={anchor.y + GLYPH_HALF} />
       </g>
     )
   }
