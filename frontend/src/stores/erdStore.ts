@@ -48,6 +48,13 @@ interface ErdStoreState {
    * `ERD_STORE_PERSIST_KEY`.
    */
   readonly layoutOverrides: Readonly<Record<string, Readonly<Record<string, ErdNodePos>>>>
+  /**
+   * Display options slice (DOC-99 U3). Session-scoped — explicitly excluded
+   * from `partialize` so the user's choice resets each session (matches
+   * origin §5.6 default-OFF semantic — they have to opt back in).
+   */
+  readonly showOrphans: boolean
+  readonly setShowOrphans: (next: boolean) => void
   readonly setDefaultState: (state: ErdNodeState) => void
   /**
    * Toggle the per-node override for `uid`.
@@ -89,6 +96,11 @@ export const useErdStore = create<ErdStoreState>()(
       defaultState: DEFAULT_NODE_STATE,
       expandedOverrides: {},
       layoutOverrides: {},
+      showOrphans: false,
+
+      setShowOrphans: (next) => {
+        set({ showOrphans: next })
+      },
 
       setDefaultState: (state) => {
         set({ defaultState: state })
@@ -138,17 +150,23 @@ export const useErdStore = create<ErdStoreState>()(
 
       reset: () => {
         // NOTE: `reset()` clears the session-scoped UI state (default node
-        // state + per-node `expandedOverrides`) but intentionally leaves
-        // persisted `layoutOverrides` alone — call `resetLayout(projectKey)`
-        // explicitly to clear drag positions.
-        set({ defaultState: DEFAULT_NODE_STATE, expandedOverrides: {} })
+        // state + per-node `expandedOverrides` + `showOrphans`) but
+        // intentionally leaves persisted `layoutOverrides` alone — call
+        // `resetLayout(projectKey)` explicitly to clear drag positions.
+        set({
+          defaultState: DEFAULT_NODE_STATE,
+          expandedOverrides: {},
+          showOrphans: false,
+        })
       },
     }),
     {
       name: ERD_STORE_PERSIST_KEY,
       storage: createJSONStorage(() => localStorage),
-      // Persist `layoutOverrides` only. The default-state toggle and the
-      // per-node expanded overrides are session-scoped (matches DOC-215).
+      // Persist `layoutOverrides` only. The default-state toggle, per-node
+      // expanded overrides, and `showOrphans` are session-scoped — they
+      // intentionally reset on each session (DOC-215 + DOC-99 U3 / origin §5.6
+      // default-OFF semantic for orphan visibility).
       partialize: (state) => ({ layoutOverrides: state.layoutOverrides }),
       // Defensive: malformed JSON or future-shape mismatch → fall back to
       // empty overrides instead of throwing. Zustand's persist middleware
