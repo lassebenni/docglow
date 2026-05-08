@@ -188,40 +188,16 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
     return computeErdLayout(modelUids, counts)
   }, [modelUids, models])
 
-  // Build React Flow node array. Each node carries the model + relationships
-  // payload its renderer needs. Position lives on the wrapping container.
-  // U2: a persisted drag-override (if any) takes precedence over the
-  // computed default position.
-  const rfNodes = useMemo<Node[]>(() => {
-    return modelUids
-      .map((uid) => {
-        const computed = positions[uid]
-        if (!computed) return null
-        const override = projectOverrides[uid]
-        const pos = override ?? computed
-        const node: Node = {
-          id: uid,
-          type: 'erdTable',
-          position: { x: pos.x, y: pos.y },
-          data: {
-            model: models[uid],
-            relationships,
-            selected: selectedNodeId === uid,
-          },
-          // Drag is on by default (R1 — landed in U2 via persistence).
-          // Connection UI doesn't apply to the ERD — disable it.
-          connectable: false,
-          // Built-in selection styling fights our manual selection — turn off.
-          selectable: false,
-        }
-        return node
-      })
-      .filter((n): n is Node => n !== null)
-  }, [modelUids, models, relationships, positions, projectOverrides, selectedNodeId])
-
   // Compute effective state per rendered node so edges can pick column-aware
-  // handles. `compact` if the model has zero key columns OR if effective
-  // state from the store is `compact`. Otherwise mirrors the store value.
+  // handles AND so each ErdNode receives its render-state through `data`
+  // rather than reading the store directly. Threading state through `data`
+  // is what makes the segmented control re-render every node uniformly:
+  // `defaultState` and `expandedOverrides` change → `effectiveStates`
+  // regenerates → `rfNodes` array regenerates → React Flow rerenders all
+  // node components with their new `data.effectiveState`.
+  //
+  // `compact` if the model has zero key columns OR if effective state from
+  // the store is `compact`. Otherwise mirrors the store value.
   // The `keyColumnSets` map doubles as the lookup for "is column X currently
   // rendered on this node in keys mode" — in `full` mode every column is
   // rendered, so the check is trivially true.
@@ -246,6 +222,47 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
     }
     return result
   }, [modelUids, models, relationships])
+
+  // Build React Flow node array. Each node carries the model + relationships
+  // payload its renderer needs, plus the resolved `effectiveState` (see
+  // `effectiveStates` above). Position lives on the wrapping container.
+  // U2: a persisted drag-override (if any) takes precedence over the
+  // computed default position.
+  const rfNodes = useMemo<Node[]>(() => {
+    return modelUids
+      .map((uid) => {
+        const computed = positions[uid]
+        if (!computed) return null
+        const override = projectOverrides[uid]
+        const pos = override ?? computed
+        const node: Node = {
+          id: uid,
+          type: 'erdTable',
+          position: { x: pos.x, y: pos.y },
+          data: {
+            model: models[uid],
+            relationships,
+            selected: selectedNodeId === uid,
+            effectiveState: effectiveStates[uid] ?? 'compact',
+          },
+          // Drag is on by default (R1 — landed in U2 via persistence).
+          // Connection UI doesn't apply to the ERD — disable it.
+          connectable: false,
+          // Built-in selection styling fights our manual selection — turn off.
+          selectable: false,
+        }
+        return node
+      })
+      .filter((n): n is Node => n !== null)
+  }, [
+    modelUids,
+    models,
+    relationships,
+    positions,
+    projectOverrides,
+    selectedNodeId,
+    effectiveStates,
+  ])
 
   // Build React Flow edge array. Skip ghost edges (parent missing) — same as
   // v1's behavior in `resolveErdAnchors` (returned null, canvas filtered).

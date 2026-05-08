@@ -6,8 +6,11 @@
  * Custom-node + Handle pattern: `frontend/src/components/lineage/DagNode.tsx`.
  *
  * Behavior (origin requirements §5.1, §5.2):
- *   - Reads effective node-state from `useErdStore` (default-state OR per-node override).
- *   - Downgrades to `compact` if the model has zero key columns (§5.2 last paragraph).
+ *   - Receives the resolved render-state via `data.effectiveState` (computed
+ *     by `ErdCanvas` from default-state, per-node override, and the §5.2
+ *     zero-keys downgrade). Threading state through `data` rather than
+ *     reading it from the store directly is what makes the segmented control
+ *     re-render every node uniformly (DOC-99 follow-up).
  *   - Click cycles the per-node state via `useErdStore.cycleNode`. Selection
  *     handling itself is owned by React Flow (`onNodeClick` on `<ReactFlow>`).
  *   - Body content depends on state: `compact` (header only), `keys` (only PK/FK rows),
@@ -29,7 +32,7 @@
 
 import { useMemo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
-import { useErdStore } from '../../stores/erdStore'
+import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
 import { computeKeyColumns } from '../../utils/erdKeys'
 import { TABLE_W } from '../../utils/erdLayout'
 import { ROW_H_COL } from '../../utils/erdNodeDimensions'
@@ -41,6 +44,13 @@ export interface ErdNodeData {
   /** Full top-level relationships list — used for key/FK detection. */
   readonly relationships: readonly ErdRelationship[]
   readonly selected?: boolean
+  /**
+   * Render state resolved by `ErdCanvas` (default-state / override / zero-keys
+   * downgrade already applied). Threaded through `data` rather than read from
+   * the store so React Flow's per-node memoization picks up changes uniformly
+   * when the segmented control flips `defaultState` — bug-fix for DOC-99.
+   */
+  readonly effectiveState: ErdNodeState
   /**
    * Called with `model.unique_id` when the card is clicked. Optional —
    * React Flow's `onNodeClick` is the primary selection path; this is kept
@@ -180,8 +190,8 @@ function ColumnRow({ column, flags, isFirst }: ColumnRowProps) {
  * the card needs; `position` is owned by React Flow.
  */
 export function ErdNode({ data }: NodeProps) {
-  const { model, relationships, selected, onSelect } = data as unknown as ErdNodeData
-  const storeState = useErdStore((s) => s.getEffectiveState(model.unique_id))
+  const { model, relationships, selected, effectiveState, onSelect } =
+    data as unknown as ErdNodeData
 
   const keyColumns = useMemo(
     () => computeKeyColumns(model, relationships),
@@ -191,9 +201,6 @@ export function ErdNode({ data }: NodeProps) {
     () => computeColumnKeyFlags(model, relationships),
     [model, relationships],
   )
-
-  // §5.2: zero-key models always render compact, regardless of default.
-  const effectiveState = keyColumns.size === 0 ? 'compact' : storeState
 
   // Filter / order columns according to state. Both `keys` and `full` keep
   // the original `model.columns` order so the visual matches the schema.
