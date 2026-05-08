@@ -36,6 +36,7 @@ import {
   type NodeTypes,
   type EdgeMouseHandler,
   type NodeMouseHandler,
+  type OnNodeDrag,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -44,8 +45,10 @@ import { ErdEmptyCanvas } from './ErdEmptyCanvas'
 import { ErdInspector } from './ErdInspector'
 import { ErdNode } from './ErdNode'
 import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
+import { useProjectStore } from '../../stores/projectStore'
 import { computeErdLayout, type ErdNodePosition } from '../../utils/erdLayout'
 import { pickHandlePair, SELF_LOOP_HANDLES } from '../../utils/erdEdgeMapping'
+import { getProjectKey } from '../../utils/erdProjectKey'
 
 import type { DocglowModel, ErdRelationship } from '../../types'
 
@@ -68,6 +71,10 @@ const nodeTypes: NodeTypes = {
 const edgeTypes: EdgeTypes = {
   erdRelationship: ErdEdge,
 }
+
+/** Stable empty-object reference for the project-overrides selector — avoids
+ *  re-render loops from a fresh `{}` literal on every store read. */
+const EMPTY_OVERRIDES: Readonly<Record<string, ErdNodePosition>> = Object.freeze({})
 
 interface SegmentedControlProps {
   readonly value: ErdNodeState
@@ -106,6 +113,18 @@ function SegmentedControl({ value, onChange }: SegmentedControlProps) {
 function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
   const defaultState = useErdStore((s) => s.defaultState)
   const setDefaultState = useErdStore((s) => s.setDefaultState)
+  const setNodePosition = useErdStore((s) => s.setNodePosition)
+  const resetLayout = useErdStore((s) => s.resetLayout)
+
+  // Project-scoped layout overrides. We resolve the project key from the
+  // active payload — `_default_` if no payload (e.g. early-mount or tests).
+  const projectData = useProjectStore((s) => s.data)
+  const projectKey = useMemo(() => getProjectKey(projectData), [projectData])
+  // Subscribe to the slice for THIS project only — re-render on changes to
+  // its overrides without churning when a different project's slice changes.
+  const projectOverrides = useErdStore(
+    (s) => s.layoutOverrides[projectKey] ?? EMPTY_OVERRIDES,
+  )
 
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -127,11 +146,15 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
 
   // Build React Flow node array. Each node carries the model + relationships
   // payload its renderer needs. Position lives on the wrapping container.
+  // U2: a persisted drag-override (if any) takes precedence over the
+  // computed default position.
   const rfNodes = useMemo<Node[]>(() => {
     return modelUids
       .map((uid) => {
-        const pos = positions[uid]
-        if (!pos) return null
+        const computed = positions[uid]
+        if (!computed) return null
+        const override = projectOverrides[uid]
+        const pos = override ?? computed
         const node: Node = {
           id: uid,
           type: 'erdTable',
@@ -150,7 +173,7 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
         return node
       })
       .filter((n): n is Node => n !== null)
-  }, [modelUids, models, relationships, positions, selectedNodeId])
+  }, [modelUids, models, relationships, positions, projectOverrides, selectedNodeId])
 
   // Build React Flow edge array. Skip ghost edges (parent missing) — same as
   // v1's behavior in `resolveErdAnchors` (returned null, canvas filtered).
@@ -169,8 +192,12 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
       })
       .map((rel) => {
         const isSelfLoop = rel.from_unique_id === rel.to_unique_id
-        const fromPos = positions[rel.from_unique_id]
-        const toPos = positions[rel.to_unique_id]
+        // Pick handle pair based on EFFECTIVE position (override > computed)
+        // so dragged nodes pick the correct left/right handle on rerender.
+        const fromPos =
+          projectOverrides[rel.from_unique_id] ?? positions[rel.from_unique_id]
+        const toPos =
+          projectOverrides[rel.to_unique_id] ?? positions[rel.to_unique_id]
         const handles = isSelfLoop
           ? SELF_LOOP_HANDLES
           : pickHandlePair(fromPos.x, toPos.x)
@@ -190,7 +217,7 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
         }
         return edge
       })
-  }, [relationships, models, positions, selectedEdgeId])
+  }, [relationships, models, positions, projectOverrides, selectedEdgeId])
 
   const handleEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
     event.stopPropagation()
@@ -212,6 +239,24 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
     setSelectedNodeId(null)
   }, [])
 
+  // U2: persist drag-rearranged positions on drag-end. Single update per
+  // drag (not per-tick) — keeps localStorage writes cheap.
+  const handleNodeDragStop: OnNodeDrag = useCallback(
+    (_event, node) => {
+      setNodePosition(projectKey, node.id, {
+        x: node.position.x,
+        y: node.position.y,
+      })
+    },
+    [projectKey, setNodePosition],
+  )
+
+  const handleResetLayout = useCallback(() => {
+    resetLayout(projectKey)
+  }, [projectKey, resetLayout])
+
+  const hasOverrides = Object.keys(projectOverrides).length > 0
+
   const hasRelationships = relationships.length > 0
 
   return (
@@ -219,6 +264,16 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
       {/* Top bar */}
       <div className="flex items-center gap-3 px-3 py-2 border-b border-[var(--border)] shrink-0">
         <SegmentedControl value={defaultState} onChange={setDefaultState} />
+        {hasOverrides && (
+          <button
+            type="button"
+            onClick={handleResetLayout}
+            title="Reset all node positions to default"
+            className="px-2 py-1 text-xs rounded border border-[var(--border)] bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)] cursor-pointer transition-colors"
+          >
+            Reset layout
+          </button>
+        )}
         <span className="text-xs text-[var(--text-muted)] ml-auto">
           {modelUids.length} tables &middot; {relationships.length} relationships
         </span>
@@ -246,6 +301,7 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
               onNodeClick={handleNodeClick}
               onEdgeClick={handleEdgeClick}
               onPaneClick={handlePaneClick}
+              onNodeDragStop={handleNodeDragStop}
               fitView
               fitViewOptions={{ padding: 0.15 }}
               minZoom={0.1}
