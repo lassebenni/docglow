@@ -6,6 +6,7 @@ import { ColumnTable } from '../components/models/ColumnTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
+import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
 import type { FilterState } from '../components/ui/FilterDropdown'
 import { Markdown } from '../components/Markdown'
@@ -15,6 +16,8 @@ import { getSubgraph, type LineageDirection } from '../utils/graph'
 import { applyFilters, useFilterState, computeSubgraphOptions } from '../utils/lineageFilters'
 import { buildModelColumnsMap } from '../utils/modelColumns'
 import { buildDownstreamMap } from '../utils/columnLineageGraph'
+import { getModelErdSubgraph } from '../utils/erdSubgraph'
+import type { DocglowModel } from '../types'
 
 const RESOURCE_TYPE_META: Record<string, { label: string; color: string; bg: string }> = {
   model:    { label: 'M', color: '#2563eb', bg: '#2563eb18' },
@@ -108,7 +111,7 @@ function DependencyList({
   )
 }
 
-type Tab = 'columns' | 'sql' | 'lineage' | 'tests'
+type Tab = 'columns' | 'sql' | 'lineage' | 'erd' | 'tests'
 
 export function ModelPage() {
   const { id } = useParams<{ id: string }>()
@@ -178,6 +181,24 @@ export function ModelPage() {
     return buildModelColumnsMap(data)
   }, [data])
 
+  // ERD tab: 1-hop subgraph of relationships involving this model. Tab is
+  // hidden entirely if the site was generated without `--enable-erd` (in
+  // which case `data.relationships` is undefined or empty).
+  const erdEnabled = (data?.relationships?.length ?? 0) > 0
+  const erdSubgraph = useMemo(
+    () => getModelErdSubgraph(decodedId, data?.relationships ?? []),
+    [decodedId, data?.relationships],
+  )
+  const erdSubgraphModels = useMemo<Record<string, DocglowModel>>(() => {
+    if (!data) return {}
+    const out: Record<string, DocglowModel> = {}
+    for (const uid of erdSubgraph.models) {
+      const m = data.models[uid]
+      if (m) out[uid] = m
+    }
+    return out
+  }, [data, erdSubgraph.models])
+
   if (!model) {
     return (
       <div className="text-[var(--text-muted)]">
@@ -190,6 +211,7 @@ export function ModelPage() {
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'sql', label: 'SQL' },
     { key: 'lineage', label: 'Lineage' },
+    ...(erdEnabled ? [{ key: 'erd' as const, label: 'ERD' }] : []),
     { key: 'tests', label: `Tests (${model.test_results.length})` },
   ]
 
@@ -434,6 +456,33 @@ export function ModelPage() {
               modelColumns={modelColumnsMap}
             />
           </div>
+        </div>
+      )}
+
+      {activeTab === 'erd' && (
+        <div>
+          {erdSubgraph.relationships.length === 0 ? (
+            <div className="border border-[var(--border)] rounded-lg p-6 text-sm text-[var(--text-muted)]">
+              <p>This model has no declared relationships.</p>
+              <p className="mt-2 text-xs">
+                Add a <code className="px-1 py-0.5 rounded bg-[var(--bg-surface)]">relationships</code> test in
+                {' '}<code className="px-1 py-0.5 rounded bg-[var(--bg-surface)]">schema.yml</code> or use
+                {' '}<code className="px-1 py-0.5 rounded bg-[var(--bg-surface)]">meta.docglow.relationships</code>
+                {' '}to declare one.
+              </p>
+            </div>
+          ) : (
+            <div
+              className="border border-[var(--border)] rounded-lg overflow-hidden"
+              style={{ height: 'calc(100vh - 380px)', minHeight: 400 }}
+            >
+              <ErdCanvas
+                mode="subgraph"
+                models={erdSubgraphModels}
+                relationships={erdSubgraph.relationships}
+              />
+            </div>
+          )}
         </div>
       )}
 
