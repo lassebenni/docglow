@@ -1,77 +1,102 @@
 /**
- * Deterministic grid layout for ERD nodes.
+ * Auto-layout for ERD nodes using dagre.
  *
- * v1 ships a hand-derived grid layout (per origin requirements §4 non-goals:
- * "no auto-layout — ELK / d3-force is v1.1"). This module computes
- * deterministic `(x, y)` positions for a flat list of model unique_ids.
+ * v1 shipped a fixed-cell grid (`ROW_SLOT_H = 200`) which overlapped when
+ * keys-mode tables grew taller than a cell. v1.1 swaps it for dagre — same
+ * library already used by lineage and column-trace layouts. dagre measures
+ * actual node heights and arranges nodes by edge direction, so child→parent
+ * relationships flow left-to-right and tables don't collide.
  *
- * Sort order: by `relationships_count` descending (most-connected first), with
- * alphabetical unique_id as the tiebreak. Packs into a `ceil(sqrt(N))`-column
- * grid so the canvas stays roughly square regardless of project size.
+ * Determinism: dagre's algorithm is deterministic for a fixed input.
  *
- * Determinism guarantee: identical input always produces identical output.
- * Same constants are exported so downstream renderers (U2/U3) can compute
- * edge anchors without redefining cell geometry.
+ * The caller must provide per-node heights. ErdCanvas estimates from
+ * keys-mode rendering (the default view); the layout still works when users
+ * later toggle to compact/full because user-dragged positions take
+ * precedence in the canvas.
  */
 
-/** Width of a rendered table card in px. */
-export const TABLE_W = 220;
+import dagre from 'dagre'
+
+/** Width of a rendered table card in px. Imported by ErdNode for its width style. */
+export const TABLE_W = 220
 /** Height of the table header row in px (used for edge anchor math). */
-export const ROW_H_HEAD = 36;
-/** Horizontal gap between adjacent grid cells in px. */
-export const GAP_X = 80;
-/** Vertical gap between adjacent grid cells in px. */
-export const GAP_Y = 60;
-/** Reserved vertical slot per cell (header + body estimate) in px. */
-export const ROW_SLOT_H = 200;
-/** Outer margin offset (top/left) of the grid in px. */
-export const ORIGIN_OFFSET = 40;
+export const ROW_H_HEAD = 36
+
+/** Horizontal spacing between dagre layers (parent→child gap). */
+const RANK_SEP = 120
+/** Vertical spacing between sibling nodes within a layer. */
+const NODE_SEP = 60
+/** Outer canvas margin around the laid-out graph. */
+const MARGIN = 40
 
 export interface ErdNodePosition {
-  readonly x: number;
-  readonly y: number;
+  readonly x: number
+  readonly y: number
+}
+
+export interface ErdLayoutNodeInput {
+  readonly uid: string
+  readonly height: number
+}
+
+export interface ErdLayoutEdgeInput {
+  readonly from: string
+  readonly to: string
 }
 
 /**
- * Compute deterministic grid positions for a set of model unique_ids.
+ * Compute dagre-driven positions for ERD nodes.
  *
- * @param modelUids — list of model unique_ids to lay out (any order)
- * @param relationshipsCounts — map from unique_id → relationships_count;
- *   missing entries are treated as 0
- * @returns map from unique_id → `{ x, y }` position in canvas px
+ * @param nodes - per-node `{uid, height}` records. Width is fixed at TABLE_W.
+ * @param edges - directed `{from, to}` pairs (child → parent for ERDs).
+ *   Self-loops and edges referencing missing uids are dropped silently.
+ *   Duplicate edges between the same pair are deduplicated for layout.
+ * @returns map from uid → top-left `{x, y}` in canvas px.
+ *   Returned positions are dagre-centered then offset by `-width/2, -height/2`
+ *   so they match ReactFlow's top-left coordinate convention.
  */
 export function computeErdLayout(
-  modelUids: readonly string[],
-  relationshipsCounts: Readonly<Record<string, number>>,
+  nodes: readonly ErdLayoutNodeInput[],
+  edges: readonly ErdLayoutEdgeInput[],
 ): Record<string, ErdNodePosition> {
-  if (modelUids.length === 0) {
-    return {};
+  if (nodes.length === 0) return {}
+
+  const g = new dagre.graphlib.Graph()
+  g.setGraph({
+    rankdir: 'LR',
+    nodesep: NODE_SEP,
+    ranksep: RANK_SEP,
+    marginx: MARGIN,
+    marginy: MARGIN,
+  })
+  g.setDefaultEdgeLabel(() => ({}))
+
+  const heightByUid = new Map<string, number>()
+  for (const n of nodes) {
+    heightByUid.set(n.uid, n.height)
+    g.setNode(n.uid, { width: TABLE_W, height: n.height })
   }
 
-  // Sort by relationships_count desc, then unique_id asc for stable tiebreak.
-  // Copy first — never mutate the caller's array.
-  const sorted = [...modelUids].sort((a, b) => {
-    const countA = relationshipsCounts[a] ?? 0;
-    const countB = relationshipsCounts[b] ?? 0;
-    if (countA !== countB) {
-      return countB - countA;
+  const seen = new Set<string>()
+  for (const e of edges) {
+    if (e.from === e.to) continue
+    if (!heightByUid.has(e.from) || !heightByUid.has(e.to)) continue
+    const key = `${e.from}->${e.to}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    g.setEdge(e.from, e.to)
+  }
+
+  dagre.layout(g)
+
+  const positions: Record<string, ErdNodePosition> = {}
+  for (const n of nodes) {
+    const dagreNode = g.node(n.uid)
+    if (!dagreNode) continue
+    positions[n.uid] = {
+      x: dagreNode.x - TABLE_W / 2,
+      y: dagreNode.y - n.height / 2,
     }
-    return a < b ? -1 : a > b ? 1 : 0;
-  });
-
-  const cols = Math.ceil(Math.sqrt(sorted.length));
-  const cellWidth = TABLE_W + GAP_X;
-  const cellHeight = ROW_SLOT_H + GAP_Y;
-
-  const positions: Record<string, ErdNodePosition> = {};
-  for (let i = 0; i < sorted.length; i++) {
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    positions[sorted[i]] = {
-      x: col * cellWidth + ORIGIN_OFFSET,
-      y: row * cellHeight + ORIGIN_OFFSET,
-    };
   }
-
-  return positions;
+  return positions
 }

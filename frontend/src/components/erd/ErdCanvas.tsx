@@ -48,7 +48,7 @@ import { ErdInspector } from './ErdInspector'
 import { ErdNode } from './ErdNode'
 import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
 import { useProjectStore } from '../../stores/projectStore'
-import { computeErdLayout, type ErdNodePosition } from '../../utils/erdLayout'
+import { computeErdLayout, ROW_H_HEAD, type ErdNodePosition } from '../../utils/erdLayout'
 import {
   pickEdgeHandles,
   pickSelfLoopHandles,
@@ -181,12 +181,24 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
   )
 
   const positions = useMemo<Record<string, ErdNodePosition>>(() => {
-    const counts: Record<string, number> = {}
-    for (const uid of modelUids) {
-      counts[uid] = models[uid].relationships_count ?? 0
-    }
-    return computeErdLayout(modelUids, counts)
-  }, [modelUids, models])
+    // Estimate per-node heights from the default keys-mode rendering: header
+    // + visible rows + summary footer. Per-node `expandedOverrides` are
+    // intentionally NOT a dep — toggling one node shouldn't relayout the
+    // graph and disturb its siblings. User-dragged positions in
+    // `layoutOverrides` take precedence in `rfNodes` regardless.
+    const layoutNodes = modelUids.map((uid) => {
+      const model = models[uid]
+      const keyCount = model ? computeKeyColumns(model, relationships).size : 0
+      const visibleRows = Math.max(keyCount, 2)
+      const height = ROW_H_HEAD + visibleRows * 26 + 40 // header + rows + summary
+      return { uid, height }
+    })
+    const layoutEdges = relationships.map((r) => ({
+      from: r.from_unique_id,
+      to: r.to_unique_id,
+    }))
+    return computeErdLayout(layoutNodes, layoutEdges)
+  }, [modelUids, models, relationships])
 
   // Compute effective state per rendered node so edges can pick column-aware
   // handles AND so each ErdNode receives its render-state through `data`
