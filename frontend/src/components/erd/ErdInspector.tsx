@@ -4,11 +4,12 @@
  * Three render branches per origin requirements §5.7:
  *   1. **Empty** (no edge / no node selected): a hint + YAML snippet showing
  *      how to add a `relationships` test.
- *   2. **Edge selected**: editorial layout (dateline, headline, drop-cap body
- *      paragraph, pull quote, definition list, code excerpt, footer byline).
- *      Visual reference: `examples/erd-design-examples/variant-b.jsx`. We
- *      drop the serif font (the variant uses `var(--font-serif)`, which is
- *      not defined in our CSS) and lean on the project default sans + mono.
+ *   2. **Edge selected**: tightened relationship inspector — eyebrow row
+ *      with severity + status badges, identifier headline with arrow,
+ *      narrative paragraph, 2-col bordered metadata grid, code excerpt.
+ *      Three text styles total (caps label, body sans, mono identifiers)
+ *      per the design system. No italic, no drop-cap, no amber accent
+ *      (amber is reserved for the active node ring in the diagram).
  *   3. **Node selected (no edge)**: U2 fills this in. Stub for now.
  *
  * The YAML excerpt synthesis is extracted to a pure helper
@@ -279,26 +280,6 @@ function OpenResourceButton({
       <span>{label}</span>
       <span aria-hidden="true">→</span>
     </button>
-  )
-}
-
-function DTerm({ term, children }: { term: string; children: React.ReactNode }) {
-  return (
-    <>
-      <dt
-        style={{
-          color: 'var(--text-muted)',
-          fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-          fontSize: 10,
-          letterSpacing: '0.08em',
-          textTransform: 'uppercase',
-          paddingTop: 2,
-        }}
-      >
-        {term}
-      </dt>
-      <dd>{children}</dd>
-    </>
   )
 }
 
@@ -645,7 +626,6 @@ function EdgeInspector({
   const toQualified = `${toModelName}.${relationship.to_column}`
 
   const testBasename = basenameUniqueId(relationship.test_unique_id)
-  const sevLabel = relationship.severity === 'error' ? 'build failures' : 'warnings'
   const inferenceLabel: Record<ErdInferenceSource, string> = {
     test: 'test',
     meta: 'meta',
@@ -660,104 +640,102 @@ function EdgeInspector({
     toUniqueId: relationship.to_unique_id,
   })
 
+  // 2-col grid metadata (Test, Inference, File, Type). Cardinality (kind) is
+  // the most informative 4th cell — distinct from the test-source dimension
+  // already covered by Inference.
+  const metaCells: ReadonlyArray<readonly [string, React.ReactNode]> = [
+    [
+      'Test',
+      <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
+        {testBasename ?? '—'}
+      </code>,
+    ],
+    [
+      'Inference',
+      <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
+        {inferenceLabel[relationship.inference_source]}
+      </code>,
+    ],
+    [
+      'File',
+      relationship.meta_file_path ? (
+        <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
+          {relationship.meta_file_path}
+        </code>
+      ) : (
+        <span style={{ color: 'var(--text-muted)' }}>—</span>
+      ),
+    ],
+    [
+      'Type',
+      <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
+        {relationship.kind}
+      </code>,
+    ],
+  ]
+
   return (
     <div className="flex flex-col">
-      {/* Dateline */}
-      <div
-        className="px-5 pt-6 pb-2 flex items-center gap-2"
-        style={{
-          color: 'var(--text-muted)',
-          fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-          fontSize: 10,
-          letterSpacing: '0.12em',
-          textTransform: 'uppercase',
-        }}
-      >
-        <span>relationship</span>
+      {/* Eyebrow row: kind label + Severity + Status badges */}
+      <div className="px-5 pt-6 pb-2.5 flex items-center gap-2 flex-wrap">
+        <span
+          className="text-[11px] font-semibold tracking-[0.1em] uppercase"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          Relationship
+        </span>
+        <span style={{ color: 'var(--text-muted)', opacity: 0.5 }}>·</span>
+        <SoftBadge tone={SEVERITY_TONE[relationship.severity]}>
+          {relationship.severity}
+        </SoftBadge>
+        <SoftBadge tone={STATUS_TONE[relationship.status]}>
+          {STATUS_LABEL[relationship.status]}
+        </SoftBadge>
       </div>
 
-      {/* Headline */}
-      <h2
-        className="px-5 pb-4 leading-tight"
-        style={{
-          fontSize: 18,
-          fontWeight: 600,
-          letterSpacing: '-0.01em',
-          color: 'var(--text)',
-        }}
+      {/* Headline: identifiers + arrow, body-medium weight (mono carries weight). */}
+      <div
+        className="px-5 pb-4 text-sm font-medium leading-snug"
+        style={{ color: 'var(--text)' }}
         data-testid="erd-inspector-headline"
       >
-        <span
-          style={{
-            fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-            fontSize: 15,
-            color: 'var(--text)',
-          }}
-        >
-          {fromQualified}
-        </span>
+        <span className="font-mono">{fromQualified}</span>
         <OpenResourceButton
           uniqueId={relationship.from_unique_id}
           label={`Open ${fromModelName}`}
           variant="icon"
           onNavigate={onOpenResource}
         />
-        <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
-          {' '}references{' '}
-        </span>
         <span
-          style={{
-            fontFamily: 'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-            fontSize: 15,
-            color: 'var(--text)',
-          }}
+          className="mx-1.5 font-normal"
+          style={{ color: 'var(--text-muted)' }}
         >
-          {toQualified}
+          →
         </span>
+        <span className="font-mono">{toQualified}</span>
         <OpenResourceButton
           uniqueId={relationship.to_unique_id}
           label={`Open ${toModelName}`}
           variant="icon"
           onNavigate={onOpenResource}
         />
-      </h2>
+      </div>
 
-      {/* Body paragraph (emphasized first letter, no float drop-cap). */}
+      {/* Body paragraph — plain prose, no drop-cap, no italic. */}
       <div
-        className="px-5 pb-5 text-sm"
+        className="px-5 pb-4 text-sm"
         style={{
           color: 'var(--text)',
           lineHeight: 1.55,
         }}
       >
         <p>
-          <span
-            style={{
-              fontSize: 17,
-              fontWeight: 600,
-              color: '#f59e0b',
-            }}
-          >
-            E
-          </span>
-          very row of{' '}
-          <code
-            style={{
-              fontFamily:
-                'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-              fontSize: 12,
-            }}
-          >
+          Every row of{' '}
+          <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
             {fromModelName}
           </code>{' '}
           must point at a real{' '}
-          <code
-            style={{
-              fontFamily:
-                'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-              fontSize: 12,
-            }}
-          >
+          <code className="font-mono text-xs" style={{ color: 'var(--text)' }}>
             {toModelName}
           </code>
           .{' '}
@@ -765,11 +743,8 @@ function EdgeInspector({
             <>
               This relationship is declared via{' '}
               <code
-                style={{
-                  fontFamily:
-                    'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-                  fontSize: 12,
-                }}
+                className="font-mono text-xs"
+                style={{ color: 'var(--text)' }}
               >
                 meta.docglow.relationships
               </code>
@@ -779,209 +754,77 @@ function EdgeInspector({
             <>
               The{' '}
               <code
-                style={{
-                  fontFamily:
-                    'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-                  fontSize: 12,
-                }}
+                className="font-mono text-xs"
+                style={{ color: 'var(--text)' }}
               >
                 {testBasename ?? 'relationships'}
               </code>{' '}
               test guards this on every{' '}
               <code
-                style={{
-                  fontFamily:
-                    'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-                  fontSize: 12,
-                }}
+                className="font-mono text-xs"
+                style={{ color: 'var(--text)' }}
               >
                 dbt build
-              </code>{' '}
-              — orphans surface as <em>{sevLabel}</em> rather than silent data
+              </code>
+              {' '}— orphans surface as build failures rather than silent data
               drift.
             </>
           )}
         </p>
       </div>
 
-      {/* Pull quote */}
-      <blockquote
-        className="mx-5 mb-5 px-4 py-3"
-        style={{
-          borderLeft: '3px solid #f59e0b',
-          fontSize: 13,
-          lineHeight: 1.45,
-          color: 'var(--text)',
-          background: 'color-mix(in oklab, #f59e0b 4%, transparent)',
-        }}
+      {/* 2-col bordered meta grid */}
+      <div
+        className="mx-5 mb-4 grid grid-cols-2 rounded-md overflow-hidden"
+        style={{ border: '1px solid var(--border)' }}
+        data-testid="erd-inspector-meta"
       >
-        <span
-          style={{
-            color: '#f59e0b',
-            fontSize: 20,
-            lineHeight: 0,
-            position: 'relative',
-            top: 6,
-            marginRight: 4,
-          }}
-        >
-          “
-        </span>
-        <span
-          style={{
-            fontFamily:
-              'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-            fontSize: 12,
-          }}
-        >
-          {fromQualified}
-        </span>
-        <span> → </span>
-        <span
-          style={{
-            fontFamily:
-              'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-            fontSize: 12,
-          }}
-        >
-          {toQualified}
-        </span>
-        {relationship.inference_source === 'meta' && relationship.meta_file_path ? (
-          <>
-            <span> — declared in </span>
-            <span
+        {metaCells.map(([label, val], i) => {
+          const isLeftCol = i % 2 === 0
+          const isInTopRow = i < metaCells.length - 2
+          return (
+            <div
+              key={label}
+              className="px-2.5 py-2"
               style={{
-                fontFamily:
-                  'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-                fontSize: 12,
+                borderRight: isLeftCol ? '1px solid var(--border)' : undefined,
+                borderBottom: isInTopRow ? '1px solid var(--border)' : undefined,
               }}
             >
-              {relationship.meta_file_path}
-            </span>
-            <span>.</span>
-          </>
-        ) : (
-          <>
-            <span> — enforced by the </span>
-            <span
-              style={{
-                fontFamily:
-                  'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-                fontSize: 12,
-              }}
-            >
-              {testBasename ?? 'relationships'}
-            </span>
-            <span> test.</span>
-          </>
-        )}
-      </blockquote>
+              <div
+                className="text-[11px] font-medium mb-1"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                {label}
+              </div>
+              <div className="text-[13px]" style={{ color: 'var(--text)' }}>
+                {val}
+              </div>
+            </div>
+          )
+        })}
+      </div>
 
-      {/* Definition list */}
-      <dl
-        className="px-5 pb-4 grid gap-y-2"
-        style={{
-          gridTemplateColumns: 'auto 1fr',
-          columnGap: 16,
-          fontSize: 13,
-        }}
-        data-testid="erd-inspector-dl"
-      >
-        <DTerm term="severity">
-          <SoftBadge tone={SEVERITY_TONE[relationship.severity]}>
-            {relationship.severity}
-          </SoftBadge>
-        </DTerm>
-        <DTerm term="status">
-          <SoftBadge tone={STATUS_TONE[relationship.status]}>
-            {STATUS_LABEL[relationship.status]}
-          </SoftBadge>
-        </DTerm>
-        <DTerm term="file">
-          <code
-            style={{
-              fontFamily:
-                'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-              fontSize: 12,
-              color: 'var(--text)',
-            }}
-          >
-            {relationship.meta_file_path ?? 'N/A'}
-          </code>
-        </DTerm>
-        <DTerm term="test">
-          <code
-            style={{
-              fontFamily:
-                'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-              fontSize: 12,
-              color: 'var(--text)',
-            }}
-          >
-            {testBasename ?? 'N/A'}
-          </code>
-        </DTerm>
-        <DTerm term="inference">
-          <code
-            style={{
-              fontFamily:
-                'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-              fontSize: 12,
-              color: 'var(--text)',
-            }}
-          >
-            {inferenceLabel[relationship.inference_source]}
-          </code>
-        </DTerm>
-      </dl>
-
-      {/* Code excerpt */}
+      {/* Excerpt */}
       <div className="px-5 pb-5">
         <div
-          className="mb-1"
-          style={{
-            color: 'var(--text-muted)',
-            fontFamily:
-              'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-            fontSize: 10,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-          }}
+          className="text-xs font-medium mb-1.5"
+          style={{ color: 'var(--text-muted)' }}
         >
-          excerpt
+          Excerpt
         </div>
         <pre
-          className="px-3 py-2 rounded border whitespace-pre overflow-x-auto"
+          className="px-3 py-2 rounded-md whitespace-pre overflow-x-auto font-mono text-xs"
           style={{
             background: 'var(--bg-surface)',
-            borderColor: 'var(--border)',
-            fontFamily:
-              'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+            border: '1px solid var(--border)',
             color: 'var(--text)',
-            fontSize: 12,
             lineHeight: 1.5,
           }}
           data-testid="erd-inspector-yaml"
         >
           {yamlExcerpt}
         </pre>
-      </div>
-
-      {/* Footer byline */}
-      <div
-        className="px-5 py-3 mt-auto flex items-center gap-2"
-        style={{
-          borderTop: '1px solid var(--border)',
-          color: 'var(--text-muted)',
-          fontFamily:
-            'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
-          fontSize: 11,
-          letterSpacing: '0.04em',
-        }}
-      >
-        <span>inference: {inferenceLabel[relationship.inference_source]}</span>
-        <span>·</span>
-        <span>severity: {relationship.severity}</span>
       </div>
     </div>
   )
