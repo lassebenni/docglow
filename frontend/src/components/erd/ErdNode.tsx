@@ -1,25 +1,29 @@
 /**
- * ErdNode — renders one model card on the ERD canvas.
+ * ErdNode — renders one model card on the ERD canvas as a React Flow custom
+ * node type (`nodeType: 'erdTable'`).
  *
  * Visual reference: `examples/erd-design-examples/erd-shared.jsx` (`TableNode`).
- * Styling convention reference: `frontend/src/components/lineage/DagNode.tsx`.
- *
- * The mockup uses a lot of inline styles; we mirror its layout and dimensions
- * but use Tailwind utility classes + CSS variables (`var(--bg)`, etc.) for
- * theming, the same convention as the rest of the app.
+ * Custom-node + Handle pattern: `frontend/src/components/lineage/DagNode.tsx`.
  *
  * Behavior (origin requirements §5.1, §5.2):
  *   - Reads effective node-state from `useErdStore` (default-state OR per-node override).
  *   - Downgrades to `compact` if the model has zero key columns (§5.2 last paragraph).
- *   - Click anywhere on the card cycles the per-node state via `useErdStore.cycleNode`.
+ *   - Click cycles the per-node state via `useErdStore.cycleNode`. Selection
+ *     handling itself is owned by React Flow (`onNodeClick` on `<ReactFlow>`).
  *   - Body content depends on state: `compact` (header only), `keys` (only PK/FK rows),
  *     `full` (every column).
- *   - Caller positions the card absolutely; this component renders at its given
- *     `position.x` / `position.y`. The parent `<svg>` for edges sits in the same
- *     coordinate system (U3's responsibility).
+ *
+ * React Flow integration:
+ *   - Four invisible handles (`source-left`, `source-right`, `target-left`,
+ *     `target-right`) so edges can attach on either side based on relative
+ *     node positions, computed in `ErdCanvas`.
+ *   - Position is set on the wrapping React Flow node container — this
+ *     component renders at (0, 0) inside it. No `position` / `left` / `top`
+ *     in this file.
  */
 
 import { useMemo, useCallback } from 'react'
+import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useErdStore } from '../../stores/erdStore'
 import { computeKeyColumns } from '../../utils/erdKeys'
 import { TABLE_W } from '../../utils/erdLayout'
@@ -27,36 +31,24 @@ import { ROW_H_COL } from '../../utils/erdNodeDimensions'
 
 import type { DocglowColumn, DocglowModel, ErdRelationship } from '../../types'
 
-export interface ErdNodeProps {
+export interface ErdNodeData {
   readonly model: DocglowModel
   /** Full top-level relationships list — used for key/FK detection. */
   readonly relationships: readonly ErdRelationship[]
-  readonly position: { readonly x: number; readonly y: number }
   readonly selected?: boolean
   /**
-   * Called with `model.unique_id` when the card is clicked. The selection
-   * is bundled with the cycle (cycle-state still fires); see DOC-216 U2.
+   * Called with `model.unique_id` when the card is clicked. Optional —
+   * React Flow's `onNodeClick` is the primary selection path; this is kept
+   * for callers that don't route through React Flow (e.g. tests).
    */
   readonly onSelect?: (uid: string) => void
 }
 
-/**
- * Resource-letter pill ("M" for model). Mirrors the `ResourcePill` from the
- * mockup but uses the same blue tone the rest of the app uses for models
- * (see `RESOURCE_COLORS` in `DagNode.tsx`).
- */
 const MODEL_FILL = '#2563eb'
 
 /** PK indicator color — amber, matches mockup. */
 const PK_COLOR = '#d97706'
 
-/**
- * Compute per-column key flags (PK / FK) for the model.
- *
- * - PK = column has both a `unique` test AND a `not_null` test.
- * - FK = column appears as `from_column` of any outgoing relationship from this model.
- * - Both flags can be true simultaneously.
- */
 interface ColumnKeyFlags {
   readonly pk: boolean
   readonly fk: boolean
@@ -146,7 +138,12 @@ function ColumnRow({ column, flags, isFirst }: ColumnRowProps) {
   )
 }
 
-export function ErdNode({ model, relationships, position, selected, onSelect }: ErdNodeProps) {
+/**
+ * React Flow custom node component. The `data` payload carries everything
+ * the card needs; `position` is owned by React Flow.
+ */
+export function ErdNode({ data }: NodeProps) {
+  const { model, relationships, selected, onSelect } = data as unknown as ErdNodeData
   const storeState = useErdStore((s) => s.getEffectiveState(model.unique_id))
 
   const keyColumns = useMemo(
@@ -171,11 +168,15 @@ export function ErdNode({ model, relationships, position, selected, onSelect }: 
     return model.columns
   }, [effectiveState, model.columns, keyColumns])
 
+  // The cycle still happens here so the click on the card body cycles the
+  // node state. React Flow's `onNodeClick` (wired in ErdCanvas) handles
+  // canvas-level selection routing.
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      e.stopPropagation()
+      // Don't stop propagation — React Flow needs the event to fire onNodeClick.
       useErdStore.getState().cycleNode(model.unique_id, keyColumns.size > 0)
       onSelect?.(model.unique_id)
+      void e
     },
     [model.unique_id, keyColumns.size, onSelect],
   )
@@ -185,13 +186,15 @@ export function ErdNode({ model, relationships, position, selected, onSelect }: 
   const cardBorderColor = selected ? '#f59e0b' : 'var(--border, #e2e8f0)'
   const cardBorderWidth = selected ? 2 : 1
 
+  // Stable handle IDs let edges target either side of the node.
+  // Visual handles are invisible — we only need the connection points.
+  const handleClass = '!opacity-0 !w-0 !h-0 !border-0 !bg-transparent'
+
   return (
     <div
       onClick={handleClick}
-      className="absolute cursor-pointer select-none"
+      className="cursor-pointer select-none"
       style={{
-        left: position.x,
-        top: position.y,
         width: TABLE_W,
         background: 'var(--bg, #fff)',
         border: `${cardBorderWidth}px solid ${cardBorderColor}`,
@@ -202,6 +205,36 @@ export function ErdNode({ model, relationships, position, selected, onSelect }: 
       }}
       data-erd-node-id={model.unique_id}
     >
+      {/* React Flow handles — both source + target on each side. */}
+      <Handle
+        id="target-left"
+        type="target"
+        position={Position.Left}
+        className={handleClass}
+        isConnectable={false}
+      />
+      <Handle
+        id="source-left"
+        type="source"
+        position={Position.Left}
+        className={handleClass}
+        isConnectable={false}
+      />
+      <Handle
+        id="target-right"
+        type="target"
+        position={Position.Right}
+        className={handleClass}
+        isConnectable={false}
+      />
+      <Handle
+        id="source-right"
+        type="source"
+        position={Position.Right}
+        className={handleClass}
+        isConnectable={false}
+      />
+
       {/* Header */}
       <div
         className="flex items-center gap-2 px-2"
