@@ -53,9 +53,22 @@ import { getProjectKey } from '../../utils/erdProjectKey'
 
 import type { DocglowModel, ErdRelationship } from '../../types'
 
+export type ErdCanvasMode = 'standalone' | 'subgraph'
+
 export interface ErdCanvasProps {
   readonly models: Readonly<Record<string, DocglowModel>>
   readonly relationships: readonly ErdRelationship[]
+  /**
+   * Render mode. `'standalone'` (default) is the full `/erd` experience:
+   * orphan toggle, reset-layout button, persisted drag overrides, and the
+   * editorial right-rail inspector.
+   *
+   * `'subgraph'` is the read-only mini-canvas embedded in `ModelPage`'s ERD
+   * tab: drag still works during the session but DOES NOT persist; the
+   * orphan toggle, reset button, and inspector are hidden. The segmented
+   * control + count remain.
+   */
+  readonly mode?: ErdCanvasMode
 }
 
 const NODE_STATES: readonly ErdNodeState[] = ['compact', 'keys', 'full']
@@ -111,23 +124,36 @@ function SegmentedControl({ value, onChange }: SegmentedControlProps) {
   )
 }
 
-function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
+function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanvasProps) {
+  const isSubgraph = mode === 'subgraph'
+
   const defaultState = useErdStore((s) => s.defaultState)
   const setDefaultState = useErdStore((s) => s.setDefaultState)
   const setNodePosition = useErdStore((s) => s.setNodePosition)
   const resetLayout = useErdStore((s) => s.resetLayout)
-  const showOrphans = useErdStore((s) => s.showOrphans)
+  const showOrphansFromStore = useErdStore((s) => s.showOrphans)
   const setShowOrphans = useErdStore((s) => s.setShowOrphans)
+
+  // Subgraph mode forces orphans-on (orphan filter is meaningless in a 1-hop
+  // view of a focal model — every node IS connected by definition).
+  const showOrphans = isSubgraph ? true : showOrphansFromStore
 
   // Project-scoped layout overrides. We resolve the project key from the
   // active payload — `_default_` if no payload (e.g. early-mount or tests).
   const projectData = useProjectStore((s) => s.data)
   const projectKey = useMemo(() => getProjectKey(projectData), [projectData])
-  // Subscribe to the slice for THIS project only — re-render on changes to
-  // its overrides without churning when a different project's slice changes.
-  const projectOverrides = useErdStore(
+  // Standalone mode: subscribe to persisted overrides for THIS project.
+  // Subgraph mode: ignore persisted overrides — drag works during the session
+  // via `subgraphPositionOverrides` (local state) and reverts on tab switch.
+  const persistedOverrides = useErdStore(
     (s) => s.layoutOverrides[projectKey] ?? EMPTY_OVERRIDES,
   )
+  const [subgraphPositionOverrides, setSubgraphPositionOverrides] = useState<
+    Record<string, ErdNodePosition>
+  >({})
+  const projectOverrides = isSubgraph
+    ? subgraphPositionOverrides
+    : persistedOverrides
 
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
@@ -251,14 +277,22 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
 
   // U2: persist drag-rearranged positions on drag-end. Single update per
   // drag (not per-tick) — keeps localStorage writes cheap.
+  // U5: in `subgraph` mode we keep drag interactive during the session but
+  // route the override into local state instead of the persisted store, so
+  // the embedded mini-canvas doesn't pollute the global `/erd` layout.
   const handleNodeDragStop: OnNodeDrag = useCallback(
     (_event, node) => {
-      setNodePosition(projectKey, node.id, {
+      const next: ErdNodePosition = {
         x: node.position.x,
         y: node.position.y,
-      })
+      }
+      if (isSubgraph) {
+        setSubgraphPositionOverrides((prev) => ({ ...prev, [node.id]: next }))
+      } else {
+        setNodePosition(projectKey, node.id, next)
+      }
     },
-    [projectKey, setNodePosition],
+    [isSubgraph, projectKey, setNodePosition],
   )
 
   const handleResetLayout = useCallback(() => {
@@ -274,24 +308,26 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
       {/* Top bar */}
       <div className="flex items-center gap-3 px-3 py-2 border-b border-[var(--border)] shrink-0">
         <SegmentedControl value={defaultState} onChange={setDefaultState} />
-        <button
-          type="button"
-          onClick={() => setShowOrphans(!showOrphans)}
-          aria-pressed={showOrphans}
-          title={
-            showOrphans
-              ? 'Hide tables with no declared relationships'
-              : 'Show tables with no declared relationships'
-          }
-          className={`px-3 py-1 text-xs rounded border cursor-pointer transition-colors ${
-            showOrphans
-              ? 'bg-primary text-white border-primary'
-              : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)]'
-          }`}
-        >
-          Show isolated tables
-        </button>
-        {hasOverrides && (
+        {!isSubgraph && (
+          <button
+            type="button"
+            onClick={() => setShowOrphans(!showOrphans)}
+            aria-pressed={showOrphans}
+            title={
+              showOrphans
+                ? 'Hide tables with no declared relationships'
+                : 'Show tables with no declared relationships'
+            }
+            className={`px-3 py-1 text-xs rounded border cursor-pointer transition-colors ${
+              showOrphans
+                ? 'bg-primary text-white border-primary'
+                : 'bg-[var(--bg)] text-[var(--text-muted)] border-[var(--border)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)]'
+            }`}
+          >
+            Show isolated tables
+          </button>
+        )}
+        {!isSubgraph && hasOverrides && (
           <button
             type="button"
             onClick={handleResetLayout}
@@ -353,14 +389,17 @@ function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
           )}
         </div>
 
-        {/* Right rail — editorial inspector. */}
-        <ErdInspector
-          models={models}
-          relationships={relationships}
-          selectedEdgeId={selectedEdgeId}
-          selectedNodeId={selectedNodeId}
-          onSelectEdge={selectEdge}
-        />
+        {/* Right rail — editorial inspector. Hidden in `subgraph` mode (the
+            mini-canvas is purely a visualization on the model-detail page). */}
+        {!isSubgraph && (
+          <ErdInspector
+            models={models}
+            relationships={relationships}
+            selectedEdgeId={selectedEdgeId}
+            selectedNodeId={selectedNodeId}
+            onSelectEdge={selectEdge}
+          />
+        )}
       </div>
     </div>
   )
