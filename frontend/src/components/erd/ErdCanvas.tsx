@@ -1,41 +1,51 @@
 /**
  * ErdCanvas — composes ERD nodes + edges with a top-bar segmented control
- * and a placeholder right rail (DOC-216 will fill in the real inspector).
+ * and the editorial right-rail inspector.
  *
- * Behavior (origin requirements §3, §5.1, §5.2, §5.9):
+ * v1.1 (DOC-218 U1): the canvas internals are now a `@xyflow/react`
+ * `<ReactFlow>` viewport with custom node / edge types. Drag, pan, and zoom
+ * come native. Crow's-foot edges remain custom-rendered via `ErdEdge`.
+ *
+ * Behavior preserved from v1 (DOC-213→DOC-216):
  *   - Top-bar segmented control sets the global default node state
- *     (`compact` / `keys` / `full`). Per-node overrides are managed by
- *     `useErdStore.cycleNode` (handled inside `ErdNode`).
- *   - The §5.2 zero-keys-→-compact downgrade is applied here, in one memo,
- *     so all anchor math sees the same effective state the cards will render.
- *   - Layout is the deterministic grid from `computeErdLayout`. No
- *     pan/zoom in v1 (auto-layout / zoom are v1.1 — see §4 non-goals);
- *     native scroll on the canvas area is sufficient for jaffle-shop scale.
- *   - Empty state (no relationships): centered hint with a tiny YAML
- *     snippet. The full two-example empty state ships with DOC-216.
+ *     (`compact` / `keys` / `full`). Per-node overrides cycle on click via
+ *     `useErdStore.cycleNode` (still triggered inside `ErdNode`).
+ *   - Selection wiring: click an edge → inspector edge branch; click a node
+ *     → inspector node branch + state cycle; click the canvas background →
+ *     both clear (mutual exclusion preserved).
+ *   - Crow's-foot edge rendering — same four glyphs, same status colors,
+ *     same self-loop curve.
+ *   - Empty-state branch (`ErdEmptyCanvas`) renders before the React Flow
+ *     viewport is mounted when there are zero relationships.
  *
- * Edge layer:
- *   - Single absolute-positioned `<svg>` overlay, `pointer-events: none`,
- *     covering the whole canvas inner area. Each `<ErdEdge>` enables its
- *     own pointer events so edge clicks select without blocking node clicks.
+ * Known precision regression from v1: edges anchor to the node center (one
+ * Handle per side) rather than to the specific column row. The inspector
+ * still gives the precise column context. Reverting to per-column handles
+ * is deferred until / unless v1.2's auto-layout work needs them.
  */
 
 import { useCallback, useMemo, useState } from 'react'
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Controls,
+  MiniMap,
+  type Edge,
+  type EdgeTypes,
+  type Node,
+  type NodeTypes,
+  type EdgeMouseHandler,
+  type NodeMouseHandler,
+} from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+
 import { ErdEdge } from './ErdEdge'
 import { ErdEmptyCanvas } from './ErdEmptyCanvas'
 import { ErdInspector } from './ErdInspector'
 import { ErdNode } from './ErdNode'
 import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
-import { computeKeyColumns } from '../../utils/erdKeys'
-import {
-  computeErdLayout,
-  GAP_X,
-  ORIGIN_OFFSET,
-  ROW_SLOT_H,
-  TABLE_W,
-  type ErdNodePosition,
-} from '../../utils/erdLayout'
-import { resolveErdAnchors } from '../../utils/erdAnchors'
+import { computeErdLayout, type ErdNodePosition } from '../../utils/erdLayout'
+import { pickHandlePair, SELF_LOOP_HANDLES } from '../../utils/erdEdgeMapping'
 
 import type { DocglowModel, ErdRelationship } from '../../types'
 
@@ -51,8 +61,13 @@ const STATE_LABEL: Record<ErdNodeState, string> = {
   full: 'Full',
 }
 
-/** Trailing canvas padding (right + bottom) so cards don't hug the edge. */
-const CANVAS_PADDING = 80
+const nodeTypes: NodeTypes = {
+  erdTable: ErdNode,
+}
+
+const edgeTypes: EdgeTypes = {
+  erdRelationship: ErdEdge,
+}
 
 interface SegmentedControlProps {
   readonly value: ErdNodeState
@@ -88,46 +103,19 @@ function SegmentedControl({ value, onChange }: SegmentedControlProps) {
   )
 }
 
-export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
+function ErdCanvasInner({ models, relationships }: ErdCanvasProps) {
   const defaultState = useErdStore((s) => s.defaultState)
-  const expandedOverrides = useErdStore((s) => s.expandedOverrides)
   const setDefaultState = useErdStore((s) => s.setDefaultState)
 
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
 
-  // Mutual-exclusion wrappers — selecting one clears the other so the
-  // inspector branches don't fight (§5.7). The edge-priority safety net
-  // in `ErdInspector` covers the (theoretically unreachable) double-set.
   const selectEdge = useCallback((id: string) => {
     setSelectedNodeId(null)
     setSelectedEdgeId(id)
   }, [])
-  const selectNode = useCallback((uid: string) => {
-    setSelectedEdgeId(null)
-    setSelectedNodeId(uid)
-  }, [])
 
   const modelUids = useMemo(() => Object.keys(models), [models])
-
-  // Effective state for every model uid. Applies override → default →
-  // §5.2 zero-keys-downgrade, in that order. Computed once so anchor math
-  // and node rendering stay in lockstep.
-  const effectiveStates = useMemo<Record<string, ErdNodeState>>(() => {
-    const result: Record<string, ErdNodeState> = {}
-    for (const uid of modelUids) {
-      const model = models[uid]
-      const override = expandedOverrides[uid]
-      const base: ErdNodeState = override ? 'full' : defaultState
-      if (base === 'compact') {
-        result[uid] = 'compact'
-      } else {
-        const keys = computeKeyColumns(model, relationships)
-        result[uid] = keys.size === 0 ? 'compact' : base
-      }
-    }
-    return result
-  }, [modelUids, models, expandedOverrides, defaultState, relationships])
 
   const positions = useMemo<Record<string, ErdNodePosition>>(() => {
     const counts: Record<string, number> = {}
@@ -137,38 +125,89 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
     return computeErdLayout(modelUids, counts)
   }, [modelUids, models])
 
-  const anchors = useMemo(() => {
-    return relationships
-      .map((rel) => {
-        const pair = resolveErdAnchors(
-          rel,
-          models,
-          positions,
-          effectiveStates,
-          relationships,
-        )
-        return pair ? { rel, pair } : null
+  // Build React Flow node array. Each node carries the model + relationships
+  // payload its renderer needs. Position lives on the wrapping container.
+  const rfNodes = useMemo<Node[]>(() => {
+    return modelUids
+      .map((uid) => {
+        const pos = positions[uid]
+        if (!pos) return null
+        const node: Node = {
+          id: uid,
+          type: 'erdTable',
+          position: { x: pos.x, y: pos.y },
+          data: {
+            model: models[uid],
+            relationships,
+            selected: selectedNodeId === uid,
+          },
+          // Drag is on by default (R1 — landed in U2 via persistence).
+          // Connection UI doesn't apply to the ERD — disable it.
+          connectable: false,
+          // Built-in selection styling fights our manual selection — turn off.
+          selectable: false,
+        }
+        return node
       })
-      .filter((entry): entry is { rel: ErdRelationship; pair: NonNullable<ReturnType<typeof resolveErdAnchors>> } => entry !== null)
-  }, [relationships, models, positions, effectiveStates])
+      .filter((n): n is Node => n !== null)
+  }, [modelUids, models, relationships, positions, selectedNodeId])
 
-  const { canvasW, canvasH } = useMemo(() => {
-    let maxX = 0
-    let maxY = 0
-    for (const uid of modelUids) {
-      const pos = positions[uid]
-      if (!pos) continue
-      maxX = Math.max(maxX, pos.x + TABLE_W)
-      maxY = Math.max(maxY, pos.y + ROW_SLOT_H)
-    }
-    // Ensure non-zero canvas even when project is empty.
-    return {
-      canvasW: Math.max(maxX + CANVAS_PADDING, ORIGIN_OFFSET + TABLE_W + GAP_X),
-      canvasH: Math.max(maxY + CANVAS_PADDING, ORIGIN_OFFSET + ROW_SLOT_H),
-    }
-  }, [modelUids, positions])
+  // Build React Flow edge array. Skip ghost edges (parent missing) — same as
+  // v1's behavior in `resolveErdAnchors` (returned null, canvas filtered).
+  // Skip relationships whose endpoints aren't in the rendered set —
+  // defensive; shouldn't happen in practice but stay resilient.
+  const rfEdges = useMemo<Edge[]>(() => {
+    return relationships
+      .filter((rel) => {
+        if (rel.parent_column_exists === false) return false
+        if (rel.to_unique_id === '') return false
+        if (!models[rel.from_unique_id]) return false
+        if (!models[rel.to_unique_id]) return false
+        if (!positions[rel.from_unique_id]) return false
+        if (!positions[rel.to_unique_id]) return false
+        return true
+      })
+      .map((rel) => {
+        const isSelfLoop = rel.from_unique_id === rel.to_unique_id
+        const fromPos = positions[rel.from_unique_id]
+        const toPos = positions[rel.to_unique_id]
+        const handles = isSelfLoop
+          ? SELF_LOOP_HANDLES
+          : pickHandlePair(fromPos.x, toPos.x)
 
-  const clearSelection = useCallback(() => {
+        const edge: Edge = {
+          id: rel.id,
+          source: rel.from_unique_id,
+          target: rel.to_unique_id,
+          sourceHandle: handles.sourceHandle,
+          targetHandle: handles.targetHandle,
+          type: 'erdRelationship',
+          data: {
+            rel,
+            selected: selectedEdgeId === rel.id,
+          },
+          selectable: false,
+        }
+        return edge
+      })
+  }, [relationships, models, positions, selectedEdgeId])
+
+  const handleEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
+    event.stopPropagation()
+    setSelectedEdgeId(edge.id)
+    setSelectedNodeId(null)
+  }, [])
+
+  const handleNodeClick: NodeMouseHandler = useCallback((event, node) => {
+    event.stopPropagation()
+    setSelectedEdgeId(null)
+    setSelectedNodeId(node.id)
+    // ErdNode's own click handler still fires `cycleNode` for the per-node
+    // state cycle, so the bundled selection-and-cycle UX from DOC-216 is
+    // preserved without duplicating the cycle here.
+  }, [])
+
+  const handlePaneClick = useCallback(() => {
     setSelectedEdgeId(null)
     setSelectedNodeId(null)
   }, [])
@@ -189,65 +228,46 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
       <div className="flex-1 flex min-h-0">
         {/* Canvas area */}
         <div
-          className="flex-1 relative overflow-auto"
+          className="flex-1 relative min-h-0"
           style={{
             background:
               'radial-gradient(circle, var(--border, #e2e8f0) 1px, transparent 1px)',
             backgroundSize: '20px 20px',
           }}
-          onClick={clearSelection}
         >
           {!hasRelationships ? (
             <ErdEmptyCanvas />
           ) : (
-            <div
-              className="relative"
-              style={{ width: canvasW, height: canvasH }}
+            <ReactFlow
+              nodes={rfNodes}
+              edges={rfEdges}
+              nodeTypes={nodeTypes}
+              edgeTypes={edgeTypes}
+              onNodeClick={handleNodeClick}
+              onEdgeClick={handleEdgeClick}
+              onPaneClick={handlePaneClick}
+              fitView
+              fitViewOptions={{ padding: 0.15 }}
+              minZoom={0.1}
+              maxZoom={2.5}
+              nodesDraggable
+              nodesConnectable={false}
+              elementsSelectable={false}
+              selectNodesOnDrag={false}
+              proOptions={{ hideAttribution: true }}
             >
-              {/* Edge layer (under nodes; nodes paint on top). */}
-              <svg
-                className="absolute inset-0"
-                width={canvasW}
-                height={canvasH}
-                style={{ pointerEvents: 'none', overflow: 'visible' }}
-                aria-hidden="true"
-              >
-                {anchors.map(({ rel, pair }) => (
-                  <ErdEdge
-                    key={rel.id}
-                    relationship={rel}
-                    fromAnchor={pair.fromAnchor}
-                    toAnchor={pair.toAnchor}
-                    fromSide={pair.fromSide}
-                    toSide={pair.toSide}
-                    selected={selectedEdgeId === rel.id}
-                    onSelect={selectEdge}
-                  />
-                ))}
-              </svg>
-
-              {/* Node layer. */}
-              {modelUids.map((uid) => {
-                const pos = positions[uid]
-                if (!pos) return null
-                return (
-                  <ErdNode
-                    key={uid}
-                    model={models[uid]}
-                    relationships={relationships}
-                    position={pos}
-                    selected={selectedNodeId === uid}
-                    onSelect={selectNode}
-                  />
-                )
-              })}
-            </div>
+              <Controls showInteractive={false} />
+              <MiniMap
+                nodeColor={() => '#2563eb'}
+                maskColor="rgba(0,0,0,0.15)"
+                pannable
+                zoomable
+              />
+            </ReactFlow>
           )}
         </div>
 
-        {/* Right rail — editorial inspector. Node selection arrives from
-            `ErdNode` click handlers; edge selection from `ErdEdge`. The
-            inspector renders edge → node → empty in priority order. */}
+        {/* Right rail — editorial inspector. */}
         <ErdInspector
           models={models}
           relationships={relationships}
@@ -257,5 +277,13 @@ export function ErdCanvas({ models, relationships }: ErdCanvasProps) {
         />
       </div>
     </div>
+  )
+}
+
+export function ErdCanvas(props: ErdCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <ErdCanvasInner {...props} />
+    </ReactFlowProvider>
   )
 }
