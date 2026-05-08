@@ -15,6 +15,7 @@
  * (`synthesizeRelationshipYaml`) so it can be unit-tested without DOM.
  */
 
+import { useNavigate } from 'react-router-dom'
 import type {
   DocglowModel,
   ErdInferenceSource,
@@ -22,6 +23,7 @@ import type {
   ErdSeverity,
   ErdStatus,
 } from '../../types'
+import { getResourceUrl } from '../../utils/erdResourceUrl'
 
 export interface ErdInspectorProps {
   readonly models: Readonly<Record<string, DocglowModel>>
@@ -182,6 +184,104 @@ function SoftBadge({
   )
 }
 
+/**
+ * Small icon-button that navigates to a resource detail page.
+ *
+ * Used in two places:
+ *   1. Edge inspector headline — one per qualifier (from / to). Sits
+ *      visually adjacent to the qualifier text as a compact arrow icon.
+ *   2. Node inspector — a single text+icon link below the headline.
+ *
+ * `variant` swaps between the two visual treatments. The click handler
+ * delegates URL construction to `getResourceUrl` (pure helper).
+ */
+function OpenResourceButton({
+  uniqueId,
+  label,
+  variant,
+  onNavigate,
+}: {
+  readonly uniqueId: string
+  readonly label: string
+  readonly variant: 'icon' | 'link'
+  readonly onNavigate: (url: string) => void
+}) {
+  const handleClick = () => onNavigate(getResourceUrl(uniqueId))
+  if (variant === 'icon') {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        aria-label={label}
+        title={label}
+        className="inline-flex items-center justify-center align-middle rounded transition-colors"
+        style={{
+          width: 16,
+          height: 16,
+          marginLeft: 2,
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--text-muted)',
+          cursor: 'pointer',
+          padding: 0,
+          verticalAlign: 'baseline',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = 'var(--text)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = 'var(--text-muted)'
+        }}
+        data-erd-open-uid={uniqueId}
+      >
+        <svg
+          width="11"
+          height="11"
+          viewBox="0 0 16 16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M6 3h7v7" />
+          <path d="M13 3 6.5 9.5" />
+          <path d="M11 9v4H3V5h4" />
+        </svg>
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      className="inline-flex items-center gap-1 text-xs"
+      style={{
+        background: 'transparent',
+        border: 'none',
+        color: '#2563eb',
+        cursor: 'pointer',
+        padding: 0,
+        fontFamily:
+          'var(--font-mono, ui-monospace, SFMono-Regular, monospace)',
+        fontSize: 11,
+        letterSpacing: '0.04em',
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.textDecoration = 'underline'
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.textDecoration = 'none'
+      }}
+      data-erd-open-uid={uniqueId}
+    >
+      <span>{label}</span>
+      <span aria-hidden="true">→</span>
+    </button>
+  )
+}
+
 function DTerm({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <>
@@ -277,6 +377,7 @@ interface NodeInspectorProps {
   readonly incoming: readonly ErdRelationship[]
   readonly models: Readonly<Record<string, DocglowModel>>
   readonly onSelectEdge?: (id: string) => void
+  readonly onOpenResource: (url: string) => void
 }
 
 interface RelationshipRowProps {
@@ -346,6 +447,7 @@ function NodeInspector({
   incoming,
   models,
   onSelectEdge,
+  onOpenResource,
 }: NodeInspectorProps) {
   const modelName = model ? model.name : (basenameUniqueId(nodeId) ?? nodeId)
   const totalRels = outgoing.length + incoming.length
@@ -418,7 +520,7 @@ function NodeInspector({
 
       {/* Subhead — relationship count */}
       <div
-        className="px-5 pb-4"
+        className="px-5 pb-2"
         style={{
           color: 'var(--text-muted)',
           fontFamily:
@@ -427,6 +529,16 @@ function NodeInspector({
         }}
       >
         {totalRels} {totalRels === 1 ? 'relationship' : 'relationships'}
+      </div>
+
+      {/* Open-model link (DOC-220 / U4) */}
+      <div className="px-5 pb-4" data-testid="erd-inspector-node-open">
+        <OpenResourceButton
+          uniqueId={nodeId}
+          label="Open model details"
+          variant="link"
+          onNavigate={onOpenResource}
+        />
       </div>
 
       {/* Both groups empty — show a muted note. */}
@@ -520,12 +632,14 @@ interface EdgeInspectorProps {
   readonly relationship: ErdRelationship
   readonly fromModelName: string
   readonly toModelName: string
+  readonly onOpenResource: (url: string) => void
 }
 
 function EdgeInspector({
   relationship,
   fromModelName,
   toModelName,
+  onOpenResource,
 }: EdgeInspectorProps) {
   const fromQualified = `${fromModelName}.${relationship.from_column}`
   const toQualified = `${toModelName}.${relationship.to_column}`
@@ -582,6 +696,12 @@ function EdgeInspector({
         >
           {fromQualified}
         </span>
+        <OpenResourceButton
+          uniqueId={relationship.from_unique_id}
+          label={`Open ${fromModelName}`}
+          variant="icon"
+          onNavigate={onOpenResource}
+        />
         <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
           {' '}references{' '}
         </span>
@@ -594,6 +714,12 @@ function EdgeInspector({
         >
           {toQualified}
         </span>
+        <OpenResourceButton
+          uniqueId={relationship.to_unique_id}
+          label={`Open ${toModelName}`}
+          variant="icon"
+          onNavigate={onOpenResource}
+        />
       </h2>
 
       {/* Body paragraph (emphasized first letter, no float drop-cap). */}
@@ -872,6 +998,9 @@ export function ErdInspector({
   selectedNodeId,
   onSelectEdge,
 }: ErdInspectorProps) {
+  const navigate = useNavigate()
+  const handleOpenResource = (url: string) => navigate(url)
+
   const selectedEdge = selectedEdgeId
     ? relationships.find((r) => r.id === selectedEdgeId) ?? null
     : null
@@ -888,6 +1017,7 @@ export function ErdInspector({
           selectedEdge.to_model_name ||
           resolveModelName(selectedEdge.to_unique_id, models)
         }
+        onOpenResource={handleOpenResource}
       />
     )
   } else if (selectedNodeId) {
@@ -903,6 +1033,7 @@ export function ErdInspector({
         incoming={incoming}
         models={models}
         onSelectEdge={onSelectEdge}
+        onOpenResource={handleOpenResource}
       />
     )
   } else {
