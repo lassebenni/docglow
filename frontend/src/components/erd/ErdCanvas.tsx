@@ -18,10 +18,12 @@
  *   - Empty-state branch (`ErdEmptyCanvas`) renders before the React Flow
  *     viewport is mounted when there are zero relationships.
  *
- * Known precision regression from v1: edges anchor to the node center (one
- * Handle per side) rather than to the specific column row. The inspector
- * still gives the precise column context. Reverting to per-column handles
- * is deferred until / unless v1.2's auto-layout work needs them.
+ * Edge precision: when a node is in `keys` or `full` state, edges anchor to
+ * the specific column row via per-column handles declared inside each
+ * `ColumnRow`. When a node is `compact` (or the FK column isn't rendered —
+ * a rare meta-only relationship corner case), edges fall back to the generic
+ * side handle on the node midpoint. The picker lives in
+ * `utils/erdEdgeMapping.ts` (`pickEdgeHandles` / `pickSelfLoopHandles`).
  */
 
 import { useCallback, useMemo, useState } from 'react'
@@ -47,7 +49,12 @@ import { ErdNode } from './ErdNode'
 import { useErdStore, type ErdNodeState } from '../../stores/erdStore'
 import { useProjectStore } from '../../stores/projectStore'
 import { computeErdLayout, type ErdNodePosition } from '../../utils/erdLayout'
-import { pickHandlePair, SELF_LOOP_HANDLES } from '../../utils/erdEdgeMapping'
+import {
+  pickEdgeHandles,
+  pickSelfLoopHandles,
+  type ErdNodeRenderState,
+} from '../../utils/erdEdgeMapping'
+import { computeKeyColumns } from '../../utils/erdKeys'
 import { filterOrphans } from '../../utils/erdOrphanFilter'
 import { getProjectKey } from '../../utils/erdProjectKey'
 
@@ -128,6 +135,7 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
   const isSubgraph = mode === 'subgraph'
 
   const defaultState = useErdStore((s) => s.defaultState)
+  const expandedOverrides = useErdStore((s) => s.expandedOverrides)
   const setDefaultState = useErdStore((s) => s.setDefaultState)
   const setNodePosition = useErdStore((s) => s.setNodePosition)
   const resetLayout = useErdStore((s) => s.resetLayout)
@@ -211,6 +219,34 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
       .filter((n): n is Node => n !== null)
   }, [modelUids, models, relationships, positions, projectOverrides, selectedNodeId])
 
+  // Compute effective state per rendered node so edges can pick column-aware
+  // handles. `compact` if the model has zero key columns OR if effective
+  // state from the store is `compact`. Otherwise mirrors the store value.
+  // The `keyColumnSets` map doubles as the lookup for "is column X currently
+  // rendered on this node in keys mode" — in `full` mode every column is
+  // rendered, so the check is trivially true.
+  const effectiveStates = useMemo<Record<string, ErdNodeRenderState>>(() => {
+    const result: Record<string, ErdNodeRenderState> = {}
+    for (const uid of modelUids) {
+      const model = models[uid]
+      if (!model) continue
+      const keyCount = computeKeyColumns(model, relationships).size
+      const stored = expandedOverrides[uid] ?? defaultState
+      result[uid] = keyCount === 0 ? 'compact' : stored
+    }
+    return result
+  }, [modelUids, models, relationships, expandedOverrides, defaultState])
+
+  const keyColumnSets = useMemo<Record<string, Set<string>>>(() => {
+    const result: Record<string, Set<string>> = {}
+    for (const uid of modelUids) {
+      const model = models[uid]
+      if (!model) continue
+      result[uid] = computeKeyColumns(model, relationships)
+    }
+    return result
+  }, [modelUids, models, relationships])
+
   // Build React Flow edge array. Skip ghost edges (parent missing) — same as
   // v1's behavior in `resolveErdAnchors` (returned null, canvas filtered).
   // Skip relationships whose endpoints aren't in the rendered set —
@@ -234,9 +270,45 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
           projectOverrides[rel.from_unique_id] ?? positions[rel.from_unique_id]
         const toPos =
           projectOverrides[rel.to_unique_id] ?? positions[rel.to_unique_id]
+
+        const fromState = effectiveStates[rel.from_unique_id] ?? 'compact'
+        const toState = effectiveStates[rel.to_unique_id] ?? 'compact'
+
+        // In `full` mode every column is rendered → column always present.
+        // In `keys` mode only columns in keyColumnSets[uid] are rendered.
+        // In `compact` mode no rows render — the helper falls back to the
+        // generic side handle via the `state === 'compact'` branch.
+        const fromHasColumn =
+          fromState === 'full'
+            ? !!models[rel.from_unique_id].columns.find(
+                (c) => c.name === rel.from_column,
+              )
+            : (keyColumnSets[rel.from_unique_id]?.has(rel.from_column) ?? false)
+        const toHasColumn =
+          toState === 'full'
+            ? !!models[rel.to_unique_id].columns.find(
+                (c) => c.name === rel.to_column,
+              )
+            : (keyColumnSets[rel.to_unique_id]?.has(rel.to_column) ?? false)
+
         const handles = isSelfLoop
-          ? SELF_LOOP_HANDLES
-          : pickHandlePair(fromPos.x, toPos.x)
+          ? pickSelfLoopHandles({
+              state: fromState,
+              fromHasColumn,
+              toHasColumn,
+              fromColumn: rel.from_column,
+              toColumn: rel.to_column,
+            })
+          : pickEdgeHandles({
+              fromX: fromPos.x,
+              toX: toPos.x,
+              fromState,
+              toState,
+              fromHasColumn,
+              toHasColumn,
+              fromColumn: rel.from_column,
+              toColumn: rel.to_column,
+            })
 
         const edge: Edge = {
           id: rel.id,
@@ -253,7 +325,15 @@ function ErdCanvasInner({ models, relationships, mode = 'standalone' }: ErdCanva
         }
         return edge
       })
-  }, [relationships, models, positions, projectOverrides, selectedEdgeId])
+  }, [
+    relationships,
+    models,
+    positions,
+    projectOverrides,
+    selectedEdgeId,
+    effectiveStates,
+    keyColumnSets,
+  ])
 
   const handleEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
     event.stopPropagation()

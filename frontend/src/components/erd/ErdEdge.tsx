@@ -44,8 +44,10 @@ const STATUS_COLOR: Record<ErdStatus, string> = {
 const SELECTED_COLOR = '#f59e0b'
 const GHOST_COLOR = '#94a3b8'
 
-/** How far outside the anchor the crow's-foot glyph sits. */
-const GLYPH_OFFSET = 8
+/** How far outside the anchor the crow's-foot glyph sits.
+ * Bumped from 8 → 10 (DOC-99 follow-up) so the inner/outer glyphs have a bit
+ * more breathing room when two edges share the same column row anchor. */
+const GLYPH_OFFSET = 10
 /** Half-height of the perpendicular bar / fork. */
 const GLYPH_HALF = 5
 /** Radius of the open circle in `zero_or_*` glyphs. */
