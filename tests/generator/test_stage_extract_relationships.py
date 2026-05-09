@@ -2094,5 +2094,430 @@ class TestModelAnnotation:
         assert orders["relationships_count"] == 2
 
 
+def _dbt_constraints_fk_test(
+    *,
+    test_uid: str,
+    parent_name: str,
+    child_name: str,
+    pk_column_name: str,
+    child_column: str,
+    parent_package: str | None = None,
+    child_package: str | None = None,
+    package: str = "myproj",
+    severity: str = "ERROR",
+    extra_kwargs: dict[str, Any] | None = None,
+) -> ManifestNode:
+    """Build a synthetic dbt_constraints.foreign_key test node.
+
+    Mirrors the shape dbt-core compiles for the package: refs are
+    [parent_model, child_model] and kwargs carry pk_table_name + pk_column_name.
+    """
+    config = NodeConfig(materialized="test")
+    config_dict = config.model_dump(by_alias=True)
+    config_dict["severity"] = severity
+    config = NodeConfig.model_validate(config_dict)
+
+    kwargs: dict[str, Any] = {
+        "column_name": child_column,
+        "pk_table_name": f"ref('{parent_name}')",
+        "pk_column_name": pk_column_name,
+    }
+    if extra_kwargs:
+        kwargs.update(extra_kwargs)
+
+    return ManifestNode(
+        unique_id=test_uid,
+        name=f"dbt_constraints_foreign_key_{child_name}_{child_column}__{pk_column_name}__ref_{parent_name}_",
+        resource_type="test",
+        package_name=package,
+        column_name=child_column,
+        config=config,
+        test_metadata=_TestMetadata(
+            name="foreign_key",
+            namespace="dbt_constraints",
+            kwargs=kwargs,
+        ),
+        refs=[
+            {"name": parent_name, "package": parent_package, "version": None},
+            {"name": child_name, "package": child_package, "version": None},
+        ],
+    )
+
+
+def _dbt_constraints_pk_test(
+    *,
+    test_uid: str,
+    model_name: str,
+    column: str,
+    package: str = "myproj",
+    name: str = "primary_key",
+) -> ManifestNode:
+    """Build a synthetic dbt_constraints.primary_key (or unique_key) test node."""
+    return ManifestNode(
+        unique_id=test_uid,
+        name=f"dbt_constraints_{name}_{model_name}_{column}",
+        resource_type="test",
+        package_name=package,
+        column_name=column,
+        config=NodeConfig(materialized="test"),
+        test_metadata=_TestMetadata(
+            name=name,
+            namespace="dbt_constraints",
+            kwargs={"column_name": column},
+        ),
+        refs=[{"name": model_name, "package": None, "version": None}],
+    )
+
+
+# ---------------------------------------------------------------------------
+# dbt_constraints package support (column-level FKs + PK/UK cardinality signals)
+# ---------------------------------------------------------------------------
+
+
+class TestDbtConstraintsTestIndex:
+    """`_build_test_index` aliases dbt_constraints.primary_key/unique_key → 'unique'."""
+
+    def test_primary_key_aliased_to_unique(self) -> None:
+        from docglow.generator.erd import _build_test_index
+
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        pk = _dbt_constraints_pk_test(
+            test_uid="test.myproj.pk_orders_id",
+            model_name="orders",
+            column="order_id",
+            name="primary_key",
+        )
+        manifest = Manifest()
+        for n in (orders, pk):
+            manifest.nodes[n.unique_id] = n
+
+        index = _build_test_index(manifest)
+        assert "unique" in index[("model.myproj.orders", "order_id")]
+        # The raw namespaced name should NOT leak through.
+        assert "primary_key" not in index[("model.myproj.orders", "order_id")]
+
+    def test_unique_key_aliased_to_unique(self) -> None:
+        from docglow.generator.erd import _build_test_index
+
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        uk = _dbt_constraints_pk_test(
+            test_uid="test.myproj.uk_orders_id",
+            model_name="orders",
+            column="order_id",
+            name="unique_key",
+        )
+        manifest = Manifest()
+        for n in (orders, uk):
+            manifest.nodes[n.unique_id] = n
+
+        index = _build_test_index(manifest)
+        assert "unique" in index[("model.myproj.orders", "order_id")]
+
+    def test_builtin_unique_still_indexed_no_regression(self) -> None:
+        from docglow.generator.erd import _build_test_index
+
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        builtin_unique = _column_test(
+            test_uid="test.myproj.unique_orders_id",
+            model_name="orders",
+            column="order_id",
+            kind="unique",
+        )
+        manifest = Manifest()
+        for n in (orders, builtin_unique):
+            manifest.nodes[n.unique_id] = n
+
+        index = _build_test_index(manifest)
+        assert index[("model.myproj.orders", "order_id")] == {"unique"}
+
+
+class TestDbtConstraintsForeignKeyExtractor:
+    """`_extract_from_dbt_constraints_fk` builds an ErdRelationship dict per FK test."""
+
+    def test_happy_path_with_pk_and_not_null_yields_mandatory_one_to_many(self) -> None:
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        fk = _dbt_constraints_fk_test(
+            test_uid="test.myproj.fk_oi_orders",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+            severity="WARN",
+        )
+        pk_on_parent = _dbt_constraints_pk_test(
+            test_uid="test.myproj.pk_orders_id",
+            model_name="orders",
+            column="order_id",
+        )
+        not_null_on_child = _column_test(
+            test_uid="test.myproj.notnull_oi_order_id",
+            model_name="order_items",
+            column="order_id",
+            kind="not_null",
+        )
+
+        ctx = _make_context([orders, order_items, fk, pk_on_parent, not_null_on_child])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["from_unique_id"] == "model.myproj.order_items"
+        assert rel["from_column"] == "order_id"
+        assert rel["to_unique_id"] == "model.myproj.orders"
+        assert rel["to_column"] == "order_id"
+        assert rel["to_model_name"] == "orders"
+        assert rel["inference_source"] == "test"
+        assert rel["test_unique_id"] == "test.myproj.fk_oi_orders"
+        assert rel["kind"] == "inferred"
+        assert rel["is_synthetic"] is False
+        assert rel["severity"] == "warn"
+        # PK on parent (aliased to unique) + not_null on child → mandatory one-or-many.
+        assert rel["child_endpoint"] == "one_and_only_one"
+        assert rel["parent_endpoint"] == "one_or_many"
+        assert rel["parent_column_exists"] is True
+
+    def test_skip_composite_fk_with_fk_column_names_list(self) -> None:
+        from docglow.generator.erd import _extract_from_dbt_constraints_fk
+
+        composite = _dbt_constraints_fk_test(
+            test_uid="test.myproj.fk_composite",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+            extra_kwargs={
+                "fk_column_names": ["order_id", "tenant_id"],
+                "pk_column_names": ["order_id", "tenant_id"],
+            },
+        )
+        result = _extract_from_dbt_constraints_fk(composite, {}, {}, {}, {})
+        assert result is None
+
+    def test_skip_when_pk_column_name_missing(self) -> None:
+        from docglow.generator.erd import _extract_from_dbt_constraints_fk
+
+        bad = _dbt_constraints_fk_test(
+            test_uid="test.myproj.fk_bad",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+        )
+        # Strip pk_column_name to simulate a malformed manifest.
+        bad.test_metadata.kwargs.pop("pk_column_name")  # type: ignore[union-attr]
+        result = _extract_from_dbt_constraints_fk(bad, {}, {}, {}, {})
+        assert result is None
+
+    def test_skip_when_pk_table_name_missing(self) -> None:
+        from docglow.generator.erd import _extract_from_dbt_constraints_fk
+
+        bad = _dbt_constraints_fk_test(
+            test_uid="test.myproj.fk_bad",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+        )
+        bad.test_metadata.kwargs.pop("pk_table_name")  # type: ignore[union-attr]
+        result = _extract_from_dbt_constraints_fk(bad, {}, {}, {}, {})
+        assert result is None
+
+    def test_skip_cross_package(self) -> None:
+        from docglow.generator.erd import _extract_from_dbt_constraints_fk
+
+        cross = _dbt_constraints_fk_test(
+            test_uid="test.myproj.fk_cross",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+            parent_package="some_other_package",
+        )
+        result = _extract_from_dbt_constraints_fk(cross, {}, {}, {}, {})
+        assert result is None
+
+    def test_skip_model_level_test_without_column_name(self) -> None:
+        from docglow.generator.erd import _extract_from_dbt_constraints_fk
+
+        # Model-level test: column_name absent on the test node.
+        node = ManifestNode(
+            unique_id="test.myproj.fk_model_level",
+            name="fk_model_level",
+            resource_type="test",
+            package_name="myproj",
+            column_name=None,
+            config=NodeConfig(materialized="test"),
+            test_metadata=_TestMetadata(
+                name="foreign_key",
+                namespace="dbt_constraints",
+                kwargs={
+                    "pk_table_name": "ref('orders')",
+                    "pk_column_name": "order_id",
+                },
+            ),
+            refs=[
+                {"name": "orders", "package": None, "version": None},
+                {"name": "order_items", "package": None, "version": None},
+            ],
+        )
+        result = _extract_from_dbt_constraints_fk(node, {}, {}, {}, {})
+        assert result is None
+
+
+class TestDbtConstraintsPipelineIntegration:
+    """`stage_extract_relationships` walks both built-in and dbt_constraints tests."""
+
+    def test_builtin_and_dbt_constraints_both_emit(self) -> None:
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        customers = _model_node(
+            "model.myproj.customers",
+            "customers",
+            columns={"customer_id": ManifestColumnInfo(name="customer_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={
+                "order_id": ManifestColumnInfo(name="order_id"),
+                "customer_id": ManifestColumnInfo(name="customer_id"),
+            },
+        )
+        # Built-in relationships test on order_items.order_id → orders.order_id
+        builtin = _relationships_test(
+            test_uid="test.myproj.builtin_rel",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        # dbt_constraints FK on order_items.customer_id → customers.customer_id
+        dbtc = _dbt_constraints_fk_test(
+            test_uid="test.myproj.dbtc_fk",
+            parent_name="customers",
+            child_name="order_items",
+            pk_column_name="customer_id",
+            child_column="customer_id",
+        )
+
+        ctx = _make_context([orders, customers, order_items, builtin, dbtc])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 2
+        edges = {(r["from_column"], r["to_unique_id"]) for r in ctx.relationships}
+        assert edges == {
+            ("order_id", "model.myproj.orders"),
+            ("customer_id", "model.myproj.customers"),
+        }
+        # Both flow through inference_source='test' (single bucket per spec).
+        assert all(r["inference_source"] == "test" for r in ctx.relationships)
+
+    def test_duplicate_fk_pair_dedupes_via_compose(self) -> None:
+        """Same FK pair declared by both a built-in and a dbt_constraints test → one row.
+
+        `_compose` buckets by (from_uid, from_col, to_uid, to_col), so two
+        test-source entries on the same edge collapse to last-wins.
+        """
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        builtin = _relationships_test(
+            test_uid="test.myproj.builtin_rel",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        dbtc = _dbt_constraints_fk_test(
+            test_uid="test.myproj.dbtc_fk",
+            parent_name="orders",
+            child_name="order_items",
+            pk_column_name="order_id",
+            child_column="order_id",
+        )
+
+        ctx = _make_context([orders, order_items, builtin, dbtc])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        rel = ctx.relationships[0]
+        assert rel["from_column"] == "order_id"
+        assert rel["to_column"] == "order_id"
+        assert rel["inference_source"] == "test"
+
+
+class TestDbtConstraintsCardinalityRegression:
+    """dbt_constraints.primary_key on a parent column refines built-in relationships cardinality."""
+
+    def test_builtin_relationships_picks_up_dbt_constraints_pk_as_unique(self) -> None:
+        """A built-in `relationships` test pointed at a column with only a
+        dbt_constraints.primary_key (no built-in `unique`) must now infer
+        parent_endpoint='one_or_many' (was 'zero_or_many' before this change).
+        """
+        orders = _model_node(
+            "model.myproj.orders",
+            "orders",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        order_items = _model_node(
+            "model.myproj.order_items",
+            "order_items",
+            columns={"order_id": ManifestColumnInfo(name="order_id")},
+        )
+        rel = _relationships_test(
+            test_uid="test.myproj.rel",
+            parent_name="orders",
+            child_name="order_items",
+            parent_field="order_id",
+            child_column="order_id",
+        )
+        # Parent column has dbt_constraints.primary_key, NOT built-in unique.
+        pk = _dbt_constraints_pk_test(
+            test_uid="test.myproj.pk_orders_id",
+            model_name="orders",
+            column="order_id",
+            name="primary_key",
+        )
+
+        ctx = _make_context([orders, order_items, rel, pk])
+        stage_extract_relationships(ctx)
+
+        assert len(ctx.relationships) == 1
+        # parent_unique=True (from dbt_constraints.primary_key alias) →
+        # parent_endpoint='one_or_many' instead of fallback 'zero_or_many'.
+        assert ctx.relationships[0]["parent_endpoint"] == "one_or_many"
+
+
 # Quiet linter: `Any` is used in helper signatures
 _ = Any

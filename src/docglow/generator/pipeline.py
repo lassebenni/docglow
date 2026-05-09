@@ -154,6 +154,7 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
         _build_parent_lookup,
         _build_test_index,
         _compose,
+        _extract_from_dbt_constraints_fk,
         _extract_from_meta,
         _extract_from_test,
     )
@@ -167,13 +168,25 @@ def stage_extract_relationships(ctx: PipelineContext) -> None:
     for node in manifest.nodes.values():
         if node.resource_type != "test":
             continue
-        if not node.test_metadata or node.test_metadata.name != "relationships":
+        metadata = node.test_metadata
+        if metadata is None:
             continue
-        entry = _extract_from_test(
-            node, parent_lookup, test_index, columns_by_uid, ctx.run_results_by_id
-        )
-        if entry is not None:
-            test_entries.append(entry)
+        # Built-in `relationships` test (no namespace).
+        if metadata.namespace is None and metadata.name == "relationships":
+            entry = _extract_from_test(
+                node, parent_lookup, test_index, columns_by_uid, ctx.run_results_by_id
+            )
+            if entry is not None:
+                test_entries.append(entry)
+            continue
+        # dbt_constraints package `foreign_key` test.
+        if metadata.namespace == "dbt_constraints" and metadata.name == "foreign_key":
+            entry = _extract_from_dbt_constraints_fk(
+                node, parent_lookup, test_index, columns_by_uid, ctx.run_results_by_id
+            )
+            if entry is not None:
+                test_entries.append(entry)
+            continue
 
     meta_entries = _extract_from_meta(manifest, parent_lookup, test_index, columns_by_uid)
 
