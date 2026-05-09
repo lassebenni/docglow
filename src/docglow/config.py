@@ -114,6 +114,7 @@ class DocglowConfig:
     ui: UiConfig = field(default_factory=UiConfig)
     slim: bool = False
     column_lineage: bool = True
+    enable_erd: bool = False
     lineage_layers: LineageLayerConfig = field(default_factory=LineageLayerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
@@ -282,6 +283,7 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
         theme=raw.get("theme", "auto"),
         slim=raw.get("slim", False),
         column_lineage=raw.get("column_lineage", True),
+        enable_erd=bool(raw.get("enable_erd", False)),
         profiling=profiling,
         health=HealthConfig(weights=weights, naming_rules=naming_rules, complexity=complexity),
         ai=ai,

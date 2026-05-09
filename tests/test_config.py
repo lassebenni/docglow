@@ -42,6 +42,20 @@ class TestBuildConfigFromDict:
         config = _build_config_from_dict({})
         assert config.title == "docglow"
         assert config.health.weights == HealthWeights()
+        assert config.enable_erd is False
+
+    def test_enable_erd_true(self):
+        config = _build_config_from_dict({"enable_erd": True})
+        assert config.enable_erd is True
+
+    def test_enable_erd_false_explicit(self):
+        config = _build_config_from_dict({"enable_erd": False})
+        assert config.enable_erd is False
+
+    def test_enable_erd_truthy_coerces(self):
+        # YAML strings like "yes" parse to True; other truthy values should also work.
+        config = _build_config_from_dict({"enable_erd": "yes"})
+        assert config.enable_erd is True
 
     def test_custom_health_weights(self):
         config = _build_config_from_dict(
