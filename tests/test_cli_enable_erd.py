@@ -14,13 +14,14 @@ from click.testing import CliRunner
 from docglow.cli import cli
 
 
-def _make_mock_config() -> MagicMock:
+def _make_mock_config(*, enable_erd: bool = False) -> MagicMock:
     """Mirror the helper used in tests/test_cli_warnings.py."""
     config = MagicMock()
     config.ai.enabled = False
     config.title = "docglow"
     config.slim = False
     config.column_lineage = False
+    config.enable_erd = enable_erd
     return config
 
 
@@ -66,3 +67,43 @@ class TestEnableErdFlag:
         assert mock_gen.called
         kwargs = mock_gen.call_args.kwargs
         assert kwargs.get("enable_erd") is False
+
+    def test_yml_enable_erd_propagates_without_cli_flag(self, tmp_path: Path) -> None:
+        """`enable_erd: true` in docglow.yml should turn the ERD on without the CLI flag."""
+        runner = CliRunner()
+        with (
+            patch(
+                "docglow.config.load_config",
+                return_value=_make_mock_config(enable_erd=True),
+            ),
+            patch("docglow.generator.site.generate_site") as mock_gen,
+        ):
+            mock_gen.return_value = (tmp_path / "out", 100.0)
+            result = runner.invoke(
+                cli,
+                ["generate", "--project-dir", str(tmp_path)],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_gen.call_args.kwargs.get("enable_erd") is True
+
+    def test_cli_flag_works_when_yml_disables(self, tmp_path: Path) -> None:
+        """CLI flag enables the ERD even if yml omits / disables it."""
+        runner = CliRunner()
+        with (
+            patch(
+                "docglow.config.load_config",
+                return_value=_make_mock_config(enable_erd=False),
+            ),
+            patch("docglow.generator.site.generate_site") as mock_gen,
+        ):
+            mock_gen.return_value = (tmp_path / "out", 100.0)
+            result = runner.invoke(
+                cli,
+                ["generate", "--project-dir", str(tmp_path), "--enable-erd"],
+                catch_exceptions=False,
+            )
+
+        assert result.exit_code == 0, result.output
+        assert mock_gen.call_args.kwargs.get("enable_erd") is True

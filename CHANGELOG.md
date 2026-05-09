@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-08
+
+### Added
+- **`enable_erd` config field** — the ERD view can now be enabled persistently via `enable_erd: true` in `docglow.yml` (matches what the v0.8.0 changelog promised). The `--enable-erd` CLI flag still works and overrides the yml value.
+
 ## [0.8.0] - 2026-05-08
 
 ### Added

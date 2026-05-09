@@ -14,13 +14,20 @@ The ERD is derived directly from declarations you already have in your project â
 
 ## Enable the ERD
 
-The ERD is opt-in. Pass `--enable-erd` when generating the site:
+The ERD is opt-in. Either pass `--enable-erd` on the command line:
 
 ```bash
 docglow generate --enable-erd
 ```
 
-Without the flag, the `/erd` route is hidden and no relationship data is included in the payload.
+â€¦or set it persistently in `docglow.yml` so every generate picks it up (requires v0.8.1+):
+
+```yaml
+# docglow.yml
+enable_erd: true
+```
+
+The CLI flag overrides the yml value. Without either, the `/erd` route is hidden and no relationship data is included in the payload.
 
 ## How relationships are detected
 

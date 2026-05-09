@@ -88,7 +88,7 @@ from docglow.cloud_hint import maybe_show_hint
     "--enable-erd",
     is_flag=True,
     default=False,
-    help="Extract relationship data for the ERD view (DOC-213, opt-in until v0.8)",
+    help="Render the ERD view at /erd. Also settable via enable_erd: true in docglow.yml.",
 )
 def generate(
     project_dir: Path,
@@ -138,6 +138,8 @@ def generate(
         title = config.title
     if not slim and config.slim:
         slim = True
+    if not enable_erd and config.enable_erd:
+        enable_erd = True
 
     # Resolve column lineage: on by default, off via --skip-column-lineage or config
     column_lineage = not skip_column_lineage
