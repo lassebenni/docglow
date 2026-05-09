@@ -19,6 +19,7 @@ title: "My dbt Project"       # Custom site title
 theme: auto                     # auto | light | dark
 slim: false                     # Omit SQL from output to reduce file size
 column_lineage: true            # Enable column-level lineage (default: true)
+enable_erd: false               # Render the /erd view (default: false). See docs/erd.md
 
 health:
   weights:
