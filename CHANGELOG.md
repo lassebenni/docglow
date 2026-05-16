@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Column lineage extends into source columns declared in `sources.yml`** — projects that document source columns in `sources.yml` but skip `dbt docs generate` now get column-level lineage all the way to source columns. Catalog still wins on `data_type` and ordering when present; `sources.yml`-only columns are appended in declaration order. Column-level tests on sources (e.g. `not_null`, `unique`) also render on the source detail page. (#93)
+
 ## [0.8.1] - 2026-05-08
 
 ### Added

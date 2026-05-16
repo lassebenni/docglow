@@ -25,6 +25,17 @@ column_lineage: false
 3. Results are cached in `.docglow-column-lineage-cache.json` (keyed by SQL hash) so subsequent runs only analyze changed models
 4. The frontend renders column-level edges on the lineage graph with color-coded transformation labels
 
+## Source columns from sources.yml
+
+Column lineage extends into source tables when the source columns are visible to docglow. Columns become visible in either of two ways:
+
+- **From the catalog** (`catalog.json`, produced by `dbt docs generate`) — the warehouse-authoritative names and `data_type`s. Use this when you have warehouse access.
+- **From `sources.yml`** — columns declared in the manifest are honored even without running `dbt docs generate`. Useful for projects that don't grant the docs job warehouse credentials, or that want lineage in CI on a dry-parsed manifest.
+
+When both are present, the catalog wins on column ordering and `data_type`; descriptions, tags, meta, and tests come from `sources.yml`. Columns declared only in `sources.yml` are appended in declaration order. Tests defined on source columns (e.g. `not_null`, `unique`) also render on the source detail page.
+
+> **Cache note** — the column lineage cache is keyed on each model's compiled SQL hash, not on the source schema. If you add a column to `sources.yml` without changing any model SQL, the cache won't notice. Delete `.docglow-column-lineage-cache.json` (or change the model SQL) to force a recompute.
+
 ## Analyzing Specific Models
 
 For large projects (75+ models), a full column lineage analysis can take several minutes. Use `--column-lineage-select` to scope the analysis to a specific model and its dependencies:
