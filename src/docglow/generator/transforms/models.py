@@ -7,6 +7,12 @@ from typing import Any
 from docglow.artifacts.catalog import Catalog, CatalogColumnInfo
 from docglow.artifacts.manifest import ManifestNode
 from docglow.artifacts.run_results import RunResult
+from docglow.generator.transforms.lookups import (
+    build_column_tests,
+    normalize_test_status,
+)
+
+__all__ = ["transform_model", "normalize_test_status"]
 
 
 def transform_model(
@@ -138,7 +144,7 @@ def _merge_columns(
             seen.add(col_name.lower())
 
     # Build column tests map
-    column_tests = _build_column_tests(node.unique_id, test_nodes_by_model, run_results_by_id)
+    column_tests = build_column_tests(node.unique_id, test_nodes_by_model, run_results_by_id)
 
     columns: list[dict[str, Any]] = []
     for col_name in all_column_names:
@@ -158,46 +164,6 @@ def _merge_columns(
         )
 
     return columns
-
-
-def _build_column_tests(
-    model_id: str,
-    test_nodes_by_model: dict[str, list[ManifestNode]],
-    run_results_by_id: dict[str, RunResult],
-) -> dict[str, list[dict[str, Any]]]:
-    """Build a map of column_name -> list of test dicts."""
-    column_tests: dict[str, list[dict[str, Any]]] = {}
-
-    for test_node in test_nodes_by_model.get(model_id, []):
-        if not test_node.column_name:
-            continue
-
-        col_lower = test_node.column_name.lower()
-        test_type = ""
-        if test_node.test_metadata:
-            test_type = test_node.test_metadata.name
-
-        result = run_results_by_id.get(test_node.unique_id)
-        status = "not_run"
-        if result:
-            status = normalize_test_status(result.status)
-
-        test_entry = {
-            "test_name": test_node.name,
-            "test_type": test_type,
-            "status": status,
-            "config": {},
-        }
-
-        if test_node.test_metadata and test_type == "accepted_values":
-            kwargs = test_node.test_metadata.kwargs
-            test_entry["config"] = {"values": kwargs.get("values", [])}
-
-        if col_lower not in column_tests:
-            column_tests[col_lower] = []
-        column_tests[col_lower].append(test_entry)
-
-    return column_tests
 
 
 def _build_test_results(
@@ -238,18 +204,3 @@ def _build_test_results(
         )
 
     return results
-
-
-def normalize_test_status(status: str) -> str:
-    """Normalize dbt test status to our standard values."""
-    mapping = {
-        "success": "pass",
-        "pass": "pass",
-        "fail": "fail",
-        "failure": "fail",
-        "error": "error",
-        "warn": "warn",
-        "warning": "warn",
-        "skipped": "not_run",
-    }
-    return mapping.get(status.lower(), status)
