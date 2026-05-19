@@ -428,6 +428,22 @@ function LineageFlowInner({
     [folderData],
   )
 
+  // Sources are leaves in column lineage — they appear only as `source_model`
+  // on dependency entries, never as keys in columnLineageData. Build the
+  // reverse set so source nodes can show the column-expand UI too.
+  const upstreamColumnLineageIds = useMemo(() => {
+    const set = new Set<string>()
+    if (!columnLineageData) return set
+    for (const colMap of Object.values(columnLineageData)) {
+      for (const deps of Object.values(colMap)) {
+        for (const d of deps) {
+          if (d?.source_model) set.add(d.source_model)
+        }
+      }
+    }
+    return set
+  }, [columnLineageData])
+
   // Auto-expand column lists when the graph has few enough models.
   // Computed from raw nodes prop (before layout) to avoid circular dependency.
   const AUTO_EXPAND_THRESHOLD = 12
@@ -439,12 +455,12 @@ function LineageFlowInner({
 
     const ids = new Set<string>()
     for (const n of dataNodes) {
-      if (columnLineageData[n.id] != null) {
+      if (columnLineageData[n.id] != null || upstreamColumnLineageIds.has(n.id)) {
         ids.add(n.id)
       }
     }
     return ids
-  }, [nodes, folderNodeIds, columnLineageData])
+  }, [nodes, folderNodeIds, columnLineageData, upstreamColumnLineageIds])
 
   // Combined set of effectively expanded nodes for layout calculation
   const layoutExpandedIds = useMemo(() => {
@@ -559,7 +575,9 @@ function LineageFlowInner({
       }
 
       const nodeColumns = modelColumns?.[ln.id]
-      const hasColumnLineage = columnLineageData != null && columnLineageData[ln.id] != null
+      const hasColumnLineage =
+        columnLineageData != null &&
+        (columnLineageData[ln.id] != null || upstreamColumnLineageIds.has(ln.id))
       const nodeHighlightedCols = columnTrace?.highlightedColumns.get(ln.id)
       const inColumnTrace = nodeHighlightedCols != null && nodeHighlightedCols.size > 0
 
@@ -595,7 +613,7 @@ function LineageFlowInner({
     })
 
     return [...bandNodes, ...dataNodes]
-  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
+  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
 
   // Reset drag overrides when the layout recomputes (depth/filter changes)
   const layoutRef = useRef(layout)
@@ -631,7 +649,7 @@ function LineageFlowInner({
       const currentIsActive = (node.data as Record<string, unknown>)?.isActive
       const currentNoColumnData = (node.data as Record<string, unknown>)?.noColumnData
       const targetNoColumnData = !isFolder && columnTrace != null
-        && !(columnLineageData != null && columnLineageData[node.id] != null)
+        && !(columnLineageData != null && (columnLineageData[node.id] != null || upstreamColumnLineageIds.has(node.id)))
         && highlightedSet?.has(node.id)
 
       const styleChanged = currentOpacity !== targetOpacity
@@ -650,7 +668,7 @@ function LineageFlowInner({
         } : {}),
       }
     })
-  }, [rfNodes, dragOverrides, highlightedSet, pinnedIds, columnTrace, columnLineageData])
+  }, [rfNodes, dragOverrides, highlightedSet, pinnedIds, columnTrace, columnLineageData, upstreamColumnLineageIds])
 
   // Handle node drag changes
   const handleNodesChange = useCallback((changes: NodeChange[]) => {

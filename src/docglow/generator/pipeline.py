@@ -217,7 +217,13 @@ def stage_transform_sources(ctx: PipelineContext) -> None:
     catalog = ctx.artifacts.catalog
 
     for unique_id, source in manifest.sources.items():
-        ctx.sources[unique_id] = transform_source(source, catalog, ctx.artifacts.source_freshness)
+        ctx.sources[unique_id] = transform_source(
+            source,
+            catalog,
+            ctx.artifacts.source_freshness,
+            test_nodes_by_id=ctx.test_nodes_by_model,
+            run_results_by_id=ctx.run_results_by_id,
+        )
 
 
 def stage_transform_exposures_metrics(ctx: PipelineContext) -> None:
