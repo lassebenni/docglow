@@ -460,6 +460,22 @@ function LineageFlowInner({
     [nodes, edges, folderNodeIds, layoutExpandedIds, modelColumns],
   )
 
+  // Sources are leaves in column lineage — they appear only as `source_model`
+  // on dependency entries, never as keys in columnLineageData. Build the
+  // reverse set so source nodes can show the column-expand UI too.
+  const upstreamColumnLineageIds = useMemo(() => {
+    const set = new Set<string>()
+    if (!columnLineageData) return set
+    for (const colMap of Object.values(columnLineageData)) {
+      for (const deps of Object.values(colMap)) {
+        for (const d of deps) {
+          if (d?.source_model) set.add(d.source_model)
+        }
+      }
+    }
+    return set
+  }, [columnLineageData])
+
   // Highlighting — depth-capped chain for all pinned nodes
   const pinnedArray = useMemo(() => Array.from(pinnedIds ?? []), [pinnedIds])
 
@@ -559,7 +575,9 @@ function LineageFlowInner({
       }
 
       const nodeColumns = modelColumns?.[ln.id]
-      const hasColumnLineage = columnLineageData != null && columnLineageData[ln.id] != null
+      const hasColumnLineage =
+        columnLineageData != null &&
+        (columnLineageData[ln.id] != null || upstreamColumnLineageIds.has(ln.id))
       const nodeHighlightedCols = columnTrace?.highlightedColumns.get(ln.id)
       const inColumnTrace = nodeHighlightedCols != null && nodeHighlightedCols.size > 0
 
@@ -595,7 +613,7 @@ function LineageFlowInner({
     })
 
     return [...bandNodes, ...dataNodes]
-  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
+  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
 
   // Reset drag overrides when the layout recomputes (depth/filter changes)
   const layoutRef = useRef(layout)
