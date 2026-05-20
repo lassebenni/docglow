@@ -3,6 +3,8 @@ import { useSearchParams } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { useTagFilterStore } from '../stores/tagFilterStore'
 import { LineageFlow } from '../components/lineage/LineageFlow'
+import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
+import { getColumnLineageCandidateIds } from '../utils/columnLineageGraph'
 import { PinBar } from '../components/lineage/PinBar'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
 import { getUnionSubgraph } from '../utils/graph'
@@ -148,6 +150,11 @@ export function LineagePage() {
     if (!rawSubgraph) return null
     return applyFilters(rawSubgraph.nodes, rawSubgraph.edges, typeFilter, tagFilter, folderFilter, layerFilter)
   }, [rawSubgraph, typeFilter, tagFilter, folderFilter, layerFilter])
+
+  const columnLineageCandidateIds = useMemo(
+    () => (subgraph ? getColumnLineageCandidateIds(subgraph.nodes, data?.column_lineage) : []),
+    [subgraph, data?.column_lineage],
+  )
 
   const subgraphOptions = useMemo(() => {
     if (!rawSubgraph) return { tags: [], folders: [], types: RESOURCE_TYPES, layers: [] as string[] }
@@ -408,6 +415,9 @@ export function LineagePage() {
                 </div>
               </>
             )}
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
 
             <span className="text-xs text-[var(--text-muted)] ml-auto">
               {subgraph.nodes.length} nodes · {subgraph.edges.length} edges
