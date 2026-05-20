@@ -384,6 +384,14 @@ function LineageFlowInner({
   const autoExpandedNodeIds = useColumnHighlightStore(s => s.autoExpandedNodeIds)
   const manuallyCollapsedIds = useColumnHighlightStore(s => s.manuallyCollapsedIds)
   const clearColumnSelection = useColumnHighlightStore(s => s.clearSelection)
+  const resetExpandState = useColumnHighlightStore(s => s.resetExpandState)
+
+  // Make bulk expand/collapse state ephemeral per LineageFlow mount: when the
+  // user navigates between pages and back, expand state from prior views does
+  // not carry over (R8 / AE3).
+  useEffect(() => {
+    resetExpandState()
+  }, [resetExpandState])
 
   // Combined set of all effectively expanded nodes (manual + auto - collapsed)
   const effectiveExpandedIds = useMemo(() => {

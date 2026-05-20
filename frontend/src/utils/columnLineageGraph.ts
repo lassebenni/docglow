@@ -167,6 +167,33 @@ export function getColumnTraceResult(
  * Build a map of column_name -> downstream consumers for a specific model.
  * Used by ColumnTable to show which models consume each column.
  */
+/**
+ * Sorted unique_ids of nodes in `subgraphNodes` that have column lineage —
+ * either as a target in `columnLineage` or as a source referenced by another
+ * node (mirroring the upstream-set derivation in LineageFlow.tsx). Used by
+ * the bulk Expand-all / Collapse-all controls to enumerate candidates.
+ *
+ * Returns `[]` when `columnLineage` is null/undefined.
+ */
+export function getColumnLineageCandidateIds(
+  subgraphNodes: ReadonlyArray<{ id: string }>,
+  columnLineage: ColumnLineageData | null | undefined,
+): string[] {
+  if (!columnLineage) return []
+  const upstream = new Set<string>()
+  for (const colMap of Object.values(columnLineage)) {
+    for (const deps of Object.values(colMap)) {
+      for (const d of deps) {
+        if (d?.source_model) upstream.add(d.source_model)
+      }
+    }
+  }
+  return subgraphNodes
+    .filter(n => columnLineage[n.id] != null || upstream.has(n.id))
+    .map(n => n.id)
+    .sort()
+}
+
 export function buildDownstreamMap(
   modelId: string,
   columnLineage: ColumnLineageData,

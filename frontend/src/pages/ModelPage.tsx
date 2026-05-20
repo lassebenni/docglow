@@ -6,6 +6,7 @@ import { ColumnTable } from '../components/models/ColumnTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
+import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
 import type { FilterState } from '../components/ui/FilterDropdown'
@@ -15,7 +16,7 @@ import { formatFqn } from '../utils/formatting'
 import { getSubgraph, type LineageDirection } from '../utils/graph'
 import { applyFilters, useFilterState, computeSubgraphOptions } from '../utils/lineageFilters'
 import { buildModelColumnsMap } from '../utils/modelColumns'
-import { buildDownstreamMap } from '../utils/columnLineageGraph'
+import { buildDownstreamMap, getColumnLineageCandidateIds } from '../utils/columnLineageGraph'
 import { getModelErdSubgraph } from '../utils/erdSubgraph'
 import type { DocglowModel } from '../types'
 
@@ -163,6 +164,11 @@ export function ModelPage() {
   const filteredSubgraph = useMemo(() => {
     return applyFilters(rawSubgraph.nodes, rawSubgraph.edges, typeFilter, tagFilter, folderFilter)
   }, [rawSubgraph, typeFilter, tagFilter, folderFilter])
+
+  const columnLineageCandidateIds = useMemo(
+    () => getColumnLineageCandidateIds(filteredSubgraph.nodes, data?.column_lineage),
+    [filteredSubgraph, data?.column_lineage],
+  )
 
   const subgraphOptions = useMemo(() => {
     return computeSubgraphOptions(rawSubgraph.nodes)
@@ -421,6 +427,9 @@ export function ModelPage() {
                 Clear filters
               </button>
             )}
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
 
             <span className="text-xs text-[var(--text-muted)] ml-auto">
               {filteredSubgraph.nodes.length} nodes · {filteredSubgraph.edges.length} edges
