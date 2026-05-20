@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_EXPAND_ALL_CAP,
+  OVER_CAP_DETAIL_TEXT,
   collapseTooltip,
   expandTooltip,
-  formatOverCapMessage,
+  formatOverCapHeadline,
   shouldDisableCollapseAll,
   shouldDisableExpandAll,
 } from '../components/lineage/ColumnExpandControls'
@@ -58,16 +59,20 @@ describe('collapseTooltip', () => {
   })
 })
 
-describe('formatOverCapMessage', () => {
-  it('renders the exact over-cap text format (covers AE1)', () => {
-    expect(formatOverCapMessage(50, 180)).toBe(
-      'Expanded 50 of 180 — narrow the graph with filters or pinning to see more.',
-    )
+describe('formatOverCapHeadline', () => {
+  it('renders the headline format (covers AE1)', () => {
+    expect(formatOverCapHeadline(50, 180)).toBe('Expanded 50 of 180')
   })
 
-  it('renders correctly with the default cap value', () => {
-    expect(formatOverCapMessage(DEFAULT_EXPAND_ALL_CAP, 100)).toBe(
-      'Expanded 50 of 100 — narrow the graph with filters or pinning to see more.',
+  it('renders with the default cap value', () => {
+    expect(formatOverCapHeadline(DEFAULT_EXPAND_ALL_CAP, 100)).toBe('Expanded 50 of 100')
+  })
+})
+
+describe('OVER_CAP_DETAIL_TEXT', () => {
+  it('is the static guidance line shown below the headline', () => {
+    expect(OVER_CAP_DETAIL_TEXT).toBe(
+      'Narrow the graph with filters or pinning to see more.',
     )
   })
 })

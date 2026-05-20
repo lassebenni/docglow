@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 
 export const DEFAULT_EXPAND_ALL_CAP = 50
-export const OVER_CAP_TOAST_DURATION_MS = 6000
+export const OVER_CAP_DETAIL_TEXT = 'Narrow the graph with filters or pinning to see more.'
 
 /**
  * Pure helpers — exported for direct unit testing.
@@ -29,8 +29,8 @@ export function shouldDisableCollapseAll(candidateCount: number): boolean {
   return candidateCount === 0
 }
 
-export function formatOverCapMessage(expanded: number, total: number): string {
-  return `Expanded ${expanded} of ${total} — narrow the graph with filters or pinning to see more.`
+export function formatOverCapHeadline(expanded: number, total: number): string {
+  return `Expanded ${expanded} of ${total}`
 }
 
 interface ColumnExpandControlsProps {
@@ -46,49 +46,23 @@ export function ColumnExpandControls({
   const collapseAll = useColumnHighlightStore(s => s.collapseAll)
 
   const [overCap, setOverCap] = useState<{ expanded: number; total: number } | null>(null)
-  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const expandDisabled = shouldDisableExpandAll(candidateIds.length)
   const collapseDisabled = shouldDisableCollapseAll(candidateIds.length)
 
-  const dismissToast = useCallback(() => {
-    if (dismissTimerRef.current) {
-      clearTimeout(dismissTimerRef.current)
-      dismissTimerRef.current = null
-    }
-    setOverCap(null)
-  }, [])
-
-  const showToast = useCallback((result: { expanded: number; total: number }) => {
-    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
-    setOverCap(result)
-    dismissTimerRef.current = setTimeout(() => {
-      setOverCap(null)
-      dismissTimerRef.current = null
-    }, OVER_CAP_TOAST_DURATION_MS)
-  }, [])
-
-  // Clear any pending timer if the component unmounts so we do not setState
-  // on a dead component.
-  useEffect(() => {
-    return () => {
-      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
-    }
-  }, [])
-
   const handleExpand = useCallback(() => {
     const result = expandAll(candidateIds, cap)
-    if (result.total > cap) {
-      showToast(result)
-    } else {
-      dismissToast()
-    }
-  }, [expandAll, candidateIds, cap, showToast, dismissToast])
+    setOverCap(result.total > cap ? result : null)
+  }, [expandAll, candidateIds, cap])
 
   const handleCollapse = useCallback(() => {
     collapseAll(candidateIds)
-    dismissToast()
-  }, [collapseAll, candidateIds, dismissToast])
+    setOverCap(null)
+  }, [collapseAll, candidateIds])
+
+  const dismissToast = useCallback(() => {
+    setOverCap(null)
+  }, [])
 
   const buttonClasses = (disabled: boolean) =>
     `px-2 py-0.5 text-xs cursor-pointer transition-colors rounded border border-[var(--border)] ${
@@ -125,12 +99,42 @@ export function ColumnExpandControls({
         <div
           role="status"
           aria-atomic="true"
-          // Fixed-position toast pinned to the bottom-center of the viewport so
-          // the long over-cap message does not wrap the toolbar. Auto-dismisses
-          // after OVER_CAP_TOAST_DURATION_MS or on the next bulk action.
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-md text-xs shadow-lg bg-[var(--bg-surface)] text-[var(--text)] border border-[var(--border)] max-w-[90vw]"
+          // Fixed-position toast pinned to the bottom-center of the viewport.
+          // Dismissed by the close button or by the next bulk action click.
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 pl-4 pr-2 py-3 rounded-lg shadow-xl bg-[var(--bg-surface)] text-[var(--text)] border border-[var(--border)] max-w-[90vw]"
         >
-          {formatOverCapMessage(overCap.expanded, overCap.total)}
+          <svg
+            width={20}
+            height={20}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="text-primary shrink-0"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="10" />
+            <line x1="12" y1="16" x2="12" y2="12" />
+            <line x1="12" y1="8" x2="12.01" y2="8" />
+          </svg>
+          <div className="flex flex-col">
+            <span className="text-sm font-medium leading-tight">
+              {formatOverCapHeadline(overCap.expanded, overCap.total)}
+            </span>
+            <span className="text-xs text-[var(--text-muted)] leading-tight mt-0.5">
+              {OVER_CAP_DETAIL_TEXT}
+            </span>
+          </div>
+          <button
+            type="button"
+            aria-label="Dismiss notification"
+            onClick={dismissToast}
+            className="ml-2 px-2.5 py-1 rounded text-xs text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg)] cursor-pointer transition-colors"
+          >
+            Dismiss
+          </button>
         </div>
       )}
     </>
