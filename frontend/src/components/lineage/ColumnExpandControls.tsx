@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 
 export const DEFAULT_EXPAND_ALL_CAP = 50
+export const OVER_CAP_TOAST_DURATION_MS = 6000
 
 /**
  * Pure helpers — exported for direct unit testing.
@@ -45,23 +46,49 @@ export function ColumnExpandControls({
   const collapseAll = useColumnHighlightStore(s => s.collapseAll)
 
   const [overCap, setOverCap] = useState<{ expanded: number; total: number } | null>(null)
+  const dismissTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const expandDisabled = shouldDisableExpandAll(candidateIds.length)
   const collapseDisabled = shouldDisableCollapseAll(candidateIds.length)
 
+  const dismissToast = useCallback(() => {
+    if (dismissTimerRef.current) {
+      clearTimeout(dismissTimerRef.current)
+      dismissTimerRef.current = null
+    }
+    setOverCap(null)
+  }, [])
+
+  const showToast = useCallback((result: { expanded: number; total: number }) => {
+    if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
+    setOverCap(result)
+    dismissTimerRef.current = setTimeout(() => {
+      setOverCap(null)
+      dismissTimerRef.current = null
+    }, OVER_CAP_TOAST_DURATION_MS)
+  }, [])
+
+  // Clear any pending timer if the component unmounts so we do not setState
+  // on a dead component.
+  useEffect(() => {
+    return () => {
+      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
+    }
+  }, [])
+
   const handleExpand = useCallback(() => {
     const result = expandAll(candidateIds, cap)
     if (result.total > cap) {
-      setOverCap(result)
+      showToast(result)
     } else {
-      setOverCap(null)
+      dismissToast()
     }
-  }, [expandAll, candidateIds, cap])
+  }, [expandAll, candidateIds, cap, showToast, dismissToast])
 
   const handleCollapse = useCallback(() => {
     collapseAll(candidateIds)
-    setOverCap(null)
-  }, [collapseAll, candidateIds])
+    dismissToast()
+  }, [collapseAll, candidateIds, dismissToast])
 
   const buttonClasses = (disabled: boolean) =>
     `px-2 py-0.5 text-xs cursor-pointer transition-colors rounded border border-[var(--border)] ${
@@ -71,36 +98,41 @@ export function ColumnExpandControls({
     }`
 
   return (
-    <div className="flex items-center gap-2">
-      <button
-        type="button"
-        aria-label="Expand columns on all nodes"
-        title={expandTooltip(candidateIds.length)}
-        disabled={expandDisabled}
-        onClick={handleExpand}
-        className={buttonClasses(expandDisabled)}
-      >
-        Expand all
-      </button>
-      <button
-        type="button"
-        aria-label="Collapse columns on all nodes"
-        title={collapseTooltip(candidateIds.length)}
-        disabled={collapseDisabled}
-        onClick={handleCollapse}
-        className={buttonClasses(collapseDisabled)}
-      >
-        Collapse all
-      </button>
+    <>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          aria-label="Expand columns on all nodes"
+          title={expandTooltip(candidateIds.length)}
+          disabled={expandDisabled}
+          onClick={handleExpand}
+          className={buttonClasses(expandDisabled)}
+        >
+          Expand all
+        </button>
+        <button
+          type="button"
+          aria-label="Collapse columns on all nodes"
+          title={collapseTooltip(candidateIds.length)}
+          disabled={collapseDisabled}
+          onClick={handleCollapse}
+          className={buttonClasses(collapseDisabled)}
+        >
+          Collapse all
+        </button>
+      </div>
       {overCap && (
-        <span
+        <div
           role="status"
           aria-atomic="true"
-          className="text-xs text-[var(--text-muted)]"
+          // Fixed-position toast pinned to the bottom-center of the viewport so
+          // the long over-cap message does not wrap the toolbar. Auto-dismisses
+          // after OVER_CAP_TOAST_DURATION_MS or on the next bulk action.
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-3 py-2 rounded-md text-xs shadow-lg bg-[var(--bg-surface)] text-[var(--text)] border border-[var(--border)] max-w-[90vw]"
         >
           {formatOverCapMessage(overCap.expanded, overCap.total)}
-        </span>
+        </div>
       )}
-    </div>
+    </>
   )
 }
