@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-20
+
+### Added
+- **Expand all / Collapse all controls for column lineage** — new toolbar buttons on both `/lineage` and the model page Lineage tab let users bulk-toggle column visibility across the whole graph in one click instead of clicking each node's chevron. Expand all is soft-capped at 50 nodes; over-cap views surface a dismissible bottom-center toast announcing how many were expanded and how to narrow further. State is ephemeral — resets on page navigation. (#102, #109)
+
 ## [0.8.2] - 2026-05-19
 
 ### Added
