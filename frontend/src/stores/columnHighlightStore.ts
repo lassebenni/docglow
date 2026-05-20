@@ -15,6 +15,8 @@ interface ColumnHighlightState {
   toggleNodeExpanded: (nodeId: string) => void
   setAutoExpandedNodes: (nodeIds: Set<string>) => void
   isNodeExpanded: (nodeId: string) => boolean
+  expandAll: (candidateIds: string[], cap: number) => { expanded: number; total: number }
+  collapseAll: () => void
 }
 
 export const useColumnHighlightStore = create<ColumnHighlightState>((set, get) => ({
@@ -82,5 +84,25 @@ export const useColumnHighlightStore = create<ColumnHighlightState>((set, get) =
     if (expandedNodeIds.has(nodeId)) return true
     if (autoExpandedNodeIds.has(nodeId) && !manuallyCollapsedIds.has(nodeId)) return true
     return false
+  },
+
+  expandAll: (candidateIds, cap) => {
+    const total = candidateIds.length
+    const sliceSize = Math.max(0, Math.min(cap, total))
+    const sliced = [...candidateIds].sort().slice(0, sliceSize)
+    set({
+      expandedNodeIds: new Set(sliced),
+      autoExpandedNodeIds: new Set(),
+      manuallyCollapsedIds: new Set(),
+    })
+    return { expanded: sliceSize, total }
+  },
+
+  collapseAll: () => {
+    set({
+      expandedNodeIds: new Set(),
+      autoExpandedNodeIds: new Set(),
+      manuallyCollapsedIds: new Set(),
+    })
   },
 }))
