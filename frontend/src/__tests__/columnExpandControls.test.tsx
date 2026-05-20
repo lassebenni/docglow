@@ -25,17 +25,16 @@ describe('shouldDisableExpandAll', () => {
 })
 
 describe('shouldDisableCollapseAll', () => {
-  it('disables when both expanded and auto-expanded sets are empty', () => {
-    expect(shouldDisableCollapseAll(0, 0)).toBe(true)
+  it('disables when there are no candidates', () => {
+    expect(shouldDisableCollapseAll(0)).toBe(true)
   })
 
-  it('enables when something is manually expanded', () => {
-    expect(shouldDisableCollapseAll(3, 0)).toBe(false)
-  })
-
-  it('enables when something is auto-expanded (covers AE2)', () => {
-    // 10-node graph that auto-expanded all → user must be able to collapse them
-    expect(shouldDisableCollapseAll(0, 10)).toBe(false)
+  it('enables when at least one candidate exists (covers AE2)', () => {
+    // The local auto-expand memo in LineageFlow may have rendered columns even
+    // when no store-tracked expansion has happened, so Collapse all must remain
+    // available whenever candidates exist.
+    expect(shouldDisableCollapseAll(10)).toBe(false)
+    expect(shouldDisableCollapseAll(1)).toBe(false)
   })
 })
 
@@ -50,13 +49,12 @@ describe('expandTooltip', () => {
 })
 
 describe('collapseTooltip', () => {
-  it('returns the nothing-to-collapse tooltip when nothing is expanded', () => {
-    expect(collapseTooltip(0, 0)).toBe('Nothing to collapse')
+  it('returns the nothing-to-collapse tooltip when there are no candidates', () => {
+    expect(collapseTooltip(0)).toBe('Nothing to collapse')
   })
 
-  it('returns undefined when at least one node is expanded', () => {
-    expect(collapseTooltip(1, 0)).toBeUndefined()
-    expect(collapseTooltip(0, 1)).toBeUndefined()
+  it('returns undefined when candidates exist (no tooltip needed)', () => {
+    expect(collapseTooltip(5)).toBeUndefined()
   })
 })
 

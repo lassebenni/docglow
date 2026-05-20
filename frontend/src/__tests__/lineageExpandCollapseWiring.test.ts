@@ -28,7 +28,7 @@ describe('getColumnLineageCandidateIds', () => {
     const columnLineage: ColumnLineageData = {
       'model.foo.stg_orders': {
         order_id: [
-          { source_model: 'source.foo.raw.orders', source_column: 'id' },
+          { source_model: 'source.foo.raw.orders', source_column: 'id', transformation: 'direct' },
         ],
       },
     }
@@ -76,7 +76,7 @@ describe('getColumnLineageCandidateIds', () => {
   it('omits nodes that have no column lineage and are not source references', () => {
     const columnLineage: ColumnLineageData = {
       'model.foo.a': {
-        c: [{ source_model: 'source.foo.raw.x', source_column: 'id' }],
+        c: [{ source_model: 'source.foo.raw.x', source_column: 'id', transformation: 'direct' }],
       },
     }
     const nodes = [

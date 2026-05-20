@@ -12,16 +12,20 @@ export function expandTooltip(candidateCount: number): string | undefined {
   return candidateCount === 0 ? 'No column lineage data in this graph' : undefined
 }
 
-export function collapseTooltip(expandedSize: number, autoExpandedSize: number): string | undefined {
-  return expandedSize === 0 && autoExpandedSize === 0 ? 'Nothing to collapse' : undefined
+export function collapseTooltip(candidateCount: number): string | undefined {
+  return candidateCount === 0 ? 'Nothing to collapse' : undefined
 }
 
 export function shouldDisableExpandAll(candidateCount: number): boolean {
   return candidateCount === 0
 }
 
-export function shouldDisableCollapseAll(expandedSize: number, autoExpandedSize: number): boolean {
-  return expandedSize === 0 && autoExpandedSize === 0
+// Collapse-all is enabled whenever there are candidates that could be expanded
+// (manually or by the local auto-expand memo in LineageFlow). The store cannot
+// know whether the memo is currently auto-expanding nodes, so we use the
+// candidate count as the proxy. Clicking on an already-empty view is a no-op.
+export function shouldDisableCollapseAll(candidateCount: number): boolean {
+  return candidateCount === 0
 }
 
 export function formatOverCapMessage(expanded: number, total: number): string {
@@ -37,15 +41,13 @@ export function ColumnExpandControls({
   candidateIds,
   cap = DEFAULT_EXPAND_ALL_CAP,
 }: ColumnExpandControlsProps) {
-  const expandedNodeIds = useColumnHighlightStore(s => s.expandedNodeIds)
-  const autoExpandedNodeIds = useColumnHighlightStore(s => s.autoExpandedNodeIds)
   const expandAll = useColumnHighlightStore(s => s.expandAll)
   const collapseAll = useColumnHighlightStore(s => s.collapseAll)
 
   const [overCap, setOverCap] = useState<{ expanded: number; total: number } | null>(null)
 
   const expandDisabled = shouldDisableExpandAll(candidateIds.length)
-  const collapseDisabled = shouldDisableCollapseAll(expandedNodeIds.size, autoExpandedNodeIds.size)
+  const collapseDisabled = shouldDisableCollapseAll(candidateIds.length)
 
   const handleExpand = useCallback(() => {
     const result = expandAll(candidateIds, cap)
@@ -57,9 +59,9 @@ export function ColumnExpandControls({
   }, [expandAll, candidateIds, cap])
 
   const handleCollapse = useCallback(() => {
-    collapseAll()
+    collapseAll(candidateIds)
     setOverCap(null)
-  }, [collapseAll])
+  }, [collapseAll, candidateIds])
 
   const buttonClasses = (disabled: boolean) =>
     `px-2 py-0.5 text-xs cursor-pointer transition-colors rounded border border-[var(--border)] ${
@@ -83,7 +85,7 @@ export function ColumnExpandControls({
       <button
         type="button"
         aria-label="Collapse columns on all nodes"
-        title={collapseTooltip(expandedNodeIds.size, autoExpandedNodeIds.size)}
+        title={collapseTooltip(candidateIds.length)}
         disabled={collapseDisabled}
         onClick={handleCollapse}
         className={buttonClasses(collapseDisabled)}

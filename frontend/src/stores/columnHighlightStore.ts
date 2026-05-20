@@ -16,7 +16,8 @@ interface ColumnHighlightState {
   setAutoExpandedNodes: (nodeIds: Set<string>) => void
   isNodeExpanded: (nodeId: string) => boolean
   expandAll: (candidateIds: string[], cap: number) => { expanded: number; total: number }
-  collapseAll: () => void
+  collapseAll: (candidateIds: string[]) => void
+  resetExpandState: () => void
 }
 
 export const useColumnHighlightStore = create<ColumnHighlightState>((set, get) => ({
@@ -86,19 +87,39 @@ export const useColumnHighlightStore = create<ColumnHighlightState>((set, get) =
     return false
   },
 
+  // Expand the first `cap` candidates by sorted unique_id. Any candidates beyond
+  // the cap go into manuallyCollapsedIds so the local auto-expand memo in
+  // LineageFlow does not still display their columns. Returns the actual counts
+  // so the UI can render the over-cap message.
   expandAll: (candidateIds, cap) => {
     const total = candidateIds.length
     const sliceSize = Math.max(0, Math.min(cap, total))
-    const sliced = [...candidateIds].sort().slice(0, sliceSize)
+    const sorted = [...candidateIds].sort()
+    const expanded = sorted.slice(0, sliceSize)
+    const suppressed = sorted.slice(sliceSize)
     set({
-      expandedNodeIds: new Set(sliced),
+      expandedNodeIds: new Set(expanded),
       autoExpandedNodeIds: new Set(),
-      manuallyCollapsedIds: new Set(),
+      manuallyCollapsedIds: new Set(suppressed),
     })
     return { expanded: sliceSize, total }
   },
 
-  collapseAll: () => {
+  // Hide every candidate's columns, including any auto-expanded by the local
+  // memo in LineageFlow. Populating manuallyCollapsedIds with the full
+  // candidate set is the override mechanism that defeats auto-expand.
+  collapseAll: (candidateIds) => {
+    set({
+      expandedNodeIds: new Set(),
+      autoExpandedNodeIds: new Set(),
+      manuallyCollapsedIds: new Set(candidateIds),
+    })
+  },
+
+  // Wipes all expand-related state. Called on LineageFlow mount so per-page
+  // expand/collapse is ephemeral — returning to a page restarts auto-expand
+  // fresh rather than carrying stale ids from a previous view.
+  resetExpandState: () => {
     set({
       expandedNodeIds: new Set(),
       autoExpandedNodeIds: new Set(),

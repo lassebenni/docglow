@@ -40,7 +40,13 @@ describe('columnHighlightStore', () => {
       const result = useColumnHighlightStore.getState().expandAll(ids, 50)
 
       expect(result).toEqual({ expanded: 50, total: 60 })
-      expect(useColumnHighlightStore.getState().expandedNodeIds.size).toBe(50)
+      const state = useColumnHighlightStore.getState()
+      expect(state.expandedNodeIds.size).toBe(50)
+      // The 10 candidates beyond the cap go into manuallyCollapsedIds so the
+      // local auto-expand memo in LineageFlow does not still show their columns.
+      expect(state.manuallyCollapsedIds.size).toBe(10)
+      expect(state.manuallyCollapsedIds.has('n050')).toBe(true)
+      expect(state.manuallyCollapsedIds.has('n059')).toBe(true)
     })
 
     it('handles an empty candidate list without throwing', () => {
@@ -57,7 +63,7 @@ describe('columnHighlightStore', () => {
       expect(useColumnHighlightStore.getState().expandedNodeIds.size).toBe(0)
     })
 
-    it('clears autoExpandedNodeIds and manuallyCollapsedIds to guarantee a clean post-state', () => {
+    it('clears autoExpandedNodeIds and resets manuallyCollapsedIds when nothing is over-cap', () => {
       useColumnHighlightStore.setState({
         autoExpandedNodeIds: new Set(['x', 'y']),
         manuallyCollapsedIds: new Set(['y']),
@@ -67,7 +73,7 @@ describe('columnHighlightStore', () => {
 
       const state = useColumnHighlightStore.getState()
       expect(state.autoExpandedNodeIds.size).toBe(0)
-      expect(state.manuallyCollapsedIds.size).toBe(0)
+      expect(state.manuallyCollapsedIds.size).toBe(0) // no over-cap remainder → empty
       expect(state.expandedNodeIds.size).toBe(1)
       expect(state.expandedNodeIds.has('a')).toBe(true)
     })
@@ -87,23 +93,28 @@ describe('columnHighlightStore', () => {
   })
 
   describe('collapseAll', () => {
-    it('clears all three expansion sets (covers AE2)', () => {
+    it('marks every candidate as manually collapsed to override auto-expand (covers AE2)', () => {
       useColumnHighlightStore.setState({
-        autoExpandedNodeIds: new Set(['a', 'b', 'c', 'd', 'e']),
-        expandedNodeIds: new Set(['f', 'g', 'h']),
+        autoExpandedNodeIds: new Set(['a', 'b', 'c']),
+        expandedNodeIds: new Set(['f', 'g']),
         manuallyCollapsedIds: new Set(['a']),
       })
 
-      useColumnHighlightStore.getState().collapseAll()
+      useColumnHighlightStore.getState().collapseAll(['a', 'b', 'c', 'd', 'e'])
 
       const state = useColumnHighlightStore.getState()
       expect(state.expandedNodeIds.size).toBe(0)
       expect(state.autoExpandedNodeIds.size).toBe(0)
-      expect(state.manuallyCollapsedIds.size).toBe(0)
+      expect([...state.manuallyCollapsedIds].sort()).toEqual(['a', 'b', 'c', 'd', 'e'])
     })
 
-    it('is a no-op when all three sets are already empty', () => {
-      useColumnHighlightStore.getState().collapseAll()
+    it('clears expanded and auto sets even when candidate list is empty', () => {
+      useColumnHighlightStore.setState({
+        expandedNodeIds: new Set(['x']),
+        autoExpandedNodeIds: new Set(['y']),
+      })
+
+      useColumnHighlightStore.getState().collapseAll([])
 
       const state = useColumnHighlightStore.getState()
       expect(state.expandedNodeIds.size).toBe(0)
@@ -117,7 +128,50 @@ describe('columnHighlightStore', () => {
         expandedNodeIds: new Set(['x']),
       })
 
-      useColumnHighlightStore.getState().collapseAll()
+      useColumnHighlightStore.getState().collapseAll(['x'])
+
+      expect(useColumnHighlightStore.getState().selectedColumn).toEqual({
+        modelId: 'model.x.y',
+        columnName: 'id',
+      })
+    })
+  })
+
+  describe('resetExpandState', () => {
+    it('clears expandedNodeIds populated by expandAll (covers AE3)', () => {
+      useColumnHighlightStore.getState().expandAll(['a', 'b', 'c'], 50)
+      expect(useColumnHighlightStore.getState().expandedNodeIds.size).toBe(3)
+
+      useColumnHighlightStore.getState().resetExpandState()
+
+      const state = useColumnHighlightStore.getState()
+      expect(state.expandedNodeIds.size).toBe(0)
+      expect(state.autoExpandedNodeIds.size).toBe(0)
+      expect(state.manuallyCollapsedIds.size).toBe(0)
+    })
+
+    it('clears all three expansion sets regardless of source', () => {
+      useColumnHighlightStore.setState({
+        expandedNodeIds: new Set(['a']),
+        autoExpandedNodeIds: new Set(['b']),
+        manuallyCollapsedIds: new Set(['c']),
+      })
+
+      useColumnHighlightStore.getState().resetExpandState()
+
+      const state = useColumnHighlightStore.getState()
+      expect(state.expandedNodeIds.size).toBe(0)
+      expect(state.autoExpandedNodeIds.size).toBe(0)
+      expect(state.manuallyCollapsedIds.size).toBe(0)
+    })
+
+    it('does not touch selectedColumn', () => {
+      useColumnHighlightStore.setState({
+        selectedColumn: { modelId: 'model.x.y', columnName: 'id' },
+        expandedNodeIds: new Set(['a']),
+      })
+
+      useColumnHighlightStore.getState().resetExpandState()
 
       expect(useColumnHighlightStore.getState().selectedColumn).toEqual({
         modelId: 'model.x.y',
@@ -133,7 +187,7 @@ describe('columnHighlightStore', () => {
         expandedNodeIds: new Set(['y']),
       })
 
-      useColumnHighlightStore.getState().collapseAll()
+      useColumnHighlightStore.getState().collapseAll(['x', 'y'])
       useColumnHighlightStore.getState().expandAll(['a', 'b'], 50)
 
       const state = useColumnHighlightStore.getState()
