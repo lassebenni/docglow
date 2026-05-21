@@ -1,1 +1,1 @@
-"""Cloud integration for docglow.dev hosted service."""
+"""Cloud integration for docglow.com hosted service."""
