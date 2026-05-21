@@ -6,7 +6,7 @@ import click
 @click.command()
 @click.option("--token", type=str, default=None, help="API token for non-interactive auth")
 def login(token: str | None) -> None:
-    """Authenticate with docglow.dev."""
+    """Authenticate with docglow.com."""
     from docglow.cli import console
     from docglow.cloud.auth import store_token
 
@@ -17,12 +17,12 @@ def login(token: str | None) -> None:
 
     console.print("Interactive browser login is not yet available.")
     console.print("Use [bold]docglow login --token YOUR_TOKEN[/bold] instead.")
-    console.print("Get your token at [bold]https://app.docglow.dev/settings/tokens[/bold]")
+    console.print("Get your token at [bold]https://app.docglow.com/settings/tokens[/bold]")
 
 
 @click.command()
 def logout() -> None:
-    """Remove stored docglow.dev credentials."""
+    """Remove stored docglow.com credentials."""
     from docglow.cli import console
     from docglow.cloud.auth import clear_token
 
@@ -32,8 +32,14 @@ def logout() -> None:
 
 @click.command()
 @click.option("--token", envvar="DOCGLOW_TOKEN", default=None)
+@click.option(
+    "--api-url",
+    default=None,
+    help="Override the API base URL (e.g. https://app-staging.docglow.com). "
+    "Takes precedence over DOCGLOW_API_URL and ~/.docglow/config.json.",
+)
 @click.option("--verbose", is_flag=True)
-def status(token: str | None, verbose: bool) -> None:
+def status(token: str | None, api_url: str | None, verbose: bool) -> None:
     """Check docglow Cloud publish status and site health."""
     from docglow.cli import _setup_logging, console
 
@@ -49,11 +55,13 @@ def status(token: str | None, verbose: bool) -> None:
         )
         raise SystemExit(1)
 
+    from dataclasses import replace
+
     config = load_cloud_config()
     if token:
-        from dataclasses import replace
-
         config = replace(config, token=token)
+    if api_url:
+        config = replace(config, api_base_url=api_url)
 
     if not config.token:
         console.print(

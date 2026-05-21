@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 CONFIG_DIR = Path.home() / ".docglow"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
-DEFAULT_API_URL = "https://api.docglow.dev"
+DEFAULT_API_URL = "https://app.docglow.com"
 
 
 @dataclass(frozen=True)

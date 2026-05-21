@@ -14,16 +14,23 @@ import click
 )
 @click.option("--project-dir", type=click.Path(exists=True, path_type=Path), default=".")
 @click.option("--target-dir", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--api-url",
+    default=None,
+    help="Override the API base URL (e.g. https://app-staging.docglow.com). "
+    "Takes precedence over DOCGLOW_API_URL and ~/.docglow/config.json.",
+)
 @click.option("--no-wait", is_flag=True, help="Don't wait for processing to complete")
 @click.option("--verbose", is_flag=True)
 def publish(
     token: str | None,
     project_dir: Path,
     target_dir: Path | None,
+    api_url: str | None,
     no_wait: bool,
     verbose: bool,
 ) -> None:
-    """Publish documentation to docglow.dev."""
+    """Publish documentation to docglow.com."""
     from docglow.cli import _setup_logging, console
 
     _setup_logging(verbose)
@@ -38,11 +45,13 @@ def publish(
         )
         raise SystemExit(1)
 
+    from dataclasses import replace
+
     config = load_cloud_config()
     if token:
-        from dataclasses import replace
-
         config = replace(config, token=token)
+    if api_url:
+        config = replace(config, api_base_url=api_url)
 
     if not config.token:
         console.print(

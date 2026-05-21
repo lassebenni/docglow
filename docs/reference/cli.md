@@ -127,12 +127,21 @@ docglow publish [OPTIONS]
 | `--token` | `DOCGLOW_TOKEN` env var | API token |
 | `--project-dir` | `.` | Path to the dbt project root |
 | `--target-dir` | `target/` | Path to the dbt target directory |
+| `--api-url` | `https://app.docglow.com` | Override the API base URL. Falls back to `DOCGLOW_API_URL` env var, then `~/.docglow/config.json`. |
 | `--no-wait` | off | Don't wait for processing to complete |
 | `--verbose` | off | Enable debug logging |
 
+To target a non-production environment (e.g. staging):
+
+```bash
+docglow publish --api-url https://app-staging.docglow.com
+# or
+DOCGLOW_API_URL=https://app-staging.docglow.com docglow publish
+```
+
 ### `docglow login`
 
-Authenticate with Docglow Cloud.
+Authenticate with Docglow Cloud. Get your API token at [https://app.docglow.com/settings/tokens](https://app.docglow.com/settings/tokens).
 
 ```bash
 docglow login [--token YOUR_TOKEN]
