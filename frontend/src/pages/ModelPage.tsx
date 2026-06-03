@@ -112,7 +112,7 @@ function DependencyList({
   )
 }
 
-type Tab = 'columns' | 'sql' | 'lineage' | 'erd' | 'tests'
+type Tab = 'columns' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
 
 export function ModelPage() {
   const { id } = useParams<{ id: string }>()
@@ -213,9 +213,11 @@ export function ModelPage() {
     )
   }
 
+  const hasSampleData = Boolean(model.sample_data_md)
   const tabs: { key: Tab; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'sql', label: 'SQL' },
+    ...(hasSampleData ? [{ key: 'data' as const, label: 'Data' }] : []),
     { key: 'lineage', label: 'Lineage' },
     ...(erdEnabled ? [{ key: 'erd' as const, label: 'ERD' }] : []),
     { key: 'tests', label: `Tests (${model.test_results.length})` },
@@ -329,6 +331,12 @@ export function ModelPage() {
             </button>
           </div>
           <SqlViewer sql={sqlMode === 'compiled' ? model.compiled_sql : model.raw_sql} />
+        </div>
+      )}
+
+      {activeTab === 'data' && hasSampleData && (
+        <div data-testid="model-data-tab">
+          <Markdown content={model.sample_data_md ?? ''} className="text-sm" />
         </div>
       )}
 

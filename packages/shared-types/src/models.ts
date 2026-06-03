@@ -128,6 +128,12 @@ export interface DocglowModel {
    * when ERD inference is disabled.
    */
   readonly relationships_summary?: RelationshipSummary[];
+  /**
+   * Pre-rendered Markdown showing a small sample of warehouse rows for this
+   * model. Attached at site-generation time when `--sample-data-dir` points
+   * at a `<model_name>.md` file. Omitted entirely when no file exists.
+   */
+  readonly sample_data_md?: string;
 }
 
 // -- Sources -----------------------------------------------------------------

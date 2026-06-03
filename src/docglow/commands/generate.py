@@ -90,6 +90,14 @@ from docglow.cloud_hint import maybe_show_hint
     default=False,
     help="Render the ERD view at /erd. Also settable via enable_erd: true in docglow.yml.",
 )
+@click.option(
+    "--sample-data-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory of <model_name>.md sample-data files. Each matching file is "
+    "attached to its model and rendered in a 'Data' tab in the UI. The site stays "
+    "fully static — generate the markdown out-of-band (e.g. dbt + psql + tabulate).",
+)
 def generate(
     project_dir: Path,
     target_dir: Path | None,
@@ -116,6 +124,7 @@ def generate(
     verbose: bool,
     fail_under: float | None,
     enable_erd: bool,
+    sample_data_dir: Path | None,
 ) -> None:
     """Generate the documentation site."""
     from docglow.cli import _parse_connection, _setup_logging, console
@@ -220,6 +229,7 @@ def generate(
                 head_script=head_script.read_text(encoding="utf-8") if head_script else None,
                 column_lineage_workers=workers,
                 enable_erd=enable_erd,
+                sample_data_dir=sample_data_dir,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")
             if static:
