@@ -129,11 +129,26 @@ export interface DocglowModel {
    */
   readonly relationships_summary?: RelationshipSummary[];
   /**
-   * Pre-rendered Markdown showing a small sample of warehouse rows for this
-   * model. Attached at site-generation time when `--sample-data-dir` points
-   * at a `<model_name>.md` file. Omitted entirely when no file exists.
+   * Structured sample of warehouse rows for this model. Attached at
+   * site-generation time when `--sample-data-dir` contains a matching
+   * `<model_name>.json` file. Omitted entirely when no file exists.
+   *
+   * Rendered by the frontend as an interactive "Data" tab with sortable
+   * headers, substring search, and a horizontal-scroll container.
    */
-  readonly sample_data_md?: string;
+  readonly sample_data?: SampleData;
+}
+
+/** Pre-dumped warehouse sample attached to a model at site-generation time. */
+export interface SampleData {
+  readonly schema: string;
+  readonly table: string;
+  readonly columns: readonly string[];
+  readonly rows: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
+  readonly row_count: number;
+  readonly limit: number;
+  /** ISO-8601 UTC timestamp from the dump tool. */
+  readonly generated_at: string;
 }
 
 // -- Sources -----------------------------------------------------------------

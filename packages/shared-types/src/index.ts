@@ -21,6 +21,7 @@ export type {
   DocglowSource,
   HistogramBin,
   LastRun,
+  SampleData,
   TestResult,
   TopValue,
 } from "./models.js";

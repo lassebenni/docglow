@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { useTagFilterStore } from '../stores/tagFilterStore'
 import { ColumnTable } from '../components/models/ColumnTable'
+import { SampleDataTable } from '../components/models/SampleDataTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
@@ -270,7 +271,7 @@ export function ModelPage() {
     )
   }
 
-  const hasSampleData = Boolean(model.sample_data_md)
+  const hasSampleData = Boolean(model.sample_data)
   const tabs: { key: Tab; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'documentation', label: 'Documentation' },
@@ -399,10 +400,8 @@ export function ModelPage() {
         </div>
       )}
 
-      {activeTab === 'data' && hasSampleData && (
-        <div data-testid="model-data-tab">
-          <Markdown content={model.sample_data_md ?? ''} className="text-sm" />
-        </div>
+      {activeTab === 'data' && hasSampleData && model.sample_data && (
+        <SampleDataTable data={model.sample_data} />
       )}
 
       {activeTab === 'lineage' && (
