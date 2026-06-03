@@ -45,11 +45,18 @@ def resolve_selection(
     resources: dict[str, Any],
 ) -> set[str]:
     """Resolve a selection pattern to a set of unique_ids."""
+    if pattern.startswith("@"):
+        # File-based closure: one model name per line, no graph expansion.
+        from pathlib import Path
+
+        names = {ln.strip() for ln in Path(pattern[1:]).read_text().splitlines() if ln.strip()}
+        return {uid for uid, data in resources.items() if data.get("name") in names}
+
     include_upstream = pattern.startswith("+")
     include_downstream = pattern.endswith("+")
     clean = pattern.strip("+")
 
-    matched: set[str] = set()
+    seed_matches: set[str] = set()
     for uid, data in resources.items():
         name = data.get("name", "")
         folder = data.get("folder", "")
@@ -61,17 +68,19 @@ def resolve_selection(
             or fnmatch.fnmatch(path, clean)
         )
         if matches_filter:
-            matched.add(uid)
+            seed_matches.add(uid)
+
+    matched = set(seed_matches)
 
     if include_upstream:
         upstream: set[str] = set()
-        for uid in matched:
+        for uid in seed_matches:
             collect_upstream(uid, resources, upstream)
         matched |= upstream
 
     if include_downstream:
         downstream: set[str] = set()
-        for uid in matched:
+        for uid in seed_matches:
             collect_downstream(uid, resources, downstream)
         matched |= downstream
 
