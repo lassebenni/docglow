@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { SampleData } from '../../types'
 
 type SortDirection = 'asc' | 'desc'
@@ -46,9 +46,20 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
     })
   }
 
+  const lowerQuery = search.trim().toLowerCase()
+  const excludedPii = data.excluded_columns?.pii_meta ?? []
+  const excludedNameFlagged = data.excluded_columns?.name_flagged ?? []
+  const excludedTotal = excludedPii.length + excludedNameFlagged.length
+  const excludedTitle = [
+    excludedPii.length ? `Tagged meta.pii=true: ${excludedPii.join(', ')}` : '',
+    excludedNameFlagged.length ? `Name-flagged: ${excludedNameFlagged.join(', ')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
   return (
     <div className="flex flex-col gap-2" data-testid="model-data-tab">
-      <div className="flex items-center gap-3 text-xs text-[var(--text-muted)]">
+      <div className="flex items-center gap-3 text-xs text-[var(--text-muted)] flex-wrap">
         <input
           type="text"
           value={search}
@@ -66,6 +77,15 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
           {' — sampled from '}
           <code className="text-[var(--text)]">{data.schema}.{data.table}</code>
         </span>
+        {excludedTotal > 0 && (
+          <span
+            className="px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/30
+                       text-[11px] cursor-help"
+            title={excludedTitle}
+          >
+            {excludedTotal} column{excludedTotal === 1 ? '' : 's'} withheld (PII)
+          </span>
+        )}
       </div>
 
       <div className="overflow-x-auto rounded border border-[var(--border)] max-h-[60vh] overflow-y-auto">
@@ -116,7 +136,7 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
                                  border-b border-[var(--border)]/50"
                       title={cellToTitle(cell)}
                     >
-                      {cellToDisplay(cell)}
+                      {renderCell(cell, lowerQuery)}
                     </td>
                   ))}
                 </tr>
@@ -134,15 +154,49 @@ function cellMatches(cell: Cell, lowerQuery: string): boolean {
   return String(cell).toLowerCase().includes(lowerQuery)
 }
 
-function cellToDisplay(cell: Cell): string {
-  if (cell === null) return '∅'
-  if (typeof cell === 'boolean') return cell ? 'true' : 'false'
-  return String(cell)
-}
-
 function cellToTitle(cell: Cell): string {
   if (cell === null) return 'NULL'
   return String(cell)
+}
+
+/**
+ * Render a cell with the search query highlighted in every matched position.
+ *
+ * - NULL renders as a muted "∅" sentinel (and is never highlighted).
+ * - The query is matched case-insensitively against the cell's String() form;
+ *   matches in the original casing are preserved in the output.
+ * - Multiple non-overlapping matches per cell are all highlighted (e.g.
+ *   "Konijnenland" matched by "n" highlights every "n").
+ */
+function renderCell(cell: Cell, lowerQuery: string): ReactNode {
+  if (cell === null) {
+    return <span className="text-[var(--text-muted)]">∅</span>
+  }
+  const text = typeof cell === 'boolean' ? (cell ? 'true' : 'false') : String(cell)
+  if (!lowerQuery) return text
+
+  const lowerText = text.toLowerCase()
+  const qLen = lowerQuery.length
+  const parts: ReactNode[] = []
+  let cursor = 0
+  let key = 0
+  let hit = lowerText.indexOf(lowerQuery)
+  while (hit !== -1) {
+    if (hit > cursor) parts.push(text.slice(cursor, hit))
+    parts.push(
+      <mark
+        key={key++}
+        className="rounded-sm bg-primary/25 text-[var(--text)] px-0.5"
+      >
+        {text.slice(hit, hit + qLen)}
+      </mark>,
+    )
+    cursor = hit + qLen
+    hit = lowerText.indexOf(lowerQuery, cursor)
+  }
+  if (cursor === 0) return text
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return parts
 }
 
 function compareCells(a: Cell, b: Cell): number {

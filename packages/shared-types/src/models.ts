@@ -149,6 +149,17 @@ export interface SampleData {
   readonly limit: number;
   /** ISO-8601 UTC timestamp from the dump tool. */
   readonly generated_at: string;
+  /**
+   * Columns the dump tool refused to sample, surfaced so reviewers can see
+   * what was withheld. Two buckets:
+   * - `pii_meta`: dbt YAML carried `meta.pii: true` on the column.
+   * - `name_flagged`: the column name matched a built-in PII heuristic
+   *   (email, phone, iban, bsn, dob, …).
+   */
+  readonly excluded_columns?: {
+    readonly pii_meta: readonly string[];
+    readonly name_flagged: readonly string[];
+  };
 }
 
 // -- Sources -----------------------------------------------------------------
