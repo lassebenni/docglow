@@ -118,7 +118,7 @@ def stage_transform_nodes(ctx: PipelineContext) -> None:
     catalog = ctx.artifacts.catalog
 
     for unique_id, node in manifest.nodes.items():
-        if node.resource_type not in ("model", "seed", "snapshot"):
+        if node.resource_type not in ("model", "seed", "snapshot", "analysis"):
             continue
 
         is_package = bool(ctx.root_project_name and node.package_name != ctx.root_project_name)
@@ -127,7 +127,7 @@ def stage_transform_nodes(ctx: PipelineContext) -> None:
         )
         data["is_package"] = is_package
 
-        if node.resource_type == "model":
+        if node.resource_type in ("model", "analysis"):
             ctx.models[unique_id] = data
         elif node.resource_type == "seed":
             ctx.seeds[unique_id] = data
@@ -466,6 +466,14 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
         "snapshots": ctx.snapshots,
         "exposures": ctx.exposures,
         "metrics": ctx.metrics,
+        "manifest_child_map": {
+            uid: [
+                ref
+                for ref in refs
+                if ref.startswith("model.") or ref.startswith("analysis.")
+            ]
+            for uid, refs in ctx.reverse_deps.items()
+        },
         "lineage": ctx.lineage,
         "health": ctx.health,
         "search_index": ctx.search_index,
