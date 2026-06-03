@@ -1,28 +1,44 @@
-# Pending TSX ports
+# Patches ported from vt-dbt → fork
 
-These patches live in `vt-dbt-feat+thunderstock-sku-export/scripts/dev/patch_docglow.py`
-and target the **minified JS bundle** in the upstream wheel. Now that the
-fork owns the TSX source, each one needs re-expressing as a proper React
-edit. Until they ship, the fork's lineage UI matches upstream docglow,
-not the vt-dbt-customised behaviour.
+Originally `vt-dbt/scripts/dev/patch_docglow.py` rewrote the **minified JS bundle**
+in place after every `pip install --upgrade docglow`. Now that the fork owns
+the TSX source, each patch has been re-expressed as a proper React/TS edit.
 
-Grouped by the React file they likely touch (verify before editing — minified
-identifier names are not stable).
+## Ported
 
-## Lineage graph filtering (`frontend/src/utils/graph.ts` + `lineageFilters.ts`)
-- [ ] `patch_lineage_focal_paths` — restrict BFS to only direct upstream/downstream paths (drops sideways/bypassing edges). Touches the `vO`/`pO`/`gO` functions in the bundle, which correspond to `getSubgraph` and its BFS helpers.
-- [ ] `patch_lineage_parent_siblings_inject` — when "Parent outputs" is checked, inject sibling nodes into the focal subgraph.
-- [ ] `patch_lineage_exclude_cascade` — exclude a node + all its downstream descendants.
-- [ ] `patch_lineage_exclude_protect_focal` — never cascade-exclude the focal node itself.
-- [ ] `patch_lineage_parent_children_brace_fix` — JS brace-closure fix introduced by the cascade patch.
+### Python (`src/docglow/...`)
+- `patch_pipeline` — analyses as models (`generator/pipeline.py`).
+- `patch_docglow_manifest_child_map` — embed `manifest_child_map` in the JSON (`generator/pipeline.py`).
+- `patch_unit_tests_in_test_map` — merge `manifest.unit_tests` into `build_test_map` (`generator/transforms/lookups.py`).
+- `patch_unit_tests_test_type` — label `test_type='unit_test'` (`generator/transforms/models.py`).
+- `patch_models_transform` — fall back `compiled_sql` to `raw_code` for analyses (`generator/transforms/models.py`).
+- `patch_profiler_resilience` + `patch_docglow_profiler.py` — PG `::DOUBLE PRECISION`, LIMIT subquery, rollback on failure, skip missing columns (`profiler/queries.py` + `profiler/engine.py`).
+- `patch_filters_closure_file` — `@file` selection (`generator/filters.py`).
+- `patch_filters_focal_downstream` — collect upstream/downstream from seed match only (`generator/filters.py`).
+- `patch_lineage_builder` — tag analyses with `resource_type='analysis'` in the lineage graph (`generator/lineage_builder.py`).
 
-## ModelPage lineage UI (`frontend/src/pages/ModelPage.tsx`)
-- [ ] `patch_frontend_model_page` — move the model markdown description out of the page header into a "Documentation" tab. (NB: ModelPage.tsx already has a Documentation tab; verify if this patch is still needed against upstream main.)
-- [ ] `patch_lineage_dag_toggle` — Layered vs. direct-DAG layout toggle.
-- [ ] `patch_lineage_model_page_layers_filter` — layer filter dropdown.
-- [ ] `patch_lineage_parents_depth_slider` + `patch_lineage_children_depth_slider` — split the single depth slider into parents/children sliders.
-- [ ] `patch_lineage_model_page_exclude_filter` — exclude-by-name filter.
+### Frontend (`frontend/src/...`)
+- `patch_frontend_model_page` — Documentation tab on ModelPage (model description moved out of the header) with "No model description." fallback (`pages/ModelPage.tsx`).
+- `patch_lineage_focal_paths` — `getSubgraph` rewritten with per-direction BFS distance maps; only monotonic edges (`uD[src] === uD[tgt]+1`, `dD[tgt] === dD[src]+1`) are kept, dropping sideways and bypass edges (`utils/graph.ts`).
+- `patch_lineage_parents_depth_slider` + `patch_lineage_children_depth_slider` — independent Parents and Children depth sliders on ModelPage; master Depth still resets both (`utils/graph.ts` extra params + `pages/ModelPage.tsx` state + UI).
+- `patch_lineage_dag_toggle` — Layered/DAG layout toggle persisted in `localStorage` (`pages/ModelPage.tsx`).
+- `patch_lineage_model_page_layers_filter` — Layers filter dropdown on the ModelPage lineage toolbar (`pages/ModelPage.tsx`).
+- `patch_lineage_model_page_exclude_filter` — Models filter dropdown (per-node include/exclude) on the ModelPage lineage toolbar (`pages/ModelPage.tsx`).
+- `patch_lineage_exclude_cascade` — excluding a node drops the node AND all downstream descendants via `getDescendants()` (`utils/graph.ts` + `pages/ModelPage.tsx`).
+- `patch_lineage_exclude_protect_focal` — the focal model is never excluded by the Models filter (`pages/ModelPage.tsx`).
 
-## Notes
-- The bundle filename hash in `src/docglow/static/assets/index-*.js` changes on every `npm run build:sync`, so the existing `.replace(<minified-snippet>, ...)` calls in `patch_docglow.py` cannot be re-run against the fork.
-- Recommended workflow for each port: locate the corresponding upstream TSX (the minified snippet is a hint), make the edit in source, `cd frontend && npm run build:sync`, regenerate `target/docglow`, verify in browser.
+## Deferred
+
+These are valuable but require a new UI surface and additional state machine
+that wasn't shipped with this PR. They are no-ops for current behavior.
+
+- `patch_lineage_parent_siblings_inject` — a "Parent outputs" checkbox that,
+  when enabled, injects sibling nodes (other children of the focal's parents)
+  into the focal subgraph. Wants: a toolbar checkbox + an opt-in branch in
+  `getSubgraph`.
+- `patch_lineage_parent_children_brace_fix` — was a JS-bundle fix for a
+  brace-closure regression introduced by the cascade patch; not needed in
+  TSX source.
+- The Lineage Explorer (`/lineage`) variants of the cascade/protect/Models
+  patches — analogous to the ModelPage ports above, but applied to
+  `pages/LineagePage.tsx`. Same pattern, separate PR.
