@@ -47,11 +47,15 @@ def resolve_selection(
     """Resolve a selection pattern to a set of unique_ids."""
     if pattern.startswith("@"):
         # File-based closure: one model name per line, no graph expansion.
+        # expanduser() so `@~/models.txt` resolves home-relative paths the
+        # same way the shell would have if quoting hadn't suppressed it.
         from pathlib import Path
 
         names = {
             ln.strip()
-            for ln in Path(pattern[1:]).read_text(encoding="utf-8").splitlines()
+            for ln in (
+                Path(pattern[1:]).expanduser().read_text(encoding="utf-8").splitlines()
+            )
             if ln.strip()
         }
         return {uid for uid, data in resources.items() if data.get("name") in names}
