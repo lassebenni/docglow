@@ -115,16 +115,43 @@ function DependencyList({
 
 type Tab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
 
+const VALID_TABS = [
+  'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests',
+] as const satisfies readonly Tab[]
+
+function parseTab(raw: string | undefined): Tab {
+  return (VALID_TABS as readonly string[]).includes(raw ?? '') ? (raw as Tab) : 'columns'
+}
+
 export function ModelPage() {
-  const { id } = useParams<{ id: string }>()
+  const { id, tab: tabParam } = useParams<{ id: string; tab?: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const { data, getModel, getColumnLineage } = useProjectStore()
-  const [activeTab, setActiveTab] = useState<Tab>('columns')
+  const [activeTab, setActiveTab] = useState<Tab>(() => parseTab(tabParam))
   const [sqlMode, setSqlMode] = useState<'compiled' | 'raw'>('compiled')
 
   const decodedId = id ? decodeURIComponent(id) : ''
   const model = decodedId ? getModel(decodedId) : undefined
+
+  // URL → state: keep activeTab in sync with the :tab segment so browser
+  // back/forward and copy-pasted deep links land on the right tab.
+  useEffect(() => {
+    setActiveTab(parseTab(tabParam))
+  }, [tabParam])
+
+  // State → URL: update the path on every tab click so the address bar is
+  // shareable.  Uses replace so a user clicking through five tabs doesn't
+  // pile five history entries onto the back button.  `columns` is the
+  // canonical "no tab segment" URL, matching the existing column-anchor
+  // links and any external bookmarks that predate this route.
+  const selectTab = useCallback((tab: Tab) => {
+    setActiveTab(tab)
+    if (!decodedId) return
+    const encoded = encodeURIComponent(decodedId)
+    const path = tab === 'columns' ? `/model/${encoded}` : `/model/${encoded}/${tab}`
+    navigate(path + location.hash, { replace: true })
+  }, [navigate, decodedId, location.hash])
 
   // Scroll to column anchor when navigating with a hash (e.g. #col-closer_id)
   useEffect(() => {
@@ -342,7 +369,7 @@ export function ModelPage() {
       <div className="border-b border-[var(--border)] flex gap-0 mb-4">
         {tabs.map(tab => (
           <button key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
+                  onClick={() => selectTab(tab.key)}
                   className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer
                     ${activeTab === tab.key
                       ? 'border-primary text-primary'
