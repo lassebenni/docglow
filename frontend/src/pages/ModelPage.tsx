@@ -160,6 +160,7 @@ export function ModelPage() {
   useEffect(() => {
     window.localStorage.setItem('dg-lineage-layout', layoutMode)
   }, [layoutMode])
+  const [showParentSiblings, setShowParentSiblings] = useState(false)
   const [lineageFullscreen, setLineageFullscreen] = useState(false)
   const [typeFilter, toggleType, setTypeMode, clearTypes] = useFilterState()
   const { selected: globalTagSelected, mode: globalTagMode, toggle: toggleTag, setMode: setTagMode, clear: clearTags } = useTagFilterStore()
@@ -178,8 +179,9 @@ export function ModelPage() {
       direction,
       parentsDepth,
       childrenDepth,
+      showParentSiblings,
     )
-  }, [data, decodedId, depth, direction, parentsDepth, childrenDepth])
+  }, [data, decodedId, depth, direction, parentsDepth, childrenDepth, showParentSiblings])
 
   const filteredSubgraph = useMemo(() => {
     const base = applyFilters(
@@ -513,6 +515,22 @@ export function ModelPage() {
                 </button>
               ))}
             </div>
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+
+            {/* Parent outputs — surfaces siblings of focal (other children of its direct parents) */}
+            <label
+              className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] cursor-pointer select-none"
+              title="Also show siblings — the other models fed by the focal's direct parents"
+            >
+              <input
+                type="checkbox"
+                checked={showParentSiblings}
+                onChange={e => setShowParentSiblings(e.target.checked)}
+                className="accent-[var(--primary)] cursor-pointer"
+              />
+              Parent outputs
+            </label>
 
             <div className="h-4 w-px bg-[var(--border)]" />
 

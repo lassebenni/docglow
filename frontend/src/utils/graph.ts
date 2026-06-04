@@ -89,6 +89,7 @@ export function getSubgraph(
   direction: LineageDirection = 'both',
   parentsDepth: number = depth,
   childrenDepth: number = depth,
+  showParentSiblings: boolean = false,
 ): { nodes: LineageNode[]; edges: LineageEdge[] } {
   const upstreamDist: Record<string, number> = { [nodeId]: 0 }
   let frontier = new Set([nodeId])
@@ -146,6 +147,28 @@ export function getSubgraph(
     }
   }
 
+  // Optional "Parent outputs" injection.  For every direct parent of the
+  // focal that's already in keep, pull in that parent's OTHER children
+  // (the focal's siblings) along with their incoming parent→sibling edges.
+  // Useful when reading a dim's downstream context — you want to see what
+  // ELSE the parents feed alongside the focal model.
+  if (showParentSiblings) {
+    const directParents = new Set<string>()
+    for (const edge of edges) {
+      if (edge.target === nodeId && keep.has(edge.source)) directParents.add(edge.source)
+    }
+    const haveEdge = new Set(filteredEdges.map((e) => `${e.source}\x00${e.target}`))
+    for (const edge of edges) {
+      if (!directParents.has(edge.source) || edge.target === nodeId) continue
+      keep.add(edge.target)
+      const key = `${edge.source}\x00${edge.target}`
+      if (!haveEdge.has(key)) {
+        filteredEdges.push(edge)
+        haveEdge.add(key)
+      }
+    }
+  }
+
   return {
     nodes: nodes.filter((n) => keep.has(n.id)),
     edges: filteredEdges,
@@ -161,10 +184,20 @@ export function getUnionSubgraph(
   direction: LineageDirection = 'both',
   parentsDepth: number = depth,
   childrenDepth: number = depth,
+  showParentSiblings: boolean = false,
 ): { nodes: LineageNode[]; edges: LineageEdge[] } {
   if (nodeIds.length === 0) return { nodes: [], edges: [] }
   if (nodeIds.length === 1)
-    return getSubgraph(nodeIds[0], nodes, edges, depth, direction, parentsDepth, childrenDepth)
+    return getSubgraph(
+      nodeIds[0],
+      nodes,
+      edges,
+      depth,
+      direction,
+      parentsDepth,
+      childrenDepth,
+      showParentSiblings,
+    )
 
   const relevantIds = new Set<string>()
   for (const nodeId of nodeIds) {

@@ -26,16 +26,12 @@ the TSX source, each patch has been re-expressed as a proper React/TS edit.
 - `patch_lineage_model_page_exclude_filter` — Models filter dropdown (per-node include/exclude) on the ModelPage lineage toolbar (`pages/ModelPage.tsx`).
 - `patch_lineage_exclude_cascade` — excluding a node drops the node AND all downstream descendants via `getDescendants()` (`utils/graph.ts` + `pages/ModelPage.tsx`).
 - `patch_lineage_exclude_protect_focal` — the focal model is never excluded by the Models filter (`pages/ModelPage.tsx`).
+- `patch_lineage_parent_siblings_inject` — "Parent outputs" toolbar checkbox; when on, `getSubgraph` injects every other child of the focal's direct parents (and the parent→sibling edges) into the kept set (`utils/graph.ts` + `pages/ModelPage.tsx`). Unit-tested.
 
 ## Deferred
 
-These are valuable but require a new UI surface and additional state machine
-that wasn't shipped with this PR. They are no-ops for current behavior.
+These are no-ops in the fork today; not blocking the consumer.
 
-- `patch_lineage_parent_siblings_inject` — a "Parent outputs" checkbox that,
-  when enabled, injects sibling nodes (other children of the focal's parents)
-  into the focal subgraph. Wants: a toolbar checkbox + an opt-in branch in
-  `getSubgraph`.
 - `patch_lineage_parent_children_brace_fix` — was a JS-bundle fix for a
   brace-closure regression introduced by the cascade patch; not needed in
   TSX source.
