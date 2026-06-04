@@ -49,7 +49,11 @@ def resolve_selection(
         # File-based closure: one model name per line, no graph expansion.
         from pathlib import Path
 
-        names = {ln.strip() for ln in Path(pattern[1:]).read_text().splitlines() if ln.strip()}
+        names = {
+            ln.strip()
+            for ln in Path(pattern[1:]).read_text(encoding="utf-8").splitlines()
+            if ln.strip()
+        }
         return {uid for uid, data in resources.items() if data.get("name") in names}
 
     include_upstream = pattern.startswith("+")

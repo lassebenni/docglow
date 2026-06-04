@@ -94,9 +94,11 @@ from docglow.cloud_hint import maybe_show_hint
     "--sample-data-dir",
     type=click.Path(path_type=Path),
     default=None,
-    help="Directory of <model_name>.md sample-data files. Each matching file is "
-    "attached to its model and rendered in a 'Data' tab in the UI. The site stays "
-    "fully static — generate the markdown out-of-band (e.g. dbt + psql + tabulate).",
+    help="Directory of <model_name>.json sample-data files. Each matching file is "
+    "attached to its model and rendered as an interactive 'Data' tab (sortable "
+    "headers, substring search, horizontal scroll). The site stays fully static — "
+    "generate the JSON out-of-band (e.g. dbt + SQL → JSON dump tool). See "
+    "docglow.generator.sample_data for the expected payload shape.",
 )
 def generate(
     project_dir: Path,

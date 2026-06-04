@@ -4,6 +4,7 @@
 
 export type ResourceType =
   | "model"
+  | "analysis"
   | "source"
   | "seed"
   | "snapshot"

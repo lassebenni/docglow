@@ -29,6 +29,16 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
     return data.rows.filter(row => row.some(cell => cellMatches(cell, q)))
   }, [data.rows, search])
 
+  // Stable per-row keys for React reconciliation: map each row tuple to its
+  // original index in `data.rows`.  Without this, sort/filter changes recycle
+  // <tr> DOM nodes by display position, which is fine for plain cells but
+  // breaks if a row ever gains internal state (focus, expanded details, …).
+  const originalIndex = useMemo(() => {
+    const m = new Map<readonly Cell[], number>()
+    data.rows.forEach((r, i) => m.set(r, i))
+    return m
+  }, [data.rows])
+
   const sortedRows = useMemo(() => {
     if (!sort) return filteredRows
     const idx = data.columns.indexOf(sort.column)
@@ -128,7 +138,10 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
               </tr>
             ) : (
               sortedRows.map((row, i) => (
-                <tr key={i} className="even:bg-[var(--bg-surface)]/40">
+                <tr
+                  key={originalIndex.get(row) ?? i}
+                  className="even:bg-[var(--bg-surface)]/40"
+                >
                   {row.map((cell, j) => (
                     <td
                       key={j}
@@ -149,7 +162,8 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
   )
 }
 
-function cellMatches(cell: Cell, lowerQuery: string): boolean {
+/** True iff `lowerQuery` is a case-insensitive substring of String(cell). NULL never matches. */
+export function cellMatches(cell: Cell, lowerQuery: string): boolean {
   if (cell === null) return false
   return String(cell).toLowerCase().includes(lowerQuery)
 }
@@ -168,7 +182,7 @@ function cellToTitle(cell: Cell): string {
  * - Multiple non-overlapping matches per cell are all highlighted (e.g.
  *   "Konijnenland" matched by "n" highlights every "n").
  */
-function renderCell(cell: Cell, lowerQuery: string): ReactNode {
+export function renderCell(cell: Cell, lowerQuery: string): ReactNode {
   if (cell === null) {
     return <span className="text-[var(--text-muted)]">∅</span>
   }
@@ -199,7 +213,7 @@ function renderCell(cell: Cell, lowerQuery: string): ReactNode {
   return parts
 }
 
-function compareCells(a: Cell, b: Cell): number {
+export function compareCells(a: Cell, b: Cell): number {
   // NULLs sort last regardless of direction sign — direction flip in the
   // caller already handles asc/desc; we still want NULL out of the way.
   if (a === null && b === null) return 0

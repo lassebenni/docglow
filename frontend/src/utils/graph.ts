@@ -50,7 +50,11 @@ export function getDownstream(
 export function getDescendants(nodeId: string, edges: LineageEdge[]): Set<string> {
   const result = new Set<string>([nodeId])
   const childMap = new Map<string, string[]>()
-  for (const e of edges) childMap.set(e.source, (childMap.get(e.source) ?? []).concat(e.target))
+  for (const e of edges) {
+    const list = childMap.get(e.source)
+    if (list) list.push(e.target)
+    else childMap.set(e.source, [e.target])
+  }
   const stack = [nodeId]
   while (stack.length) {
     const current = stack.pop()!
