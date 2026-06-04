@@ -40,6 +40,19 @@ def build_test_map(
             if dep_id not in test_map:
                 test_map[dep_id] = []
             test_map[dep_id].append(node)
+
+    # dbt 1.8+ unit tests live on manifest.unit_tests (not manifest.nodes); the
+    # Manifest model exposes them via pydantic extras when the field is unknown.
+    unit_tests_raw = getattr(manifest, "unit_tests", None)
+    if unit_tests_raw is None and getattr(manifest, "__pydantic_extra__", None):
+        unit_tests_raw = manifest.__pydantic_extra__.get("unit_tests")
+    if unit_tests_raw:
+        for ut_data in unit_tests_raw.values():
+            ut_node = ManifestNode.model_validate(ut_data)
+            for dep_id in ut_node.depends_on.nodes:
+                if dep_id not in test_map:
+                    test_map[dep_id] = []
+                test_map[dep_id].append(ut_node)
     return test_map
 
 

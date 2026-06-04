@@ -37,6 +37,7 @@ def generate_site(
     head_script: str | None = None,
     column_lineage_workers: int | None = None,
     enable_erd: bool = False,
+    sample_data_dir: Path | None = None,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
 
@@ -110,6 +111,11 @@ def generate_site(
 
     if title:
         docglow_data["metadata"]["project_name"] = title
+
+    if sample_data_dir is not None:
+        from docglow.generator.sample_data import attach_sample_data
+
+        attach_sample_data(docglow_data["models"], sample_data_dir)
 
     logger.info("Bundling site...")
     bundle_site(docglow_data, resolved_output, static=static, head_script=head_script)

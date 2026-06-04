@@ -83,10 +83,13 @@ def build_lineage(
         for uid, data in collection.items():
             if uid in excluded_ids:
                 continue
+            # Analyses live alongside models in ctx.models but should keep their
+            # own badge type so the UI can render them distinctly.
+            node_resource_type = "analysis" if uid.startswith("analysis.") else resource_type
             _add_lineage_node(
                 unique_id=uid,
                 name=data["name"],
-                resource_type=resource_type,
+                resource_type=node_resource_type,
                 materialization=data.get("materialization", ""),
                 schema=data.get("schema", ""),
                 test_status=_get_test_status(data),

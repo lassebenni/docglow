@@ -143,6 +143,9 @@ class TestDataTransformation:
             "ai_key",
             "column_lineage",
             "ui",
+            # Fork-only — the frontend uses this map to augment parent-children
+            # lineage when the layered subgraph drops sibling edges.
+            "manifest_child_map",
         }
         assert set(versioned_data.keys()) == expected
 
