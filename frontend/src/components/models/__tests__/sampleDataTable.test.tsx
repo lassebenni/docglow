@@ -26,6 +26,10 @@ describe('cellMatches', () => {
     expect(cellMatches(true, 'rue')).toBe(true)
   })
 
+  it('returns false when the query is nowhere in the cell', () => {
+    expect(cellMatches('foo', 'bar')).toBe(false)
+  })
+
   it('never matches on NULL', () => {
     expect(cellMatches(null, '')).toBe(false)
     expect(cellMatches(null, 'null')).toBe(false)
@@ -37,6 +41,13 @@ describe('compareCells', () => {
     const rows = ['b', null, 'a', 'c', null]
     const sorted = [...rows].sort((a, b) => compareCells(a, b))
     expect(sorted).toEqual(['a', 'b', 'c', null, null])
+  })
+
+  it('returns the right sign for NULL vs value in either order', () => {
+    // Direction flip happens in the SampleDataTable caller; compareCells
+    // itself is asymmetric so a straight sort puts NULL after everything.
+    expect(compareCells(null, 'a')).toBeGreaterThan(0)
+    expect(compareCells('a', null)).toBeLessThan(0)
   })
 
   it('keeps NULL pairs equal so the sort is stable across them', () => {
@@ -52,6 +63,10 @@ describe('compareCells', () => {
   it('falls back to locale compare with numeric collation for mixed strings', () => {
     expect(compareCells('item_2', 'item_10')).toBeLessThan(0)
     expect(compareCells('Alpha', 'beta')).toBeLessThan(0)
+  })
+
+  it('treats booleans as non-numeric — they sort lexically (false < true)', () => {
+    expect(compareCells(true, false)).toBeGreaterThan(0)
   })
 })
 
@@ -88,5 +103,15 @@ describe('renderCell', () => {
     expect(numHtml).toContain('>234<')
     const boolHtml = renderToStaticMarkup(<>{renderCell(true, 'rue')}</>)
     expect(boolHtml).toContain('>rue<')
+  })
+
+  it('applies the muted-text class to the NULL sentinel span', () => {
+    const html = renderToStaticMarkup(<>{renderCell(null, '')}</>)
+    expect(html).toContain('text-[var(--text-muted)]')
+  })
+
+  it('does not highlight NULL even when the query is the ∅ sentinel itself', () => {
+    const html = renderToStaticMarkup(<>{renderCell(null, '∅')}</>)
+    expect(html).not.toContain('<mark')
   })
 })
