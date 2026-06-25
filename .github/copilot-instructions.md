@@ -79,14 +79,14 @@ except json.JSONDecodeError as e:
     continue
 ```
 
-### PII handling lives in the *producer* (vt-dbt), not docglow
+### PII handling: producer withholds values; fork renders placeholders
 
-The fork renders whatever JSON it's given. Don't request docglow to "scan
-for PII before rendering" — the producer's
-`scripts/docglow_data/dump_sample.py` already drops `meta.pii: true`
-columns at SQL level *and* applies a name-based safety net. The fork's
-responsibility is surfacing `sample_data.excluded_columns` so reviewers
-can audit what was withheld; that's already shipped.
+The producer's `scripts/docglow_data/dump_sample.py` drops `meta.pii: true`
+columns at SQL level *and* applies a name-based safety net. It ships
+`excluded_columns` plus optional `all_columns` (warehouse ordinal order,
+no values). The fork's `SampleDataTable` merges withheld columns into the
+grid as `••••` placeholders so reviewers see the full schema without live
+PII. Don't re-scan for PII in docglow — trust the producer metadata.
 
 ### Frontend `<mark>` highlight is intentionally simple
 

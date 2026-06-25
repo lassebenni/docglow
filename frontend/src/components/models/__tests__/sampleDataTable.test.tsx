@@ -1,19 +1,68 @@
 /**
- * Unit tests for the pure helpers exported from SampleDataTable.
- *
- * Locks in the three behaviours the reviewer flagged as fragile if untested:
- *
- *   1. NULL-last sort regardless of caller's direction sign.
- *   2. Numeric-aware compare on strings that parse as numbers.
- *   3. Case-insensitive substring search and every-match highlight wrapping.
+ * Unit tests for sample data display helpers and SampleDataTable pure functions.
  */
 import { describe, it, expect } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import type { SampleData } from '../../../types'
+import {
+  buildDisplayColumns,
+  expandSampleRows,
+  isWithheldCell,
+  withheldColumnSet,
+  WITHHELD_CELL_DISPLAY,
+} from '../sampleDataDisplay'
 import {
   cellMatches,
   compareCells,
   renderCell,
 } from '../SampleDataTable'
+
+function sampleData(overrides: Partial<SampleData> = {}): SampleData {
+  return {
+    schema: 'dbt_prod_exports',
+    table: 'exp_buyer',
+    columns: ['buyer_code', 'target_areas'],
+    rows: [
+      ['B01', 'D-A'],
+      ['B02', null],
+    ],
+    row_count: 2,
+    limit: 25,
+    generated_at: '2026-06-25T12:00:00Z',
+    all_columns: ['buyer_code', 'buyer_name', 'target_areas'],
+    excluded_columns: {
+      pii_meta: ['buyer_name'],
+      name_flagged: [],
+    },
+    ...overrides,
+  }
+}
+
+describe('buildDisplayColumns', () => {
+  it('uses all_columns when present', () => {
+    expect(buildDisplayColumns(sampleData())).toEqual([
+      'buyer_code',
+      'buyer_name',
+      'target_areas',
+    ])
+  })
+
+  it('appends withheld columns when all_columns is absent', () => {
+    const data = sampleData({ all_columns: undefined })
+    expect(buildDisplayColumns(data)).toEqual(['buyer_code', 'target_areas', 'buyer_name'])
+  })
+})
+
+describe('expandSampleRows', () => {
+  it('inserts withheld placeholder in warehouse order', () => {
+    const data = sampleData()
+    const cols = buildDisplayColumns(data)
+    const withheld = withheldColumnSet(data)
+    const rows = expandSampleRows(data, cols, withheld)
+    expect(rows[0]).toEqual(['B01', WITHHELD_CELL_DISPLAY, 'D-A'])
+    expect(rows[1]).toEqual(['B02', WITHHELD_CELL_DISPLAY, null])
+  })
+})
 
 describe('cellMatches', () => {
   it('matches case-insensitive substrings', () => {
@@ -34,6 +83,11 @@ describe('cellMatches', () => {
     expect(cellMatches(null, '')).toBe(false)
     expect(cellMatches(null, 'null')).toBe(false)
   })
+
+  it('never matches withheld placeholder cells', () => {
+    expect(cellMatches(WITHHELD_CELL_DISPLAY, '••')).toBe(false)
+    expect(isWithheldCell(WITHHELD_CELL_DISPLAY)).toBe(true)
+  })
 })
 
 describe('compareCells', () => {
@@ -44,8 +98,6 @@ describe('compareCells', () => {
   })
 
   it('returns the right sign for NULL vs value in either order', () => {
-    // Direction flip happens in the SampleDataTable caller; compareCells
-    // itself is asymmetric so a straight sort puts NULL after everything.
     expect(compareCells(null, 'a')).toBeGreaterThan(0)
     expect(compareCells('a', null)).toBeLessThan(0)
   })
@@ -71,6 +123,13 @@ describe('compareCells', () => {
 })
 
 describe('renderCell', () => {
+  it('renders withheld cells as a redacted token', () => {
+    const html = renderToStaticMarkup(<>{renderCell(WITHHELD_CELL_DISPLAY, '')}</>)
+    expect(html).toContain(WITHHELD_CELL_DISPLAY)
+    expect(html).toContain('aria-label="PII withheld"')
+    expect(html).not.toContain('<mark')
+  })
+
   it('renders NULL as a muted ∅ sentinel and never wraps it', () => {
     const html = renderToStaticMarkup(<>{renderCell(null, 'null')}</>)
     expect(html).toContain('∅')
@@ -84,12 +143,11 @@ describe('renderCell', () => {
 
   it('wraps every non-overlapping match in <mark> spans, preserving casing', () => {
     const html = renderToStaticMarkup(<>{renderCell('Konijnenland', 'n')}</>)
-    // 'Konijnenland' has four 'n' characters — every one gets its own <mark>.
     const markCount = (html.match(/<mark /g) ?? []).length
     expect(markCount).toBe(4)
-    expect(html).toContain('Ko')        // pre-first-match
-    expect(html).toContain('la')        // between the last two 'n's
-    expect(html).toMatch(/d$/)           // post-last-match trailing char
+    expect(html).toContain('Ko')
+    expect(html).toContain('la')
+    expect(html).toMatch(/d$/)
   })
 
   it('matches case-insensitively but preserves source casing in the output', () => {

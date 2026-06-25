@@ -143,12 +143,19 @@ export interface DocglowModel {
 export interface SampleData {
   readonly schema: string;
   readonly table: string;
+  /** Columns actually sampled (non-PII). Each row aligns 1:1 with this list. */
   readonly columns: readonly string[];
   readonly rows: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   readonly row_count: number;
   readonly limit: number;
   /** ISO-8601 UTC timestamp from the dump tool. */
   readonly generated_at: string;
+  /**
+   * Full warehouse column list in ordinal order, including withheld PII columns.
+   * When present, the Data tab renders every column; withheld ones show a
+   * redacted placeholder instead of live values.
+   */
+  readonly all_columns?: readonly string[];
   /**
    * Columns the dump tool refused to sample, surfaced so reviewers can see
    * what was withheld. Two buckets:

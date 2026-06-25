@@ -1,9 +1,16 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { SampleData } from '../../types'
+import {
+  buildDisplayColumns,
+  expandSampleRows,
+  isWithheldCell,
+  withheldColumnSet,
+  WITHHELD_CELL_DISPLAY,
+  type SampleCell,
+} from './sampleDataDisplay'
 
 type SortDirection = 'asc' | 'desc'
 type SortState = { column: string; direction: SortDirection } | null
-type Cell = string | number | boolean | null
 
 interface SampleDataTableProps {
   data: SampleData
@@ -13,42 +20,44 @@ interface SampleDataTableProps {
  * Interactive table for the pre-dumped warehouse sample.
  *
  * - Substring search filters rows across every column (case-insensitive).
- * - Click a column header to cycle tri-state asc → desc → none.  Numeric
- *   columns are compared numerically when both sides parse as finite numbers;
- *   otherwise `localeCompare` is used.
- * - The whole table sits in an `overflow-x-auto` wrapper so wide payloads
- *   scroll inside the tab rather than pushing the page sideways.
+ * - Withheld PII columns appear in warehouse order with a •••• placeholder;
+ *   values are never sampled from the database.
+ * - Click a column header to cycle tri-state asc → desc → none (withheld
+ *   columns are not sortable).
  */
 export function SampleDataTable({ data }: SampleDataTableProps) {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SortState>(null)
 
+  const withheld = useMemo(() => withheldColumnSet(data), [data])
+  const displayColumns = useMemo(() => buildDisplayColumns(data), [data])
+  const displayRows = useMemo(
+    () => expandSampleRows(data, displayColumns, withheld),
+    [data, displayColumns, withheld],
+  )
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return data.rows
-    return data.rows.filter(row => row.some(cell => cellMatches(cell, q)))
-  }, [data.rows, search])
+    if (!q) return displayRows
+    return displayRows.filter(row => row.some(cell => cellMatches(cell, q)))
+  }, [displayRows, search])
 
-  // Stable per-row keys for React reconciliation: map each row tuple to its
-  // original index in `data.rows`.  Without this, sort/filter changes recycle
-  // <tr> DOM nodes by display position, which is fine for plain cells but
-  // breaks if a row ever gains internal state (focus, expanded details, …).
   const originalIndex = useMemo(() => {
-    const m = new Map<readonly Cell[], number>()
-    data.rows.forEach((r, i) => m.set(r, i))
+    const m = new Map<readonly SampleCell[], number>()
+    displayRows.forEach((r, i) => m.set(r, i))
     return m
-  }, [data.rows])
+  }, [displayRows])
 
   const sortedRows = useMemo(() => {
     if (!sort) return filteredRows
-    const idx = data.columns.indexOf(sort.column)
+    const idx = displayColumns.indexOf(sort.column)
     if (idx < 0) return filteredRows
     const direction = sort.direction === 'asc' ? 1 : -1
-    // Slice to avoid mutating the upstream (frozen) rows array.
     return [...filteredRows].sort((a, b) => direction * compareCells(a[idx], b[idx]))
-  }, [filteredRows, sort, data.columns])
+  }, [filteredRows, sort, displayColumns])
 
   function onHeaderClick(column: string) {
+    if (withheld.has(column)) return
     setSort(prev => {
       if (!prev || prev.column !== column) return { column, direction: 'asc' }
       if (prev.direction === 'asc') return { column, direction: 'desc' }
@@ -57,15 +66,16 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
   }
 
   const lowerQuery = search.trim().toLowerCase()
-  const excludedPii = data.excluded_columns?.pii_meta ?? []
-  const excludedNameFlagged = data.excluded_columns?.name_flagged ?? []
-  const excludedTotal = excludedPii.length + excludedNameFlagged.length
-  const excludedTitle = [
-    excludedPii.length ? `Tagged meta.pii=true: ${excludedPii.join(', ')}` : '',
-    excludedNameFlagged.length ? `Name-flagged: ${excludedNameFlagged.join(', ')}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n')
+  const withheldCount = withheld.size
+  const withheldTitle = withheldCount
+    ? [
+        ...[...withheld].map(c =>
+          data.excluded_columns?.pii_meta?.includes(c)
+            ? `${c} (meta.pii=true)`
+            : `${c} (name-flagged)`,
+        ),
+      ].join('\n')
+    : ''
 
   return (
     <div className="flex flex-col gap-2" data-testid="model-data-tab">
@@ -87,13 +97,13 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
           {' — sampled from '}
           <code className="text-[var(--text)]">{data.schema}.{data.table}</code>
         </span>
-        {excludedTotal > 0 && (
+        {withheldCount > 0 && (
           <span
             className="px-1.5 py-0.5 rounded bg-warning/10 text-warning border border-warning/30
                        text-[11px] cursor-help"
-            title={excludedTitle}
+            title={withheldTitle}
           >
-            {excludedTotal} column{excludedTotal === 1 ? '' : 's'} withheld (PII)
+            {withheldCount} PII column{withheldCount === 1 ? '' : 's'} shown as {WITHHELD_CELL_DISPLAY}
           </span>
         )}
       </div>
@@ -102,25 +112,43 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
         <table className="text-xs w-max">
           <thead>
             <tr>
-              {data.columns.map(col => {
-                const active = sort?.column === col
-                const indicator = !active ? '⇅' : sort!.direction === 'asc' ? '▲' : '▼'
+              {displayColumns.map(col => {
+                const isWithheld = withheld.has(col)
+                const active = !isWithheld && sort?.column === col
+                const indicator = isWithheld
+                  ? 'PII'
+                  : !active
+                    ? '⇅'
+                    : sort!.direction === 'asc'
+                      ? '▲'
+                      : '▼'
                 return (
                   <th
                     key={col}
-                    className="sticky top-0 bg-[var(--bg-surface)] border-b border-[var(--border)]
-                               px-3 py-2 text-left font-medium whitespace-nowrap"
+                    className={`sticky top-0 bg-[var(--bg-surface)] border-b border-[var(--border)]
+                               px-3 py-2 text-left font-medium whitespace-nowrap
+                               ${isWithheld ? 'text-warning/90' : ''}`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => onHeaderClick(col)}
-                      className={`inline-flex items-center gap-1 cursor-pointer
-                                  ${active ? 'text-primary' : 'text-[var(--text)]'}
-                                  hover:text-primary`}
-                    >
-                      <span>{col}</span>
-                      <span className="text-[var(--text-muted)] text-[10px]">{indicator}</span>
-                    </button>
+                    {isWithheld ? (
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title="PII — values withheld from sample"
+                      >
+                        <span>{col}</span>
+                        <span className="text-[var(--text-muted)] text-[10px]">{indicator}</span>
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => onHeaderClick(col)}
+                        className={`inline-flex items-center gap-1 cursor-pointer
+                                    ${active ? 'text-primary' : 'text-[var(--text)]'}
+                                    hover:text-primary`}
+                      >
+                        <span>{col}</span>
+                        <span className="text-[var(--text-muted)] text-[10px]">{indicator}</span>
+                      </button>
+                    )}
                   </th>
                 )
               })}
@@ -130,7 +158,7 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
             {sortedRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={data.columns.length}
+                  colSpan={displayColumns.length}
                   className="px-3 py-6 text-center text-[var(--text-muted)]"
                 >
                   No rows match.
@@ -145,8 +173,9 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
                   {row.map((cell, j) => (
                     <td
                       key={j}
-                      className="px-3 py-1.5 whitespace-nowrap max-w-[24rem] truncate
-                                 border-b border-[var(--border)]/50"
+                      className={`px-3 py-1.5 whitespace-nowrap max-w-[24rem] truncate
+                                 border-b border-[var(--border)]/50
+                                 ${isWithheldCell(cell) ? 'text-warning/80 italic' : ''}`}
                       title={cellToTitle(cell)}
                     >
                       {renderCell(cell, lowerQuery)}
@@ -163,26 +192,26 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
 }
 
 /** True iff `lowerQuery` is a case-insensitive substring of String(cell). NULL never matches. */
-export function cellMatches(cell: Cell, lowerQuery: string): boolean {
+export function cellMatches(cell: SampleCell, lowerQuery: string): boolean {
+  if (isWithheldCell(cell)) return false
   if (cell === null) return false
   return String(cell).toLowerCase().includes(lowerQuery)
 }
 
-function cellToTitle(cell: Cell): string {
+function cellToTitle(cell: SampleCell): string {
+  if (isWithheldCell(cell)) return 'PII — value withheld from sample'
   if (cell === null) return 'NULL'
   return String(cell)
 }
 
-/**
- * Render a cell with the search query highlighted in every matched position.
- *
- * - NULL renders as a muted "∅" sentinel (and is never highlighted).
- * - The query is matched case-insensitively against the cell's String() form;
- *   matches in the original casing are preserved in the output.
- * - Multiple non-overlapping matches per cell are all highlighted (e.g.
- *   "Konijnenland" matched by "n" highlights every "n").
- */
-export function renderCell(cell: Cell, lowerQuery: string): ReactNode {
+export function renderCell(cell: SampleCell, lowerQuery: string): ReactNode {
+  if (isWithheldCell(cell)) {
+    return (
+      <span className="tracking-widest select-none" aria-label="PII withheld">
+        {WITHHELD_CELL_DISPLAY}
+      </span>
+    )
+  }
   if (cell === null) {
     return <span className="text-[var(--text-muted)]">∅</span>
   }
@@ -213,9 +242,7 @@ export function renderCell(cell: Cell, lowerQuery: string): ReactNode {
   return parts
 }
 
-export function compareCells(a: Cell, b: Cell): number {
-  // NULLs sort last regardless of direction sign — direction flip in the
-  // caller already handles asc/desc; we still want NULL out of the way.
+export function compareCells(a: SampleCell, b: SampleCell): number {
   if (a === null && b === null) return 0
   if (a === null) return 1
   if (b === null) return -1
@@ -227,10 +254,10 @@ export function compareCells(a: Cell, b: Cell): number {
   return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' })
 }
 
-function toFiniteNumber(cell: Exclude<Cell, null>): number | null {
+function toFiniteNumber(cell: Exclude<SampleCell, null>): number | null {
   if (typeof cell === 'number') return Number.isFinite(cell) ? cell : null
   if (typeof cell === 'boolean') return null
-  const trimmed = cell.trim()
+  const trimmed = String(cell).trim()
   if (trimmed === '') return null
   const n = Number(trimmed)
   return Number.isFinite(n) ? n : null
