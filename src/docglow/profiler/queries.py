@@ -130,6 +130,9 @@ def build_stats_query(
     q = _quote
     parts: list[str] = ["SELECT", "  COUNT(*) AS _row_count"]
 
+    # PostgreSQL's bare DOUBLE type doesn't exist; use DOUBLE PRECISION instead.
+    double_cast = "::DOUBLE PRECISION" if adapter in ("postgres", "postgresql") else "::DOUBLE"
+
     for col in columns:
         cn = q(col.name, adapter)
         prefix = f'"{col.name}'
@@ -141,9 +144,9 @@ def build_stats_query(
         if col.category == "numeric":
             parts.append(f'  , MIN({cn}) AS {prefix}__min"')
             parts.append(f'  , MAX({cn}) AS {prefix}__max"')
-            parts.append(f'  , AVG({cn})::DOUBLE AS {prefix}__mean"')
+            parts.append(f'  , AVG({cn}){double_cast} AS {prefix}__mean"')
             if adapter == "duckdb":
-                parts.append(f'  , MEDIAN({cn}::DOUBLE) AS {prefix}__median"')
+                parts.append(f'  , MEDIAN({cn}{double_cast}) AS {prefix}__median"')
             elif adapter == "snowflake":
                 parts.append(f'  , MEDIAN({cn}) AS {prefix}__median"')
             else:
@@ -151,7 +154,7 @@ def build_stats_query(
                 parts.append(
                     f'  , PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY {cn}) AS {prefix}__median"'
                 )
-            parts.append(f'  , STDDEV({cn})::DOUBLE AS {prefix}__stddev"')
+            parts.append(f'  , STDDEV({cn}){double_cast} AS {prefix}__stddev"')
 
         elif col.category == "date":
             parts.append(f'  , MIN({cn})::VARCHAR AS {prefix}__min"')
@@ -160,20 +163,23 @@ def build_stats_query(
         elif col.category == "string":
             parts.append(f'  , MIN(LENGTH({cn})) AS {prefix}__min_length"')
             parts.append(f'  , MAX(LENGTH({cn})) AS {prefix}__max_length"')
-            parts.append(f'  , AVG(LENGTH({cn}))::DOUBLE AS {prefix}__avg_length"')
+            parts.append(f'  , AVG(LENGTH({cn})){double_cast} AS {prefix}__avg_length"')
 
     # FROM clause
     table_ref = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
-    parts.append(f"FROM {table_ref}")
 
-    # Sampling
+    # Sampling: PG's LIMIT must live inside a subquery, otherwise it caps the
+    # 1-row aggregate output instead of the input scan.
     if sample_size and adapter == "duckdb":
+        parts.append(f"FROM {table_ref}")
         parts.append(f"USING SAMPLE {sample_size} ROWS")
     elif sample_size and adapter == "snowflake":
+        parts.append(f"FROM {table_ref}")
         parts.append(f"TABLESAMPLE ({sample_size} ROWS)")
     elif sample_size and adapter in ("postgres", "postgresql"):
-        # PostgreSQL TABLESAMPLE needs a percentage, use LIMIT instead
-        parts.append(f"LIMIT {sample_size}")
+        parts.append(f"FROM (SELECT * FROM {table_ref} LIMIT {sample_size}) AS _sample")
+    else:
+        parts.append(f"FROM {table_ref}")
 
     return "\n".join(parts) + ";"
 

@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { useTagFilterStore } from '../stores/tagFilterStore'
 import { ColumnTable } from '../components/models/ColumnTable'
+import { SampleDataTable } from '../components/models/SampleDataTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
@@ -13,7 +14,7 @@ import type { FilterState } from '../components/ui/FilterDropdown'
 import { Markdown } from '../components/Markdown'
 import { materializationLabel } from '../utils/colors'
 import { formatFqn } from '../utils/formatting'
-import { getSubgraph, type LineageDirection } from '../utils/graph'
+import { getSubgraph, getDescendants, type LineageDirection } from '../utils/graph'
 import { applyFilters, useFilterState, computeSubgraphOptions } from '../utils/lineageFilters'
 import { buildModelColumnsMap } from '../utils/modelColumns'
 import { buildDownstreamMap, getColumnLineageCandidateIds } from '../utils/columnLineageGraph'
@@ -112,18 +113,45 @@ function DependencyList({
   )
 }
 
-type Tab = 'columns' | 'sql' | 'lineage' | 'erd' | 'tests'
+type Tab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
+
+const VALID_TABS = [
+  'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests',
+] as const satisfies readonly Tab[]
+
+function parseTab(raw: string | undefined): Tab {
+  return (VALID_TABS as readonly string[]).includes(raw ?? '') ? (raw as Tab) : 'columns'
+}
 
 export function ModelPage() {
-  const { id } = useParams<{ id: string }>()
+  const { id, tab: tabParam } = useParams<{ id: string; tab?: string }>()
   const navigate = useNavigate()
   const location = useLocation()
   const { data, getModel, getColumnLineage } = useProjectStore()
-  const [activeTab, setActiveTab] = useState<Tab>('columns')
+  const [activeTab, setActiveTab] = useState<Tab>(() => parseTab(tabParam))
   const [sqlMode, setSqlMode] = useState<'compiled' | 'raw'>('compiled')
 
   const decodedId = id ? decodeURIComponent(id) : ''
   const model = decodedId ? getModel(decodedId) : undefined
+
+  // URL → state: keep activeTab in sync with the :tab segment so browser
+  // back/forward and copy-pasted deep links land on the right tab.
+  useEffect(() => {
+    setActiveTab(parseTab(tabParam))
+  }, [tabParam])
+
+  // State → URL: update the path on every tab click so the address bar is
+  // shareable.  Uses replace so a user clicking through five tabs doesn't
+  // pile five history entries onto the back button.  `columns` is the
+  // canonical "no tab segment" URL, matching the existing column-anchor
+  // links and any external bookmarks that predate this route.
+  const selectTab = useCallback((tab: Tab) => {
+    setActiveTab(tab)
+    if (!decodedId) return
+    const encoded = encodeURIComponent(decodedId)
+    const path = tab === 'columns' ? `/model/${encoded}` : `/model/${encoded}/${tab}`
+    navigate(path + location.hash, { replace: true })
+  }, [navigate, decodedId, location.hash])
 
   // Scroll to column anchor when navigating with a hash (e.g. #col-closer_id)
   useEffect(() => {
@@ -149,21 +177,73 @@ export function ModelPage() {
 
   // Lineage state
   const [depth, setDepth] = useState(2)
+  const [parentsDepth, setParentsDepth] = useState(2)
+  const [childrenDepth, setChildrenDepth] = useState(2)
   const [direction, setDirection] = useState<LineageDirection>('both')
+  const [layoutMode, setLayoutMode] = useState<'layered' | 'dag'>(() => {
+    const stored = typeof window !== 'undefined' ? window.localStorage.getItem('dg-lineage-layout') : null
+    return stored === 'layered' || stored === 'dag' ? stored : 'dag'
+  })
+  useEffect(() => {
+    window.localStorage.setItem('dg-lineage-layout', layoutMode)
+  }, [layoutMode])
+  const [showParentSiblings, setShowParentSiblings] = useState(false)
   const [lineageFullscreen, setLineageFullscreen] = useState(false)
   const [typeFilter, toggleType, setTypeMode, clearTypes] = useFilterState()
   const { selected: globalTagSelected, mode: globalTagMode, toggle: toggleTag, setMode: setTagMode, clear: clearTags } = useTagFilterStore()
   const tagFilter: FilterState = useMemo(() => ({ mode: globalTagMode, selected: new Set(globalTagSelected) }), [globalTagSelected, globalTagMode])
   const [folderFilter, toggleFolder, setFolderMode, clearFolders] = useFilterState()
+  const [layerFilter, toggleLayer, setLayerMode, clearLayers] = useFilterState()
+  const [modelFilter, toggleModel, setModelFilterMode, clearModels] = useFilterState()
 
   const rawSubgraph = useMemo(() => {
     if (!data || !decodedId) return { nodes: [], edges: [] }
-    return getSubgraph(decodedId, data.lineage.nodes, data.lineage.edges, depth, direction)
-  }, [data, decodedId, depth, direction])
+    return getSubgraph(
+      decodedId,
+      data.lineage.nodes,
+      data.lineage.edges,
+      depth,
+      direction,
+      parentsDepth,
+      childrenDepth,
+      showParentSiblings,
+    )
+  }, [data, decodedId, depth, direction, parentsDepth, childrenDepth, showParentSiblings])
 
   const filteredSubgraph = useMemo(() => {
-    return applyFilters(rawSubgraph.nodes, rawSubgraph.edges, typeFilter, tagFilter, folderFilter)
-  }, [rawSubgraph, typeFilter, tagFilter, folderFilter])
+    const base = applyFilters(
+      rawSubgraph.nodes,
+      rawSubgraph.edges,
+      typeFilter,
+      tagFilter,
+      folderFilter,
+      layerFilter,
+    )
+    if (modelFilter.selected.size === 0) return base
+    // Models filter: explicit per-node include/exclude.
+    // - The focal model is never excluded: losing it on its own page is
+    //   confusing, so an exclude-set containing the focal is ignored for it.
+    // - Exclude cascades: dropping a node also drops everything downstream
+    //   of it. Otherwise excluding an upstream parent leaves orphaned
+    //   children dangling without their context, which is rarely useful.
+    const effectiveExclude = new Set<string>()
+    if (modelFilter.mode === 'exclude') {
+      for (const id of modelFilter.selected) {
+        for (const d of getDescendants(id, rawSubgraph.edges)) effectiveExclude.add(d)
+      }
+      effectiveExclude.delete(decodedId)
+    }
+    const keep = base.nodes.filter(n => {
+      if (n.id === decodedId) return true
+      if (modelFilter.mode === 'include') return modelFilter.selected.has(n.id)
+      return !effectiveExclude.has(n.id)
+    })
+    const ids = new Set(keep.map(n => n.id))
+    return {
+      nodes: keep,
+      edges: base.edges.filter(e => ids.has(e.source) && ids.has(e.target)),
+    }
+  }, [rawSubgraph, typeFilter, tagFilter, folderFilter, layerFilter, modelFilter, decodedId])
 
   const columnLineageCandidateIds = useMemo(
     () => getColumnLineageCandidateIds(filteredSubgraph.nodes, data?.column_lineage),
@@ -174,13 +254,20 @@ export function ModelPage() {
     return computeSubgraphOptions(rawSubgraph.nodes)
   }, [rawSubgraph.nodes])
 
-  const hasActiveFilters = typeFilter.selected.size > 0 || tagFilter.selected.size > 0 || folderFilter.selected.size > 0
+  const hasActiveFilters =
+    typeFilter.selected.size > 0 ||
+    tagFilter.selected.size > 0 ||
+    folderFilter.selected.size > 0 ||
+    layerFilter.selected.size > 0 ||
+    modelFilter.selected.size > 0
 
   const clearAllFilters = useCallback(() => {
     clearTypes()
     clearTags()
     clearFolders()
-  }, [clearTypes, clearTags, clearFolders])
+    clearLayers()
+    clearModels()
+  }, [clearTypes, clearTags, clearFolders, clearLayers, clearModels])
 
   const modelColumnsMap = useMemo(() => {
     if (!data) return {}
@@ -213,9 +300,12 @@ export function ModelPage() {
     )
   }
 
+  const hasSampleData = Boolean(model.sample_data)
   const tabs: { key: Tab; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
+    { key: 'documentation', label: 'Documentation' },
     { key: 'sql', label: 'SQL' },
+    ...(hasSampleData ? [{ key: 'data' as const, label: 'Data' }] : []),
     { key: 'lineage', label: 'Lineage' },
     ...(erdEnabled ? [{ key: 'erd' as const, label: 'ERD' }] : []),
     { key: 'tests', label: `Tests (${model.test_results.length})` },
@@ -244,9 +334,6 @@ export function ModelPage() {
           <span>{formatFqn({ database: model.database, schema: model.schema })}</span>
           <span>{model.path}</span>
         </div>
-        {model.description && (
-          <Markdown content={model.description} className="mt-3 text-sm" />
-        )}
         {model.tags.length > 0 && (
           <div className="flex gap-1 mt-2">
             {model.tags.map(tag => (
@@ -282,7 +369,7 @@ export function ModelPage() {
       <div className="border-b border-[var(--border)] flex gap-0 mb-4">
         {tabs.map(tab => (
           <button key={tab.key}
-                  onClick={() => setActiveTab(tab.key)}
+                  onClick={() => selectTab(tab.key)}
                   className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors cursor-pointer
                     ${activeTab === tab.key
                       ? 'border-primary text-primary'
@@ -302,6 +389,16 @@ export function ModelPage() {
           modelId={decodedId}
           columnLineageData={data?.column_lineage}
         />
+      )}
+
+      {activeTab === 'documentation' && (
+        <div data-testid="model-documentation-tab">
+          {model.description ? (
+            <Markdown content={model.description} className="text-sm" />
+          ) : (
+            <p className="text-sm text-[var(--text-muted)]">No model description.</p>
+          )}
+        </div>
       )}
 
       {activeTab === 'sql' && (
@@ -332,6 +429,10 @@ export function ModelPage() {
         </div>
       )}
 
+      {activeTab === 'data' && hasSampleData && model.sample_data && (
+        <SampleDataTable data={model.sample_data} />
+      )}
+
       {activeTab === 'lineage' && (
         <div className={lineageFullscreen
           ? 'fixed inset-0 z-50 bg-[var(--bg)] flex flex-col'
@@ -346,10 +447,45 @@ export function ModelPage() {
                 min={1}
                 max={6}
                 value={depth}
-                onChange={e => setDepth(Number(e.target.value))}
+                onChange={e => {
+                  const v = Number(e.target.value)
+                  setDepth(v)
+                  setParentsDepth(v)
+                  setChildrenDepth(v)
+                }}
                 className="w-20 accent-[var(--primary)]"
               />
               <span className="text-xs font-medium w-4 text-center">{depth}</span>
+            </div>
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[var(--text-muted)]">Parents</label>
+              <input
+                type="range"
+                min={0}
+                max={6}
+                value={parentsDepth}
+                onChange={e => setParentsDepth(Number(e.target.value))}
+                className="w-20 accent-[var(--primary)]"
+              />
+              <span className="text-xs font-medium w-4 text-center">{parentsDepth}</span>
+            </div>
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-[var(--text-muted)]">Children</label>
+              <input
+                type="range"
+                min={0}
+                max={6}
+                value={childrenDepth}
+                onChange={e => setChildrenDepth(Number(e.target.value))}
+                className="w-20 accent-[var(--primary)]"
+              />
+              <span className="text-xs font-medium w-4 text-center">{childrenDepth}</span>
             </div>
 
             <div className="h-4 w-px bg-[var(--border)]" />
@@ -389,6 +525,42 @@ export function ModelPage() {
 
             <div className="h-4 w-px bg-[var(--border)]" />
 
+            {/* Layered/DAG layout toggle */}
+            <div className="flex items-center rounded overflow-hidden border border-[var(--border)]">
+              {(['layered', 'dag'] as const).map(m => (
+                <button
+                  key={m}
+                  onClick={() => setLayoutMode(m)}
+                  className={`px-2 py-0.5 text-xs cursor-pointer transition-colors
+                    ${layoutMode === m
+                      ? 'bg-primary text-white'
+                      : 'bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)]'
+                    }`}
+                  title={m === 'layered' ? 'Layered (semantic layers)' : 'Direct DAG (topological)'}
+                >
+                  {m === 'layered' ? 'Layered' : 'DAG'}
+                </button>
+              ))}
+            </div>
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+
+            {/* Parent outputs — surfaces siblings of focal (other children of its direct parents) */}
+            <label
+              className="flex items-center gap-1.5 text-xs text-[var(--text-muted)] cursor-pointer select-none"
+              title="Also show siblings — the other models fed by the focal's direct parents"
+            >
+              <input
+                type="checkbox"
+                checked={showParentSiblings}
+                onChange={e => setShowParentSiblings(e.target.checked)}
+                className="accent-[var(--primary)] cursor-pointer"
+              />
+              Parent outputs
+            </label>
+
+            <div className="h-4 w-px bg-[var(--border)]" />
+
             <FilterDropdown
               label="Types"
               options={subgraphOptions.types}
@@ -416,6 +588,36 @@ export function ModelPage() {
                 onSetMode={setFolderMode}
                 onClear={clearFolders}
                 displayLabel={(v) => v.split('/').pop() ?? v}
+              />
+            )}
+            {subgraphOptions.layers.length > 0 && (
+              <FilterDropdown
+                label="Layers"
+                options={subgraphOptions.layers}
+                filter={layerFilter}
+                onToggle={toggleLayer}
+                onSetMode={setLayerMode}
+                onClear={clearLayers}
+                displayLabel={(rank) =>
+                  (data?.lineage.layer_config ?? []).find(l => String(l.rank) === rank)?.name
+                  ?? `Layer ${rank}`
+                }
+                optionAccent={(rank) =>
+                  (data?.lineage.layer_config ?? []).find(l => String(l.rank) === rank)?.color
+                }
+              />
+            )}
+            {rawSubgraph.nodes.length > 1 && (
+              <FilterDropdown
+                label="Models"
+                options={rawSubgraph.nodes.map(n => n.id).sort()}
+                filter={modelFilter}
+                onToggle={toggleModel}
+                onSetMode={setModelFilterMode}
+                onClear={clearModels}
+                displayLabel={(id) =>
+                  rawSubgraph.nodes.find(n => n.id === id)?.name ?? id
+                }
               />
             )}
 
@@ -456,10 +658,14 @@ export function ModelPage() {
           {/* Graph area */}
           <div className={lineageFullscreen ? 'flex-1 relative min-h-0' : 'relative'} style={lineageFullscreen ? undefined : { height: 'calc(100vh - 380px)', minHeight: 400 }}>
             <LineageFlow
-              nodes={filteredSubgraph.nodes}
+              nodes={
+                layoutMode === 'dag'
+                  ? filteredSubgraph.nodes.map(n => ({ ...n, layer: undefined }))
+                  : filteredSubgraph.nodes
+              }
               edges={filteredSubgraph.edges}
               pinnedIds={new Set([decodedId])}
-              layerConfig={data?.lineage.layer_config}
+              layerConfig={layoutMode === 'dag' ? [] : data?.lineage.layer_config}
               onNavigateAway={() => setLineageFullscreen(false)}
               columnLineageData={data?.column_lineage}
               modelColumns={modelColumnsMap}

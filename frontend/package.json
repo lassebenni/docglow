@@ -16,7 +16,7 @@
     "test:e2e:headed": "playwright test --headed"
   },
   "dependencies": {
-    "@docglow/shared-types": "^0.1.0",
+    "@docglow/shared-types": "file:../packages/shared-types",
     "@types/dagre": "^0.7.54",
     "@types/prismjs": "^1.26.6",
     "@xyflow/react": "^12.10.1",

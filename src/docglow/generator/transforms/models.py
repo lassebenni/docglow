@@ -88,7 +88,12 @@ def transform_model(
         "path": node.original_file_path.replace("\\", "/"),
         "folder": _get_folder(node.original_file_path),
         "raw_sql": node.raw_code,
-        "compiled_sql": node.compiled_code or "",
+        # Analyses fall back to raw_code so the SQL tab isn't empty when dbt
+        # has only parsed (not compiled). Non-analyses preserve the upstream
+        # behaviour of returning "" when compiled_code is missing — their
+        # raw_code is Jinja that would be misleading to display unrendered.
+        "compiled_sql": node.compiled_code
+        or (node.raw_code if node.resource_type == "analysis" else ""),
         "columns": columns,
         "depends_on": [d for d in node.depends_on.nodes if not d.startswith("test.")],
         "referenced_by": referenced_by,
@@ -178,6 +183,8 @@ def _build_test_results(
         test_type = ""
         if test_node.test_metadata:
             test_type = test_node.test_metadata.name
+        elif test_node.resource_type == "unit_test":
+            test_type = "unit_test"
 
         run_result = run_results_by_id.get(test_node.unique_id)
         status = "not_run"

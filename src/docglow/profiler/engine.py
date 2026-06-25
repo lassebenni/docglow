@@ -136,16 +136,39 @@ def profile_models(
 
                 column_specs = build_column_specs(columns)
 
-                # Build and execute stats query
-                stats_sql = build_stats_query(
-                    schema,
-                    table_name,
-                    column_specs,
-                    adapter=adapter,
-                    sample_size=sample_size,
-                )
-
                 try:
+                    # Postgres: skip manifest columns missing from
+                    # information_schema (renamed/dropped columns would
+                    # otherwise abort the whole stats query and poison the
+                    # transaction).  Run INSIDE the per-model try so a
+                    # transient probe failure logs+continues like the stats
+                    # path, instead of escaping and killing the whole
+                    # profiling pass.
+                    if adapter in ("postgres", "postgresql") and schema and table_name:
+                        col_result = conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns "
+                                "WHERE table_schema = :schema AND table_name = :table"
+                            ),
+                            {"schema": schema, "table": table_name},
+                        )
+                        existing_cols = {r[0] for r in col_result}
+                        column_specs = [c for c in column_specs if c.name in existing_cols]
+                        if not column_specs:
+                            logger.warning(
+                                "No matching columns in %s.%s — skipping", schema, table_name
+                            )
+                            continue
+
+                    # Build and execute stats query
+                    stats_sql = build_stats_query(
+                        schema,
+                        table_name,
+                        column_specs,
+                        adapter=adapter,
+                        sample_size=sample_size,
+                    )
+
                     logger.debug(
                         "Profiling %s.%s (%d columns)",
                         schema,
@@ -223,6 +246,13 @@ def profile_models(
 
                 except Exception as e:
                     logger.warning("Failed to profile %s: %s", model_id, e)
+                    # Postgres aborts the transaction on any error; rollback
+                    # before moving to the next model so subsequent queries
+                    # don't fail with "current transaction is aborted".
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
                     continue
 
     finally:

@@ -1,5 +1,5 @@
 export type TestStatus = 'pass' | 'fail' | 'warn' | 'error' | 'not_run' | 'none'
-export type ResourceType = 'model' | 'source' | 'seed' | 'snapshot' | 'exposure' | 'metric'
+export type ResourceType = 'model' | 'analysis' | 'source' | 'seed' | 'snapshot' | 'exposure' | 'metric'
 
 export function statusColor(status: TestStatus): string {
   switch (status) {
@@ -28,6 +28,7 @@ export function statusBgColor(status: TestStatus): string {
 export function resourceColor(type: ResourceType): string {
   switch (type) {
     case 'model': return 'text-primary'
+    case 'analysis': return 'text-secondary'
     case 'source': return 'text-success'
     case 'exposure': return 'text-warning'
     case 'seed': return 'text-neutral'

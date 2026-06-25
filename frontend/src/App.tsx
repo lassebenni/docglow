@@ -66,6 +66,9 @@ function App() {
         <Route element={<MainLayout />}>
           <Route index element={<Overview />} />
           <Route path="/model/:id" element={<ModelPage />} />
+          {/* Deep-linkable tab: /#/model/<id>/<tab>  — falls back to 'columns'
+              for unknown tabs (handled in ModelPage). */}
+          <Route path="/model/:id/:tab" element={<ModelPage />} />
           <Route path="/source/:id" element={<SourcePage />} />
           <Route path="/erd" element={<ErdPage />} />
           <Route path="/lineage" element={<LineagePage />} />
