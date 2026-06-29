@@ -250,6 +250,13 @@ declare module "@docglow/shared-types" {
   interface ColumnProfile {
     readonly temporal_distribution?: TemporalBin[] | null;
   }
+
+  // Exposure fields added after v0.1.0; remove once shared-types is republished.
+  interface DocglowExposure {
+    readonly url: string;
+    readonly label: string;
+    readonly maturity: string;
+  }
 }
 
 export interface TemporalBin {

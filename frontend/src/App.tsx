@@ -5,6 +5,7 @@ import { SearchModal } from './components/search/SearchModal'
 import { Overview } from './pages/Overview'
 import { ModelPage } from './pages/ModelPage'
 import { SourcePage } from './pages/SourcePage'
+import { ExposurePage } from './pages/ExposurePage'
 import { ErdPage } from './pages/ErdPage'
 import { LineagePage } from './pages/LineagePage'
 import { HealthPage } from './pages/HealthPage'
@@ -70,6 +71,7 @@ function App() {
               for unknown tabs (handled in ModelPage). */}
           <Route path="/model/:id/:tab" element={<ModelPage />} />
           <Route path="/source/:id" element={<SourcePage />} />
+          <Route path="/exposure/:id" element={<ExposurePage />} />
           <Route path="/erd" element={<ErdPage />} />
           <Route path="/lineage" element={<LineagePage />} />
           <Route path="/health" element={<HealthPage />} />
