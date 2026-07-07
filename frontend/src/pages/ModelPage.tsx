@@ -3,6 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { useTagFilterStore } from '../stores/tagFilterStore'
 import { ColumnTable } from '../components/models/ColumnTable'
+import { CustomDocFrame } from '../components/models/CustomDocFrame'
 import { SampleDataTable } from '../components/models/SampleDataTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
@@ -113,14 +114,21 @@ function DependencyList({
   )
 }
 
-type Tab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
+type BuiltInTab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
 
-const VALID_TABS = [
+const BUILT_IN_TABS = [
   'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests',
-] as const satisfies readonly Tab[]
+] as const satisfies readonly BuiltInTab[]
 
-function parseTab(raw: string | undefined): Tab {
-  return (VALID_TABS as readonly string[]).includes(raw ?? '') ? (raw as Tab) : 'columns'
+function isBuiltInTab(tab: string): tab is BuiltInTab {
+  return (BUILT_IN_TABS as readonly string[]).includes(tab)
+}
+
+function parseTab(raw: string | undefined, customSlugs: readonly string[]): string {
+  const candidate = raw ?? ''
+  if (isBuiltInTab(candidate)) return candidate
+  if (customSlugs.includes(candidate)) return candidate
+  return 'columns'
 }
 
 export function ModelPage() {
@@ -128,24 +136,27 @@ export function ModelPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const { data, getModel, getColumnLineage } = useProjectStore()
-  const [activeTab, setActiveTab] = useState<Tab>(() => parseTab(tabParam))
+  const [activeTab, setActiveTab] = useState<string>(() => parseTab(tabParam, []))
   const [sqlMode, setSqlMode] = useState<'compiled' | 'raw'>('compiled')
 
   const decodedId = id ? decodeURIComponent(id) : ''
   const model = decodedId ? getModel(decodedId) : undefined
 
+  const customDocs = model?.custom_docs ?? []
+  const customSlugs = useMemo(() => customDocs.map(doc => doc.slug), [customDocs])
+
   // URL → state: keep activeTab in sync with the :tab segment so browser
   // back/forward and copy-pasted deep links land on the right tab.
   useEffect(() => {
-    setActiveTab(parseTab(tabParam))
-  }, [tabParam])
+    setActiveTab(parseTab(tabParam, customSlugs))
+  }, [tabParam, customSlugs])
 
   // State → URL: update the path on every tab click so the address bar is
   // shareable.  Uses replace so a user clicking through five tabs doesn't
   // pile five history entries onto the back button.  `columns` is the
   // canonical "no tab segment" URL, matching the existing column-anchor
   // links and any external bookmarks that predate this route.
-  const selectTab = useCallback((tab: Tab) => {
+  const selectTab = useCallback((tab: string) => {
     setActiveTab(tab)
     if (!decodedId) return
     const encoded = encodeURIComponent(decodedId)
@@ -301,15 +312,17 @@ export function ModelPage() {
   }
 
   const hasSampleData = Boolean(model.sample_data)
-  const tabs: { key: Tab; label: string }[] = [
+  const tabs: { key: string; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'documentation', label: 'Documentation' },
+    ...customDocs.map(doc => ({ key: doc.slug, label: doc.label })),
     { key: 'sql', label: 'SQL' },
     ...(hasSampleData ? [{ key: 'data' as const, label: 'Data' }] : []),
     { key: 'lineage', label: 'Lineage' },
     ...(erdEnabled ? [{ key: 'erd' as const, label: 'ERD' }] : []),
     { key: 'tests', label: `Tests (${model.test_results.length})` },
   ]
+  const activeCustomDoc = customDocs.find(doc => doc.slug === activeTab)
 
   const overallTestStatus = (() => {
     if (model.test_results.length === 0) return 'none' as const
@@ -399,6 +412,10 @@ export function ModelPage() {
             <p className="text-sm text-[var(--text-muted)]">No model description.</p>
           )}
         </div>
+      )}
+
+      {activeCustomDoc && (
+        <CustomDocFrame doc={activeCustomDoc} />
       )}
 
       {activeTab === 'sql' && (

@@ -100,6 +100,15 @@ from docglow.cloud_hint import maybe_show_hint
     "generate the JSON out-of-band (e.g. dbt + SQL → JSON dump tool). See "
     "docglow.generator.sample_data for the expected payload shape.",
 )
+@click.option(
+    "--docs-dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Directory of per-model HTML concept docs. Convention: "
+    "<docs-dir>/<model_name>/<model_name>.html or <docs-dir>/<model_name>.html. "
+    "Also settable via docs_dir in docglow.yml. Per-model paths can be declared "
+    "in meta.docglow.docs (see docglow.generator.custom_docs).",
+)
 def generate(
     project_dir: Path,
     target_dir: Path | None,
@@ -127,6 +136,7 @@ def generate(
     fail_under: float | None,
     enable_erd: bool,
     sample_data_dir: Path | None,
+    docs_dir: Path | None,
 ) -> None:
     """Generate the documentation site."""
     from docglow.cli import _parse_connection, _setup_logging, console
@@ -151,6 +161,8 @@ def generate(
         slim = True
     if not enable_erd and config.enable_erd:
         enable_erd = True
+    if docs_dir is None and config.docs_dir is not None:
+        docs_dir = config.docs_dir
 
     # Resolve column lineage: on by default, off via --skip-column-lineage or config
     column_lineage = not skip_column_lineage
@@ -232,6 +244,7 @@ def generate(
                 column_lineage_workers=workers,
                 enable_erd=enable_erd,
                 sample_data_dir=sample_data_dir,
+                docs_dir=docs_dir,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")
             if static:

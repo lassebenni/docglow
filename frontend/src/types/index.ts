@@ -15,6 +15,7 @@ export type {
   ColumnInsights,
   ColumnProfile,
   ColumnTest,
+  CustomDoc,
   DocglowColumn,
   DocglowExposure,
   DocglowMetric,

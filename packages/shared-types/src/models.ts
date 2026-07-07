@@ -137,6 +137,23 @@ export interface DocglowModel {
    * headers, substring search, and a horizontal-scroll container.
    */
   readonly sample_data?: SampleData;
+  /**
+   * Static HTML concept docs for this model. Attached at site-generation time
+   * from ``meta.docglow.docs`` and/or convention files under ``docs_dir``.
+   * Each entry is rendered as a tab with an iframe pointing at the copied
+   * HTML asset in the generated site.
+   */
+  readonly custom_docs?: readonly CustomDoc[];
+}
+
+/** A static HTML document tab attached to a model at generate time. */
+export interface CustomDoc {
+  /** URL-safe tab slug used in /model/:id/:slug routes. */
+  readonly slug: string;
+  /** Human-readable tab label. */
+  readonly label: string;
+  /** Site-relative path to the copied HTML file (e.g. docs/my_model/concept.html). */
+  readonly url: string;
 }
 
 /** Pre-dumped warehouse sample attached to a model at site-generation time. */
