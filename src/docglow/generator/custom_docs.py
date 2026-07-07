@@ -7,9 +7,9 @@ Two discovery mechanisms (both optional, combinable):
        meta:
          docglow:
            docs:
-             - label: Concept
+             - label: Guide
                file: docs/concepts/my_model/my_model.html
-               slug: concept  # optional; derived from label when omitted
+               slug: guide  # optional; derived from label when omitted
 
 2. **Convention scan** — when ``docs_dir`` is set, look for::
 
@@ -84,9 +84,9 @@ def _convention_candidates(docs_dir: Path, model_name: str) -> list[tuple[str, P
     flat = docs_dir / f"{model_name}.html"
     candidates: list[tuple[str, Path]] = []
     if nested.is_file():
-        candidates.append(("concept", nested))
+        candidates.append(("guide", nested))
     if flat.is_file() and flat != nested:
-        candidates.append(("concept", flat))
+        candidates.append(("guide", flat))
     return candidates
 
 
@@ -176,7 +176,7 @@ def attach_custom_docs(
                         e,
                     )
                     continue
-                entries.append({"slug": slug, "label": "Concept", "url": url})
+                entries.append({"slug": slug, "label": "Guide", "url": url})
                 seen_slugs.add(slug)
 
         if entries:

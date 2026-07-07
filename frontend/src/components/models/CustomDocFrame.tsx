@@ -9,14 +9,14 @@ export function CustomDocFrame({ doc }: CustomDocFrameProps) {
     <div
       data-testid={`custom-doc-${doc.slug}`}
       className="rounded border border-[var(--border)] overflow-hidden bg-[var(--bg-surface)]"
-      style={{ minHeight: '70vh' }}
     >
       <iframe
         title={doc.label}
         src={doc.url}
         className="w-full border-0"
-        style={{ minHeight: '70vh' }}
-        sandbox="allow-same-origin"
+        style={{ minHeight: '85vh' }}
+        // Cheatsheets use inline JS, Mermaid, and ECharts — scripts must be allowed.
+        sandbox="allow-scripts allow-same-origin"
       />
     </div>
   )

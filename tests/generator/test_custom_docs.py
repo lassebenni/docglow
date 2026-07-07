@@ -7,7 +7,7 @@ import logging
 from docglow.generator.custom_docs import attach_custom_docs
 
 
-def _write_html(path, content: str = "<html><body><h1>Concept</h1></body></html>") -> None:
+def _write_html(path, content: str = "<html><body><h1>Guide</h1></body></html>") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
@@ -24,7 +24,7 @@ def test_attach_from_meta(tmp_path):
             "name": "my_model",
             "meta": {
                 "docglow": {
-                    "docs": [{"label": "Concept", "file": "docs/my_model.html", "slug": "concept"}]
+                    "docs": [{"label": "Guide", "file": "docs/my_model.html", "slug": "guide"}]
                 }
             },
         }
@@ -33,9 +33,9 @@ def test_attach_from_meta(tmp_path):
     attach_custom_docs(models, project_dir=project, output_dir=output)
 
     assert models["model.x.my_model"]["custom_docs"] == [
-        {"slug": "concept", "label": "Concept", "url": "docs/my_model/concept.html"}
+        {"slug": "guide", "label": "Guide", "url": "docs/my_model/guide.html"}
     ]
-    assert (output / "docs" / "my_model" / "concept.html").read_text(encoding="utf-8").startswith(
+    assert (output / "docs" / "my_model" / "guide.html").read_text(encoding="utf-8").startswith(
         "<html>"
     )
 
@@ -52,10 +52,10 @@ def test_attach_from_convention_nested(tmp_path):
     attach_custom_docs(models, project_dir=project, output_dir=output, docs_dir=docs_dir)
 
     assert len(models["model.x.orders"]["custom_docs"]) == 1
-    assert models["model.x.orders"]["custom_docs"][0]["slug"] == "concept"
+    assert models["model.x.orders"]["custom_docs"][0]["slug"] == "guide"
 
 
-def test_meta_and_convention_with_different_slugs(tmp_path):
+def test_meta_takes_precedence_over_convention(tmp_path):
     project = tmp_path / "project"
     project.mkdir()
     docs_dir = project / "docs" / "concepts"
@@ -77,11 +77,9 @@ def test_meta_and_convention_with_different_slugs(tmp_path):
     attach_custom_docs(models, project_dir=project, output_dir=output, docs_dir=docs_dir)
 
     docs = models["model.x.orders"]["custom_docs"]
-    assert len(docs) == 2
-    slugs = {doc["slug"] for doc in docs}
-    assert slugs == {"guide", "concept"}
-    guide_path = output / "docs" / "orders" / "guide.html"
-    assert guide_path.read_text(encoding="utf-8") == "<html>meta</html>"
+    assert len(docs) == 1
+    assert docs[0]["slug"] == "guide"
+    assert (output / "docs" / "orders" / "guide.html").read_text(encoding="utf-8") == "<html>meta</html>"
 
 
 def test_skips_missing_file(tmp_path, caplog):
