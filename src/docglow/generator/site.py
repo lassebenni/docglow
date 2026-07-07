@@ -138,7 +138,7 @@ def _run_profiling(
     from docglow.profiler.engine import apply_profiles, profile_models
 
     logger.info("Running column profiling...")
-    profiles = profile_models(
+    profiles, model_meta = profile_models(
         docglow_data["models"],
         adapter=adapter,
         connection_params=connection_params,
@@ -147,5 +147,10 @@ def _run_profiling(
     )
 
     if profiles:
-        docglow_data["models"] = apply_profiles(docglow_data["models"], profiles)
+        docglow_data["models"] = apply_profiles(
+            docglow_data["models"],
+            profiles,
+            model_meta=model_meta,
+            sample_size=sample_size,
+        )
         docglow_data["metadata"]["profiling_enabled"] = True

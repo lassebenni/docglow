@@ -14,11 +14,13 @@ from docglow.profiler.cache import (
 from docglow.profiler.queries import (
     ColumnSpec,
     build_column_specs,
+    build_row_count_query,
     build_stats_query,
     build_top_values_query,
     classify_column,
 )
 from docglow.profiler.stats import parse_stats_row, parse_top_values_rows
+from docglow.profiler.engine import build_profiling_meta
 
 
 class TestColumnClassification:
@@ -89,6 +91,11 @@ class TestQueryGeneration:
         cols = [ColumnSpec("id", "INTEGER", "numeric")]
         sql = build_stats_query("public", "t", cols, adapter="postgres", sample_size=5000)
         assert "LIMIT 5000" in sql
+
+    def test_row_count_query(self) -> None:
+        sql = build_row_count_query("main", "orders", adapter="duckdb")
+        assert "COUNT(*) AS _total_row_count" in sql
+        assert '"main"."orders"' in sql
 
     def test_stats_query_postgres_median(self) -> None:
         cols = [ColumnSpec("price", "NUMERIC", "numeric")]
@@ -180,6 +187,23 @@ class TestStatsParser:
         result = parse_stats_row(row, cols)
         assert result["id"]["null_rate"] == 0.0
         assert result["id"]["is_unique"] is False
+
+
+class TestProfilingMeta:
+    def test_full_table_not_sampled(self) -> None:
+        profiles = {"id": {"row_count": 1000}}
+        meta = build_profiling_meta(profiles, total_row_count=1000, sample_size=10000)
+        assert meta["total_row_count"] == 1000
+        assert meta["profiled_row_count"] == 1000
+        assert meta["is_sampled"] is False
+
+    def test_sampled_table(self) -> None:
+        profiles = {"id": {"row_count": 10000}}
+        meta = build_profiling_meta(profiles, total_row_count=14200, sample_size=10000)
+        assert meta["total_row_count"] == 14200
+        assert meta["profiled_row_count"] == 10000
+        assert meta["is_sampled"] is True
+        assert meta["sample_size"] == 10000
 
 
 class TestCache:

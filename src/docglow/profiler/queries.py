@@ -134,6 +134,18 @@ def _quote(name: str, adapter: str) -> str:
     return f'"{escaped}"'
 
 
+def build_row_count_query(
+    schema: str,
+    table_name: str,
+    adapter: str = "duckdb",
+) -> str:
+    """Build a query that returns the full table row count."""
+    table_ref = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
+    if adapter == "bigquery":
+        table_ref = f"`{schema}`.`{table_name}`" if schema else f"`{table_name}`"
+    return f"SELECT COUNT(*) AS _total_row_count FROM {table_ref};"
+
+
 def build_stats_query(
     schema: str,
     table_name: str,

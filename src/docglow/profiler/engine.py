@@ -8,6 +8,7 @@ from typing import Any
 
 from docglow.profiler.cache import (
     get_cached_profiles,
+    get_cached_profiling_meta,
     is_cached,
     load_cache,
     save_cache,
@@ -16,6 +17,7 @@ from docglow.profiler.cache import (
 from docglow.profiler.queries import (
     build_column_specs,
     build_histogram_query,
+    build_row_count_query,
     build_stats_query,
     build_top_values_query,
     build_temporal_distribution_query,
@@ -65,6 +67,50 @@ def _get_connection_url(adapter: str, connection_params: dict[str, Any]) -> str:
     raise ProfilerError(f"Unsupported adapter: {adapter}")
 
 
+def _profiled_row_count(profiles: dict[str, dict[str, Any]]) -> int:
+    """Return the row count used for column statistics."""
+    return max((int(p.get("row_count", 0)) for p in profiles.values()), default=0)
+
+
+def build_profiling_meta(
+    profiles: dict[str, dict[str, Any]],
+    *,
+    total_row_count: int | None,
+    sample_size: int | None,
+) -> dict[str, Any]:
+    """Build model-level profiling metadata for the frontend."""
+    profiled_row_count = _profiled_row_count(profiles)
+    total = total_row_count if total_row_count is not None else profiled_row_count
+    is_sampled = sample_size is not None and profiled_row_count < total
+    return {
+        "total_row_count": total,
+        "profiled_row_count": profiled_row_count,
+        "sample_size": sample_size,
+        "is_sampled": is_sampled,
+    }
+
+
+def _fetch_total_row_count(
+    conn: Any,
+    schema: str,
+    table_name: str,
+    adapter: str,
+) -> int | None:
+    """Query the warehouse for the full table row count."""
+    from sqlalchemy import text
+
+    count_sql = build_row_count_query(schema, table_name, adapter=adapter)
+    try:
+        result = conn.execute(text(count_sql))
+        row = result.mappings().fetchone()
+        if row is None:
+            return None
+        return int(row.get("_total_row_count", 0))
+    except Exception as e:
+        logger.debug("Row count query failed for %s.%s: %s", schema, table_name, e)
+        return None
+
+
 def profile_models(
     models: dict[str, dict[str, Any]],
     adapter: str,
@@ -74,8 +120,8 @@ def profile_models(
     cache_dir: Path | None = None,
     use_cache: bool = True,
     top_values_threshold: int = 50,
-) -> dict[str, dict[str, dict[str, Any]]]:
-    """Profile all models and return per-model, per-column profile data.
+) -> tuple[dict[str, dict[str, dict[str, Any]]], dict[str, dict[str, Any]]]:
+    """Profile all models and return per-model column profiles and metadata.
 
     Args:
         models: Dict of model_id -> model data dict.
@@ -87,7 +133,9 @@ def profile_models(
         top_values_threshold: Max distinct values to collect top_values for.
 
     Returns:
-        Dict mapping model_id -> column_name -> profile dict.
+        Tuple of (column profiles dict, model profiling metadata dict).
+        Column profiles map model_id -> column_name -> profile dict.
+        Model metadata maps model_id -> profiling meta dict.
     """
     try:
         from sqlalchemy import create_engine, text
@@ -104,6 +152,7 @@ def profile_models(
     engine = create_engine(url)
 
     all_profiles: dict[str, dict[str, dict[str, Any]]] = {}
+    all_model_meta: dict[str, dict[str, Any]] = {}
     profiled_count = 0
     cached_count = 0
 
@@ -124,6 +173,15 @@ def profile_models(
                     cached_profiles = get_cached_profiles(cache, model_id)
                     if cached_profiles is not None:
                         all_profiles[model_id] = cached_profiles
+                        cached_meta = get_cached_profiling_meta(cache, model_id)
+                        if cached_meta is not None:
+                            all_model_meta[model_id] = cached_meta
+                        else:
+                            all_model_meta[model_id] = build_profiling_meta(
+                                cached_profiles,
+                                total_row_count=row_count,
+                                sample_size=sample_size,
+                            )
                         cached_count += 1
                         continue
 
@@ -161,6 +219,14 @@ def profile_models(
                             )
                             continue
 
+                    total_row_count = row_count
+                    if sample_size is not None or total_row_count is None:
+                        fetched_total = _fetch_total_row_count(
+                            conn, schema, table_name, adapter
+                        )
+                        if fetched_total is not None:
+                            total_row_count = fetched_total
+
                     # Build and execute stats query
                     stats_sql = build_stats_query(
                         schema,
@@ -183,6 +249,11 @@ def profile_models(
                         continue
 
                     profiles = parse_stats_row(dict(row), column_specs)
+                    profiling_meta = build_profiling_meta(
+                        profiles,
+                        total_row_count=total_row_count,
+                        sample_size=sample_size,
+                    )
 
                     # Fetch top values for low-cardinality columns
                     for col_spec in column_specs:
@@ -267,11 +338,19 @@ def profile_models(
                                 )
 
                     all_profiles[model_id] = profiles
+                    all_model_meta[model_id] = profiling_meta
                     profiled_count += 1
 
                     # Update cache
                     if cache_dir and use_cache:
-                        cache = update_cache(cache, model_id, columns, row_count, profiles)
+                        cache = update_cache(
+                            cache,
+                            model_id,
+                            columns,
+                            row_count,
+                            profiles,
+                            profiling=profiling_meta,
+                        )
 
                 except Exception as e:
                     logger.warning("Failed to profile %s: %s", model_id, e)
@@ -297,12 +376,15 @@ def profile_models(
         cached_count,
         profiled_count + cached_count,
     )
-    return all_profiles
+    return all_profiles, all_model_meta
 
 
 def apply_profiles(
     models: dict[str, dict[str, Any]],
     profiles: dict[str, dict[str, dict[str, Any]]],
+    *,
+    model_meta: dict[str, dict[str, Any]] | None = None,
+    sample_size: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return new models dict with profile data applied to columns.
 
@@ -318,6 +400,15 @@ def apply_profiles(
         new_columns = [
             {**col, "profile": model_profiles.get(col["name"])} for col in model.get("columns", [])
         ]
-        result[model_id] = {**model, "columns": new_columns}
+        profiling = (model_meta or {}).get(model_id)
+        if profiling is None:
+            catalog_stats = model.get("catalog_stats", {})
+            catalog_row_count = catalog_stats.get("row_count") if catalog_stats else None
+            profiling = build_profiling_meta(
+                model_profiles,
+                total_row_count=catalog_row_count,
+                sample_size=sample_size,
+            )
+        result[model_id] = {**model, "columns": new_columns, "profiling": profiling}
 
     return result

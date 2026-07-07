@@ -114,26 +114,42 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
   const summaryMetrics = useMemo(() => {
     const totalCols = model.columns.length
     const profiledCols = profiledColumns.length
-    
+
+    let profiledRowCount = 0
     let totalNullCount = 0
-    let totalRows = 0
-    
+
     profiledColumns.forEach(c => {
       if (c.profile) {
         totalNullCount += c.profile.null_count
-        totalRows = Math.max(totalRows, c.profile.row_count)
+        profiledRowCount = Math.max(profiledRowCount, c.profile.row_count)
       }
     })
 
-    const avgNullRate = profiledCols > 0 ? (totalNullCount / (totalRows * profiledCols)) : 0
+    const profiling = model.profiling
+    const catalogRowCount = model.catalog_stats.row_count
+    const totalRowCount =
+      profiling?.total_row_count ??
+      catalogRowCount ??
+      (profiledRowCount > 0 ? profiledRowCount : null)
+    const isSampled =
+      profiling?.is_sampled ??
+      (totalRowCount != null && profiledRowCount > 0 && profiledRowCount < totalRowCount)
+    const sampledRowCount = profiling?.profiled_row_count ?? profiledRowCount
+
+    const avgNullRate =
+      profiledCols > 0 && profiledRowCount > 0
+        ? totalNullCount / (profiledRowCount * profiledCols)
+        : 0
 
     return {
       totalCols,
       profiledCols,
       avgNullRate,
-      rowCount: model.catalog_stats.row_count ?? totalRows
+      totalRowCount,
+      profiledRowCount: sampledRowCount,
+      isSampled,
     }
-  }, [model.columns, profiledColumns, model.catalog_stats])
+  }, [model.columns, profiledColumns, model.catalog_stats, model.profiling])
 
   // Compute temporal gaps (contiguous missing dates)
   const temporalGaps = useMemo(() => {
@@ -201,11 +217,75 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
 
   return (
     <div className="space-y-6">
+      {summaryMetrics.isSampled && summaryMetrics.profiledRowCount > 0 && (
+        <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-[var(--text)]">
+          <span className="mt-0.5 shrink-0 font-semibold text-warning">Sampled</span>
+          <p>
+            Column statistics below are based on{' '}
+            <span className="font-semibold">{formatNumber(summaryMetrics.profiledRowCount)}</span>{' '}
+            sampled rows
+            {summaryMetrics.totalRowCount != null && (
+              <>
+                {' '}of{' '}
+                <span className="font-semibold">{formatNumber(summaryMetrics.totalRowCount)}</span>{' '}
+                total
+              </>
+            )}
+            {model.profiling?.sample_size != null && (
+              <>
+                {' '}(sample limit: {formatNumber(model.profiling.sample_size)})
+              </>
+            )}
+            .
+          </p>
+        </div>
+      )}
+
       {/* Overview Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="p-4 bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
           <div className="text-xs text-[var(--text-muted)] font-medium mb-1">Total Rows</div>
-          <div className="text-2xl font-bold">{summaryMetrics.rowCount ? formatNumber(summaryMetrics.rowCount) : '—'}</div>
+          <div className="text-2xl font-bold">
+            {summaryMetrics.totalRowCount != null
+              ? formatNumber(summaryMetrics.totalRowCount)
+              : '—'}
+          </div>
+          {summaryMetrics.profiledCols > 0 && summaryMetrics.profiledRowCount > 0 && (
+            <div
+              className={`text-xs mt-1 ${
+                summaryMetrics.isSampled ? 'text-warning' : 'text-[var(--text-muted)]'
+              }`}
+            >
+              {summaryMetrics.isSampled ? (
+                <>
+                  Sampled · column stats from{' '}
+                  <span className="font-semibold">
+                    {formatNumber(summaryMetrics.profiledRowCount)}
+                  </span>
+                  {summaryMetrics.totalRowCount != null && (
+                    <>
+                      {' '}of{' '}
+                      <span className="font-semibold">
+                        {formatNumber(summaryMetrics.totalRowCount)}
+                      </span>
+                    </>
+                  )}{' '}
+                  rows
+                  {model.profiling?.sample_size != null && (
+                    <> (limit {formatNumber(model.profiling.sample_size)})</>
+                  )}
+                </>
+              ) : (
+                <>
+                  Full table · all{' '}
+                  <span className="font-semibold">
+                    {formatNumber(summaryMetrics.totalRowCount ?? summaryMetrics.profiledRowCount)}
+                  </span>{' '}
+                  rows profiled
+                </>
+              )}
+            </div>
+          )}
           {model.catalog_stats.bytes && (
             <div className="text-xs text-[var(--text-muted)] mt-1">
               {(model.catalog_stats.bytes / (1024 * 1024)).toFixed(1)} MB on disk
@@ -222,7 +302,11 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
         <div className="p-4 bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
           <div className="text-xs text-[var(--text-muted)] font-medium mb-1">Avg. Null Rate</div>
           <div className="text-2xl font-bold">{formatPercent(summaryMetrics.avgNullRate)}</div>
-          <div className="text-xs text-[var(--text-muted)] mt-1">Across all profiled columns</div>
+          <div className="text-xs text-[var(--text-muted)] mt-1">
+            {summaryMetrics.isSampled
+              ? `Across profiled columns (${formatNumber(summaryMetrics.profiledRowCount)} sampled rows)`
+              : 'Across all profiled columns'}
+          </div>
         </div>
         <div className="p-4 bg-[var(--bg-surface)] border border-[var(--border)] rounded-lg">
           <div className="text-xs text-[var(--text-muted)] font-medium mb-1">Temporal Columns</div>
@@ -236,7 +320,14 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
       {/* Date Timeline & Gap Analysis */}
       {dateColumns.length > 0 && (
         <div className="space-y-4">
-          <h2 className="text-lg font-semibold border-b border-[var(--border)] pb-2">Temporal Record Gaps</h2>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between border-b border-[var(--border)] pb-2">
+            <h2 className="text-lg font-semibold">Temporal Record Gaps</h2>
+            {summaryMetrics.isSampled && (
+              <p className="text-xs text-[var(--text-muted)]">
+                Based on full table scan (not sampled)
+              </p>
+            )}
+          </div>
           <div className="grid grid-cols-1 gap-6">
             {dateColumns.map(col => {
               const dist = col.profile!.temporal_distribution!

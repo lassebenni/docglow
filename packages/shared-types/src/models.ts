@@ -94,6 +94,18 @@ export interface CatalogStats {
   readonly has_stats: boolean;
 }
 
+/** Model-level profiling metadata attached when column profiling is enabled. */
+export interface ProfilingMeta {
+  /** Full table row count from catalog stats or a warehouse COUNT(*) query. */
+  readonly total_row_count: number;
+  /** Rows actually scanned for column statistics (may be a sample). */
+  readonly profiled_row_count: number;
+  /** Configured sample limit, when sampling was requested. */
+  readonly sample_size: number | null;
+  /** True when column stats were computed on fewer rows than the full table. */
+  readonly is_sampled: boolean;
+}
+
 // -- Models ------------------------------------------------------------------
 
 export interface DocglowModel {
@@ -143,6 +155,11 @@ export interface DocglowModel {
    * headers, substring search, and a horizontal-scroll container.
    */
   readonly sample_data?: SampleData;
+  /**
+   * Profiling metadata for the Statistics tab. Present when column profiling
+   * was run during site generation.
+   */
+  readonly profiling?: ProfilingMeta;
 }
 
 /** Pre-dumped warehouse sample attached to a model at site-generation time. */
