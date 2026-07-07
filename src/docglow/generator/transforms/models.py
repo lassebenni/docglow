@@ -160,7 +160,7 @@ def _merge_columns(
             {
                 "name": col_name,
                 "description": manifest_col.description if manifest_col else "",
-                "data_type": catalog_col.type if catalog_col else "",
+                "data_type": catalog_col.type if catalog_col else (manifest_col.data_type or "" if manifest_col else ""),
                 "meta": dict(manifest_col.meta) if manifest_col else {},
                 "tags": list(manifest_col.tags) if manifest_col else [],
                 "tests": column_tests.get(col_name.lower(), []),

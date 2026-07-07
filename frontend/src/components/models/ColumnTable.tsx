@@ -98,7 +98,7 @@ export function applyBadgeAbbreviation(s: string, max: number, strategy: Lineage
   }
 }
 
-function NullBar({ rate }: { rate: number }) {
+export function NullBar({ rate }: { rate: number }) {
   const color = rate > 0.5 ? 'bg-danger' : rate > 0.1 ? 'bg-warning' : 'bg-success'
   return (
     <div className="flex items-center gap-1.5" title={`${(rate * 100).toFixed(1)}% null`}>
@@ -110,7 +110,7 @@ function NullBar({ rate }: { rate: number }) {
   )
 }
 
-function TopValuesChart({ values, rowCount }: { values: TopValue[]; rowCount: number }) {
+export function TopValuesChart({ values, rowCount }: { values: TopValue[]; rowCount: number }) {
   const maxFreq = Math.max(...values.map(v => v.frequency))
   return (
     <div className="space-y-0.5">
@@ -135,24 +135,30 @@ function TopValuesChart({ values, rowCount }: { values: TopValue[]; rowCount: nu
   )
 }
 
-function Histogram({ bins }: { bins: HistogramBin[] }) {
+export function Histogram({ bins, height = 32 }: { bins: HistogramBin[]; height?: number }) {
   const maxCount = Math.max(...bins.map(b => b.count))
   if (maxCount === 0) return null
-  const barHeight = 32
+  const barHeight = height
 
   return (
-    <div className="flex items-end gap-px" style={{ height: barHeight }} title="Value distribution">
-      {bins.map((bin, i) => {
-        const h = maxCount > 0 ? (bin.count / maxCount) * barHeight : 0
-        return (
-          <div
-            key={i}
-            className="flex-1 bg-primary/60 rounded-t-sm hover:bg-primary/80 transition-colors"
-            style={{ height: `${h}px`, minWidth: 4 }}
-            title={`${bin.low.toFixed(1)} – ${bin.high.toFixed(1)}: ${bin.count}`}
-          />
-        )
-      })}
+    <div className="space-y-1">
+      <div className="flex items-end gap-0.5 border-b border-[var(--border)] pb-px" style={{ height: barHeight }} title="Value distribution">
+        {bins.map((bin, i) => {
+          const h = maxCount > 0 ? (bin.count / maxCount) * barHeight : 0
+          return (
+            <div
+              key={i}
+              className="flex-1 bg-primary/50 hover:bg-primary/80 transition-all rounded-t-sm"
+              style={{ height: `${h}px`, minWidth: 8 }}
+              title={`${bin.low.toLocaleString()} – ${bin.high.toLocaleString()}: ${bin.count.toLocaleString()} rows`}
+            />
+          )
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] text-[var(--text-muted)] px-0.5 font-mono">
+        <span>{bins[0]?.low.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+        <span>{bins[bins.length - 1]?.high.toLocaleString(undefined, { maximumFractionDigits: 1 })}</span>
+      </div>
     </div>
   )
 }

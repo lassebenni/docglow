@@ -7,6 +7,7 @@ import { SampleDataTable } from '../components/models/SampleDataTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
+import { StatisticsTab } from '../components/models/StatisticsTab'
 import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
@@ -113,10 +114,10 @@ function DependencyList({
   )
 }
 
-type Tab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests'
+type Tab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests' | 'statistics'
 
 const VALID_TABS = [
-  'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests',
+  'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests', 'statistics',
 ] as const satisfies readonly Tab[]
 
 function parseTab(raw: string | undefined): Tab {
@@ -301,10 +302,12 @@ export function ModelPage() {
   }
 
   const hasSampleData = Boolean(model.sample_data)
+  const hasProfiles = model.columns.some(c => c.profile != null)
   const tabs: { key: Tab; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'documentation', label: 'Documentation' },
     { key: 'sql', label: 'SQL' },
+    ...(hasProfiles ? [{ key: 'statistics' as const, label: 'Statistics' }] : []),
     ...(hasSampleData ? [{ key: 'data' as const, label: 'Data' }] : []),
     { key: 'lineage', label: 'Lineage' },
     ...(erdEnabled ? [{ key: 'erd' as const, label: 'ERD' }] : []),
@@ -431,6 +434,10 @@ export function ModelPage() {
 
       {activeTab === 'data' && hasSampleData && model.sample_data && (
         <SampleDataTable data={model.sample_data} />
+      )}
+
+      {activeTab === 'statistics' && (
+        <StatisticsTab model={model} />
       )}
 
       {activeTab === 'lineage' && (
