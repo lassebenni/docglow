@@ -66,7 +66,7 @@ def parse_stats_row(
             profile["median"] = _get_float(row, f"{prefix}median")
             profile["stddev"] = _get_float(row, f"{prefix}stddev")
 
-        elif col.category == "date":
+        elif col.category in ("date", "date_key"):
             profile["min"] = _get_str(row, f"{prefix}min")
             profile["max"] = _get_str(row, f"{prefix}max")
 

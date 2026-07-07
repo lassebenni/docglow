@@ -18,6 +18,7 @@ from docglow.profiler.queries import (
     build_histogram_query,
     build_stats_query,
     build_top_values_query,
+    build_temporal_distribution_query,
 )
 from docglow.profiler.stats import (
     parse_histogram_rows,
@@ -236,6 +237,34 @@ def profile_models(
                                         col_spec.name,
                                         e,
                                     )
+
+                        # Fetch temporal distribution for date/timestamp columns and YYYYMMDD integer keys
+                        if col_spec.category in ("date", "date_key"):
+                            temporal_sql = build_temporal_distribution_query(
+                                schema,
+                                table_name,
+                                col_spec.name,
+                                adapter=adapter,
+                                is_date_key=col_spec.category == "date_key",
+                            )
+                            try:
+                                temp_result = conn.execute(text(temporal_sql))
+                                temp_rows = [dict(r) for r in temp_result.mappings()]
+                                col_profile["temporal_distribution"] = [
+                                    {
+                                        "date": str(r.get("date_day", "")),
+                                        "count": int(r.get("record_count", 0)),
+                                    }
+                                    for r in temp_rows
+                                    if r.get("date_day") is not None
+                                ]
+                            except Exception as e:
+                                logger.debug(
+                                    "Temporal distribution query failed for %s.%s: %s",
+                                    table_name,
+                                    col_spec.name,
+                                    e,
+                                )
 
                     all_profiles[model_id] = profiles
                     profiled_count += 1

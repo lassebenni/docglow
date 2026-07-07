@@ -91,16 +91,31 @@ def classify_column(data_type: str) -> str:
     return "other"
 
 
+_DATE_KEY_SUFFIXES = ("_date", "_key", "_dt")
+
+
+def _is_date_key_column(name: str, data_type: str, category: str) -> bool:
+    """Return True for integer columns that store YYYYMMDD surrogate date keys."""
+    if category != "numeric":
+        return False
+    base_type = data_type.upper().split("(")[0].strip()
+    if base_type not in {"INTEGER", "INT", "BIGINT", "INT4", "INT8"}:
+        return False
+    lower = name.lower()
+    return any(lower == sfx.lstrip("_") or lower.endswith(sfx) for sfx in _DATE_KEY_SUFFIXES)
+
+
 def build_column_specs(columns: list[dict[str, Any]]) -> list[ColumnSpec]:
     """Build ColumnSpec list from column dicts."""
-    return [
-        ColumnSpec(
-            name=col["name"],
-            data_type=col.get("data_type", ""),
-            category=classify_column(col.get("data_type", "")),
-        )
-        for col in columns
-    ]
+    specs = []
+    for col in columns:
+        name = col["name"]
+        data_type = col.get("data_type", "")
+        category = classify_column(data_type)
+        if _is_date_key_column(name, data_type, category):
+            category = "date_key"
+        specs.append(ColumnSpec(name=name, data_type=data_type, category=category))
+    return specs
 
 
 def _quote(name: str, adapter: str) -> str:
@@ -159,6 +174,30 @@ def build_stats_query(
         elif col.category == "date":
             parts.append(f'  , MIN({cn})::VARCHAR AS {prefix}__min"')
             parts.append(f'  , MAX({cn})::VARCHAR AS {prefix}__max"')
+
+        elif col.category == "date_key":
+            # Cast YYYYMMDD integer to ISO date string — guard against non-8-digit values
+            if adapter in ("postgres", "postgresql"):
+                def _pg_date_key(agg: str) -> str:
+                    val = f"CAST({agg}({cn}) AS TEXT)"
+                    return f"CASE WHEN LENGTH({val}) = 8 THEN TO_CHAR(TO_DATE({val}, 'YYYYMMDD'), 'YYYY-MM-DD') ELSE NULL END"
+                min_expr = _pg_date_key("MIN")
+                max_expr = _pg_date_key("MAX")
+            elif adapter == "bigquery":
+                def _bq_date_key(agg: str) -> str:
+                    val = f"CAST({agg}({cn}) AS STRING)"
+                    return f"CASE WHEN LENGTH({val}) = 8 THEN CAST(PARSE_DATE('%Y%m%d', {val}) AS STRING) ELSE NULL END"
+                min_expr = _bq_date_key("MIN")
+                max_expr = _bq_date_key("MAX")
+            else:
+                # DuckDB / Snowflake
+                def _duck_date_key(agg: str) -> str:
+                    val = f"CAST({agg}({cn}) AS VARCHAR)"
+                    return f"CASE WHEN LENGTH({val}) = 8 THEN STRFTIME(STRPTIME({val}, '%Y%m%d'), '%Y-%m-%d') ELSE NULL END"
+                min_expr = _duck_date_key("MIN")
+                max_expr = _duck_date_key("MAX")
+            parts.append(f'  , {min_expr} AS {prefix}__min"')
+            parts.append(f'  , {max_expr} AS {prefix}__max"')
 
         elif col.category == "string":
             parts.append(f'  , MIN(LENGTH({cn})) AS {prefix}__min_length"')
@@ -250,3 +289,48 @@ def build_top_values_query(
         f"ORDER BY frequency DESC\n"
         f"LIMIT {limit};"
     )
+
+
+def build_temporal_distribution_query(
+    schema: str,
+    table_name: str,
+    column_name: str,
+    adapter: str = "duckdb",
+    is_date_key: bool = False,
+) -> str:
+    """Build a query to compute the daily count of records for a date/timestamp column."""
+    q = _quote
+    cn = q(column_name, adapter)
+    table_ref = f'"{schema}"."{table_name}"' if schema else f'"{table_name}"'
+
+    if adapter == "bigquery":
+        table_ref = f"`{schema}`.`{table_name}`" if schema else f"`{table_name}`"
+        if is_date_key:
+            date_expr = f"PARSE_DATE('%Y%m%d', CAST({cn} AS STRING))"
+        else:
+            date_expr = f"DATE({cn})"
+        return (
+            f"SELECT {date_expr} AS date_day, COUNT(*) AS record_count\n"
+            f"FROM {table_ref}\n"
+            f"WHERE {cn} IS NOT NULL\n"
+            f"GROUP BY 1\n"
+            f"ORDER BY 1;"
+        )
+
+    if is_date_key:
+        # Cast YYYYMMDD integer to DATE — guard against non-8-digit values
+        if adapter in ("postgres", "postgresql"):
+            date_expr = f"CASE WHEN LENGTH(CAST({cn} AS TEXT)) = 8 THEN TO_DATE(CAST({cn} AS TEXT), 'YYYYMMDD') ELSE NULL END"
+        else:
+            date_expr = f"CASE WHEN LENGTH(CAST({cn} AS VARCHAR)) = 8 THEN STRPTIME(CAST({cn} AS VARCHAR), '%Y%m%d')::DATE ELSE NULL END"
+    else:
+        date_expr = f"CAST({cn} AS DATE)"
+
+    return (
+        f"SELECT {date_expr} AS date_day, COUNT(*) AS record_count\n"
+        f"FROM {table_ref}\n"
+        f"WHERE {cn} IS NOT NULL\n"
+        f"GROUP BY 1\n"
+        f"ORDER BY 1;"
+    )
+

@@ -51,6 +51,12 @@ export interface ColumnProfile {
   readonly avg_length?: number | null;
   readonly top_values?: TopValue[] | null;
   readonly histogram?: HistogramBin[] | null;
+  readonly temporal_distribution?: TemporalBin[] | null;
+}
+
+export interface TemporalBin {
+  readonly date: string;
+  readonly count: number;
 }
 
 export interface TopValue {
