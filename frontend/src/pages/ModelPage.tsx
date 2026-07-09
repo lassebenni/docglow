@@ -162,13 +162,21 @@ export function ModelPage() {
     if (!decodedId) return
     const encoded = encodeURIComponent(decodedId)
     const path = tab === 'columns' ? `/model/${encoded}` : `/model/${encoded}/${tab}`
-    navigate(path + location.hash, { replace: true })
+    // Column anchors (#col-*) only apply on the columns tab; carrying them
+    // into other tab URLs would re-trigger the scroll effect below and snap
+    // back to columns (e.g. Statistics → Columns).
+    const colAnchor = tab === 'columns' && location.hash.startsWith('#col-')
+      ? location.hash
+      : ''
+    navigate(path + colAnchor, { replace: true })
   }, [navigate, decodedId, location.hash])
 
   // Scroll to column anchor when navigating with a hash (e.g. #col-closer_id)
   useEffect(() => {
     const hash = location.hash
     if (!hash || !hash.startsWith('#col-')) return
+    // Deep links to other tabs (e.g. /statistics) must not be overridden.
+    if (tabParam && tabParam !== 'columns') return
 
     // Ensure we're on the columns tab
     setActiveTab('columns')
@@ -185,7 +193,7 @@ export function ModelPage() {
       }
     }, 100)
     return () => clearTimeout(timer)
-  }, [location.hash, decodedId])
+  }, [location.hash, decodedId, tabParam])
 
   // Lineage state
   const [depth, setDepth] = useState(2)
