@@ -43,6 +43,7 @@ def _rebuild(project_dir: Path, output_dir: Path, console: Any) -> None:
             project_dir=project_dir,
             output_dir=output_dir,
             ai_enabled=ai_enabled,
+            docs_dir=config.docs_dir,
         )
         console.print("[green]Auto-rebuild complete.[/green]")
     except Exception as e:

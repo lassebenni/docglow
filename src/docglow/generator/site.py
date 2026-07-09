@@ -38,6 +38,7 @@ def generate_site(
     column_lineage_workers: int | None = None,
     enable_erd: bool = False,
     sample_data_dir: Path | None = None,
+    docs_dir: Path | None = None,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
 
@@ -116,6 +117,18 @@ def generate_site(
         from docglow.generator.sample_data import attach_sample_data
 
         attach_sample_data(docglow_data["models"], sample_data_dir)
+
+    from docglow.generator.custom_docs import attach_custom_docs
+
+    resolved_docs_dir = docs_dir
+    if resolved_docs_dir is not None and not resolved_docs_dir.is_absolute():
+        resolved_docs_dir = project_dir / resolved_docs_dir
+    attach_custom_docs(
+        docglow_data["models"],
+        project_dir=project_dir,
+        output_dir=resolved_output,
+        docs_dir=resolved_docs_dir,
+    )
 
     logger.info("Bundling site...")
     bundle_site(docglow_data, resolved_output, static=static, head_script=head_script)

@@ -115,6 +115,7 @@ class DocglowConfig:
     slim: bool = False
     column_lineage: bool = True
     enable_erd: bool = False
+    docs_dir: Path | None = None
     lineage_layers: LineageLayerConfig = field(default_factory=LineageLayerConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
@@ -284,6 +285,7 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
         slim=raw.get("slim", False),
         column_lineage=raw.get("column_lineage", True),
         enable_erd=bool(raw.get("enable_erd", False)),
+        docs_dir=_resolve_optional_path(raw.get("docs_dir")),
         profiling=profiling,
         health=HealthConfig(weights=weights, naming_rules=naming_rules, complexity=complexity),
         ai=ai,
@@ -326,6 +328,13 @@ def _build_ui_config(raw: dict[str, Any]) -> UiConfig:
             max_column_chars=max_column_chars,
         )
     )
+
+
+def _resolve_optional_path(value: Any) -> Path | None:
+    """Return a Path when *value* is a non-empty string; otherwise None."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return Path(value.strip())
 
 
 def _coerce_positive_int(value: Any, *, default: int, name: str) -> int:
