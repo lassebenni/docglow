@@ -56,6 +56,39 @@ test.describe('Model Detail Page', () => {
   })
 })
 
+test.describe('Model Statistics Tab', () => {
+  const mainSelector = 'main'
+
+  test.beforeEach(async ({ page }) => {
+    await page.goto('/#/model/model.jaffle_shop.orders')
+    await page.waitForSelector('h1:has-text("orders")')
+  })
+
+  test('can switch to statistics tab', async ({ page }) => {
+    const main = page.locator(mainSelector)
+    await main.getByRole('button', { name: 'Statistics', exact: true }).click()
+    await expect(page).toHaveURL(/\/statistics/)
+    await expect(main.getByText('Total Rows')).toBeVisible()
+  })
+
+  test('statistics deep link opens statistics tab', async ({ page }) => {
+    await page.goto('/#/model/model.jaffle_shop.orders/statistics')
+    const main = page.locator(mainSelector)
+    await expect(main.getByText('Total Rows')).toBeVisible()
+    await expect(main.getByRole('button', { name: /Columns/ })).not.toHaveClass(/text-primary/)
+  })
+
+  test('statistics tab stays active with column anchor hash', async ({ page }) => {
+    await page.goto('/#/model/model.jaffle_shop.orders#col-order_id')
+    await page.waitForURL(/#\/model\/model\.jaffle_shop\.orders/)
+    const main = page.locator(mainSelector)
+    await main.getByRole('button', { name: 'Statistics', exact: true }).click()
+    await expect(page).toHaveURL(/\/statistics/)
+    await expect(main.getByText('Total Rows')).toBeVisible()
+    await expect(main.getByRole('button', { name: /Columns/ })).not.toHaveClass(/text-primary/)
+  })
+})
+
 test.describe('Model Not Found', () => {
   test('shows not found message for invalid model id', async ({ page }) => {
     await page.goto('/#/model/nonexistent-model-id')
