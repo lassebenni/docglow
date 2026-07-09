@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from docglow.profiler.engine import apply_profiles, profile_models
+from docglow.profiler.engine import apply_profiles, build_profiling_meta, profile_models
 
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("duckdb")
@@ -80,7 +80,7 @@ class TestProfilerIntegration:
             ),
         }
 
-        profiles = profile_models(
+        profiles, _meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -111,7 +111,7 @@ class TestProfilerIntegration:
             ),
         }
 
-        profiles = profile_models(
+        profiles, _meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -135,7 +135,7 @@ class TestProfilerIntegration:
             ),
         }
 
-        profiles = profile_models(
+        profiles, _meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -159,7 +159,7 @@ class TestProfilerIntegration:
         cache_dir.mkdir()
 
         # First run - should profile
-        profiles1 = profile_models(
+        profiles1, _meta1 = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -169,7 +169,7 @@ class TestProfilerIntegration:
         assert "model.test.orders" in profiles1
 
         # Second run - should use cache
-        profiles2 = profile_models(
+        profiles2, meta2 = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -177,6 +177,7 @@ class TestProfilerIntegration:
             use_cache=True,
         )
         assert profiles2 == profiles1
+        assert meta2 == _meta1
 
     def test_apply_profiles(self, duckdb_path: str) -> None:
         models = {
@@ -188,14 +189,14 @@ class TestProfilerIntegration:
             ),
         }
 
-        profiles = profile_models(
+        profiles, model_meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
             use_cache=False,
         )
 
-        updated = apply_profiles(models, profiles)
+        updated = apply_profiles(models, profiles, model_meta=model_meta)
 
         # Original should be unchanged
         assert models["model.test.orders"]["columns"][0]["profile"] is None
@@ -205,6 +206,8 @@ class TestProfilerIntegration:
         assert cols[0]["profile"] is not None
         assert cols[0]["profile"]["row_count"] == 10
         assert cols[1]["profile"] is not None
+        assert updated["model.test.orders"]["profiling"]["total_row_count"] == 10
+        assert updated["model.test.orders"]["profiling"]["is_sampled"] is False
 
     def test_skip_ephemeral_models(self, duckdb_path: str) -> None:
         models = {
@@ -215,7 +218,7 @@ class TestProfilerIntegration:
             },
         }
 
-        profiles = profile_models(
+        profiles, _meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -239,7 +242,7 @@ class TestProfilerIntegration:
             ),
         }
 
-        profiles = profile_models(
+        profiles, _meta = profile_models(
             models,
             adapter="duckdb",
             connection_params={"path": duckdb_path},
@@ -252,3 +255,26 @@ class TestProfilerIntegration:
         assert p["customer_id"]["is_unique"] is False
         assert p["status"]["distinct_count"] == 3
         assert p["is_active"]["distinct_count"] == 2
+
+    def test_profile_with_sampling_metadata(self, duckdb_path: str) -> None:
+        models = {
+            "model.test.orders": _make_model(
+                columns=[
+                    {"name": "order_id", "data_type": "INTEGER"},
+                ]
+            ),
+        }
+
+        profiles, model_meta = profile_models(
+            models,
+            adapter="duckdb",
+            connection_params={"path": duckdb_path},
+            sample_size=5,
+            use_cache=False,
+        )
+
+        assert profiles["model.test.orders"]["order_id"]["row_count"] == 5
+        assert model_meta["model.test.orders"]["total_row_count"] == 10
+        assert model_meta["model.test.orders"]["profiled_row_count"] == 5
+        assert model_meta["model.test.orders"]["is_sampled"] is True
+        assert model_meta["model.test.orders"]["sample_size"] == 5

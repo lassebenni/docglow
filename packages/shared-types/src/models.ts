@@ -51,6 +51,12 @@ export interface ColumnProfile {
   readonly avg_length?: number | null;
   readonly top_values?: TopValue[] | null;
   readonly histogram?: HistogramBin[] | null;
+  readonly temporal_distribution?: TemporalBin[] | null;
+}
+
+export interface TemporalBin {
+  readonly date: string;
+  readonly count: number;
 }
 
 export interface TopValue {
@@ -86,6 +92,18 @@ export interface CatalogStats {
   readonly row_count: number | null;
   readonly bytes: number | null;
   readonly has_stats: boolean;
+}
+
+/** Model-level profiling metadata attached when column profiling is enabled. */
+export interface ProfilingMeta {
+  /** Full table row count from catalog stats or a warehouse COUNT(*) query. */
+  readonly total_row_count: number;
+  /** Rows actually scanned for column statistics (may be a sample). */
+  readonly profiled_row_count: number;
+  /** Configured sample limit, when sampling was requested. */
+  readonly sample_size: number | null;
+  /** True when column stats were computed on fewer rows than the full table. */
+  readonly is_sampled: boolean;
 }
 
 // -- Models ------------------------------------------------------------------
@@ -144,6 +162,11 @@ export interface DocglowModel {
    * HTML asset in the generated site.
    */
   readonly custom_docs?: readonly CustomDoc[];
+  /**
+   * Profiling metadata for the Statistics tab. Present when column profiling
+   * was run during site generation.
+   */
+  readonly profiling?: ProfilingMeta;
 }
 
 /** A static HTML document tab attached to a model at generate time. */

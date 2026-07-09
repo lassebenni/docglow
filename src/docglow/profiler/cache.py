@@ -72,18 +72,34 @@ def get_cached_profiles(
     return profiles
 
 
+def get_cached_profiling_meta(
+    cache: dict[str, Any],
+    model_id: str,
+) -> dict[str, Any] | None:
+    """Get cached profiling metadata for a model."""
+    entry = cache.get(model_id)
+    if entry is None:
+        return None
+    meta: dict[str, Any] | None = entry.get("profiling")
+    return meta
+
+
 def update_cache(
     cache: dict[str, Any],
     model_id: str,
     columns: list[dict[str, Any]],
     row_count: int | None,
     profiles: dict[str, dict[str, Any]],
+    profiling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return a new cache dict with updated profiles for a model."""
+    entry: dict[str, Any] = {
+        "schema_hash": _schema_hash(columns, row_count),
+        "profiles": profiles,
+    }
+    if profiling is not None:
+        entry["profiling"] = profiling
     return {
         **cache,
-        model_id: {
-            "schema_hash": _schema_hash(columns, row_count),
-            "profiles": profiles,
-        },
+        model_id: entry,
     }

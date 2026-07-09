@@ -59,7 +59,7 @@ def profile(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        profiles = profile_models(
+        profiles, model_meta = profile_models(
             models,
             adapter=adapter,
             connection_params=connection_params,
@@ -79,5 +79,7 @@ def profile(
 
     # Write profiles to standalone file
     profiles_path = output_dir / "profiles.json"
-    profiles_path.write_text(json.dumps(profiles, indent=2))
+    profiles_path.write_text(
+        json.dumps({"columns": profiles, "meta": model_meta}, indent=2)
+    )
     console.print(f"  Profiles saved to {profiles_path}")

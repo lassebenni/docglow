@@ -24,6 +24,7 @@ export type {
   DocglowSource,
   HistogramBin,
   LastRun,
+  ProfilingMeta,
   SampleData,
   TestResult,
   TopValue,
@@ -170,4 +171,13 @@ declare module "@docglow/shared-types" {
     readonly relationships_count?: number;
     readonly relationships_summary?: RelationshipSummary[];
   }
+
+  interface ColumnProfile {
+    readonly temporal_distribution?: TemporalBin[] | null;
+  }
+}
+
+export interface TemporalBin {
+  readonly date: string;
+  readonly count: number;
 }
