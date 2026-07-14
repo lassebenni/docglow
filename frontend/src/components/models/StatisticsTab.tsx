@@ -1,16 +1,46 @@
 import { useMemo, useState, useRef } from 'react'
-import type { DocglowModel, TemporalBin } from '../../types'
+import type { DocglowModel, HistogramBin, TemporalBin } from '../../types'
 import { formatNumber, formatPercent } from '../../utils/formatting'
-import { NullBar, TopValuesChart } from './ColumnTable'
+import { Histogram, NullBar, TopValuesChart } from './ColumnTable'
 
 interface StatisticsTabProps {
   model: DocglowModel
 }
 
-function estimateQuantiles(bins: { low: number; high: number; count: number }[], min: number, max: number) {
+interface QuantileStat {
+  label: string
+  value: number
+  count: number
+  highlight?: boolean
+}
+
+function binForValue(bins: HistogramBin[], value: number): HistogramBin | null {
+  if (bins.length === 0) return null
+  for (let i = 0; i < bins.length; i++) {
+    const bin = bins[i]
+    const isLast = i === bins.length - 1
+    if (value >= bin.low && (isLast ? value <= bin.high : value < bin.high)) {
+      return bin
+    }
+  }
+  return bins[bins.length - 1]
+}
+
+function estimateQuantileStats(
+  bins: HistogramBin[],
+  min: number,
+  max: number,
+  profileMedian?: number | null,
+): QuantileStat[] {
   const total = bins.reduce((acc, b) => acc + b.count, 0)
-  if (total === 0 || max <= min) {
-    return { min, q1: min, median: min, q3: min, max }
+  if (total === 0 || max <= min || bins.length === 0) {
+    return [
+      { label: 'Min', value: min, count: 0 },
+      { label: 'Q1', value: min, count: 0 },
+      { label: 'Median', value: min, count: 0, highlight: true },
+      { label: 'Q3', value: min, count: 0 },
+      { label: 'Max', value: max, count: 0 },
+    ]
   }
 
   const getVal = (targetCount: number) => {
@@ -18,73 +48,101 @@ function estimateQuantiles(bins: { low: number; high: number; count: number }[],
     for (const bin of bins) {
       if (cum + bin.count >= targetCount) {
         const fraction = bin.count > 0 ? (targetCount - cum) / bin.count : 0
-        return bin.low + fraction * (bin.high - bin.low)
+        return {
+          value: bin.low + fraction * (bin.high - bin.low),
+          count: bin.count,
+        }
       }
       cum += bin.count
     }
-    return max
+    const last = bins[bins.length - 1]
+    return { value: max, count: last.count }
   }
 
-  return {
-    min,
-    q1: getVal(total * 0.25),
-    median: getVal(total * 0.50),
-    q3: getVal(total * 0.75),
-    max
-  }
+  const q1 = getVal(total * 0.25)
+  const estimatedMedian = getVal(total * 0.5)
+  const medianValue = profileMedian ?? estimatedMedian.value
+  const medianBin = binForValue(bins, medianValue)
+  const q3 = getVal(total * 0.75)
+  const minBin = bins[0]
+  const maxBin = bins[bins.length - 1]
+
+  return [
+    { label: 'Min', value: min, count: minBin.count },
+    { label: 'Q1', value: q1.value, count: q1.count },
+    { label: 'Median', value: medianValue, count: medianBin?.count ?? estimatedMedian.count, highlight: true },
+    { label: 'Q3', value: q3.value, count: q3.count },
+    { label: 'Max', value: max, count: maxBin.count },
+  ]
 }
 
-interface BoxWhiskerPlotProps {
-  bins: { low: number; high: number; count: number }[]
+function countAtExactValue(
+  topValues: { value: string; frequency: number }[] | null | undefined,
+  target: number,
+): number | null {
+  if (!topValues) return null
+  const match = topValues.find(
+    v => v.value === String(target) || Number(v.value) === target,
+  )
+  return match?.frequency ?? null
+}
+
+interface NumericDistributionProps {
+  bins: HistogramBin[]
   min: number
   max: number
+  median?: number | null
+  topValues?: { value: string; frequency: number }[] | null
+  rowCount: number
 }
 
-function BoxWhiskerPlot({ bins, min, max }: BoxWhiskerPlotProps) {
-  const q = estimateQuantiles(bins, min, max)
-
-  const mapX = (val: number) => {
-    const range = max - min
-    if (range === 0) return 500
-    return 15 + ((val - min) / range) * 970
-  }
-
-  const xMin = mapX(q.min)
-  const xQ1 = mapX(q.q1)
-  const xMedian = mapX(q.median)
-  const xQ3 = mapX(q.q3)
-  const xMax = mapX(q.max)
-
-  const formatVal = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 1 })
+function NumericDistribution({ bins, min, max, median, topValues, rowCount }: NumericDistributionProps) {
+  const stats = estimateQuantileStats(bins, min, max, median).map(stat => {
+    const exactCount = countAtExactValue(topValues, stat.value)
+    return {
+      ...stat,
+      count: exactCount ?? stat.count,
+      isExact: exactCount != null,
+    }
+  })
+  const formatVal = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  const hasExactCounts = stats.some(s => s.isExact)
 
   return (
-    <div className="space-y-2">
-      <div className="relative h-11 border border-[var(--border)] bg-[var(--bg)]/30 rounded-md p-1">
-        <svg className="w-full h-full overflow-visible" viewBox="0 0 1000 44" preserveAspectRatio="none">
-          {/* Whiskers */}
-          <line x1={xMin} y1={22} x2={xQ1} y2={22} stroke="currentColor" className="text-[var(--text-muted)] opacity-60" strokeWidth="1.5" strokeDasharray="4,4" />
-          <line x1={xQ3} y1={22} x2={xMax} y2={22} stroke="currentColor" className="text-[var(--text-muted)] opacity-60" strokeWidth="1.5" strokeDasharray="4,4" />
-
-          {/* Min & Max End Lines */}
-          <line x1={xMin} y1={12} x2={xMin} y2={32} stroke="currentColor" className="text-[var(--text-muted)]" strokeWidth="2.5" />
-          <line x1={xMax} y1={12} x2={xMax} y2={32} stroke="currentColor" className="text-[var(--text-muted)]" strokeWidth="2.5" />
-
-          {/* Box (IQR) */}
-          <rect x={xQ1} y={8} width={Math.max(xQ3 - xQ1, 1)} height={28} rx={2} className="fill-primary/10 stroke-primary stroke-[1.5]" />
-
-          {/* Median */}
-          <line x1={xMedian} y1={8} x2={xMedian} y2={36} className="stroke-primary stroke-[2.5]" />
-          <circle cx={xMedian} cy={22} r={3.5} className="fill-primary" />
-        </svg>
+    <div className="space-y-3">
+      {topValues && topValues.length > 0 && (
+        <TopValuesChart values={topValues} rowCount={rowCount} />
+      )}
+      <Histogram bins={bins} height={48} />
+      <div className="border border-[var(--border)] rounded-md overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-[var(--bg)] text-[var(--text-muted)] border-b border-[var(--border)]">
+            <tr>
+              <th className="text-left px-3 py-1.5 font-medium">Stat</th>
+              <th className="text-right px-3 py-1.5 font-medium">Value</th>
+              <th className="text-right px-3 py-1.5 font-medium">Records</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-[var(--border)]">
+            {stats.map(stat => (
+              <tr key={stat.label}>
+                <td className={`px-3 py-1.5 ${stat.highlight ? 'text-primary font-semibold' : ''}`}>
+                  {stat.label}
+                </td>
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums">{formatVal(stat.value)}</td>
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-[var(--text-muted)]">
+                  {stat.count.toLocaleString()}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-
-      <div className="flex justify-between items-center text-[10px] text-[var(--text-muted)] px-1 font-mono pt-1 select-all">
-        <span>Min: {formatVal(q.min)}</span>
-        <span>Q1: {formatVal(q.q1)}</span>
-        <span className="text-primary font-semibold">Median: {formatVal(q.median)}</span>
-        <span>Q3: {formatVal(q.q3)}</span>
-        <span>Max: {formatVal(q.max)}</span>
-      </div>
+      <p className="text-[10px] text-[var(--text-muted)]">
+        {hasExactCounts
+          ? 'Record counts use exact value frequencies where available; otherwise the histogram bin containing the value.'
+          : 'Record counts reflect the histogram bin containing each value (10 bins across min–max).'}
+      </p>
     </div>
   )
 }
@@ -107,7 +165,12 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
   }, [model.columns])
 
   const categoricalColumns = useMemo(() => {
-    return model.columns.filter(c => c.profile?.top_values && c.profile.top_values.length > 0)
+    return model.columns.filter(
+      c =>
+        c.profile?.top_values &&
+        c.profile.top_values.length > 0 &&
+        !(c.profile?.histogram && c.profile.histogram.length > 0),
+    )
   }, [model.columns])
 
   // Compute model-level metrics
@@ -570,10 +633,13 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
                     </span>
                   </div>
                   <div className="pt-2">
-                    <BoxWhiskerPlot 
-                      bins={col.profile!.histogram!} 
-                      min={Number(col.profile!.min)} 
-                      max={Number(col.profile!.max)} 
+                    <NumericDistribution
+                      bins={col.profile!.histogram!}
+                      min={Number(col.profile!.min)}
+                      max={Number(col.profile!.max)}
+                      median={col.profile!.median}
+                      topValues={col.profile!.top_values}
+                      rowCount={col.profile!.row_count}
                     />
                   </div>
                 </div>
