@@ -167,6 +167,32 @@ export interface DocglowModel {
    * was run during site generation.
    */
   readonly profiling?: ProfilingMeta;
+  /**
+   * Business Q&A entries for the Questions tab. Attached at site-generation
+   * time from ``meta.docglow.questions``. Omitted when the model declares
+   * no questions.
+   */
+  readonly questions?: readonly ModelQuestion[];
+}
+
+/** A business question the model answers, authored in ``meta.docglow.questions``. */
+export interface ModelQuestion {
+  /** The business question, plain prose. */
+  readonly question: string;
+  /** One-clause answer; may contain inline markdown (e.g. backticked column names). */
+  readonly answer: string;
+  /**
+   * Optional proof reference: "<custom-doc slug>#<anchor>" pointing at a
+   * custom_docs tab (e.g. "workbook#cte-sku_bridge"), or "self#<anchor>"
+   * for an anchor within the model's own guide doc.
+   */
+  readonly proof?: string;
+  /**
+   * Optional name of a dbt test that re-verifies this answer on every build
+   * (matched against the model's test_results[].test_name). Rendered as a
+   * verified/failing chip — the question's data-drift signal.
+   */
+  readonly verified_by?: string;
 }
 
 /** A static HTML document tab attached to a model at generate time. */

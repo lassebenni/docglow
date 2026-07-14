@@ -130,6 +130,10 @@ def generate_site(
         docs_dir=resolved_docs_dir,
     )
 
+    from docglow.generator.questions import attach_questions
+
+    attach_questions(docglow_data["models"])
+
     logger.info("Bundling site...")
     bundle_site(docglow_data, resolved_output, static=static, head_script=head_script)
 
