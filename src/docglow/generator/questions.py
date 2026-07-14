@@ -8,6 +8,7 @@ Per-model ``meta.docglow.questions`` entries::
           - question: "Hoe komt SKU-niveau verkoop op serie-niveau?"
             answer: "Optellen via `dim_sku.item_series_code`."
             proof: "workbook#cte-sku_bridge"  # optional; "<custom-doc slug>#<anchor>" or "self#<anchor>"
+            verified_by: "assert_sku_bridge"  # optional; dbt test name proving the answer
 
 Pure data — no files to copy.  Each valid entry is attached to the model as
 ``model["questions"] = [{"question", "answer", "proof"?}]`` and the frontend
@@ -57,6 +58,9 @@ def _parse_meta_questions(meta: dict[str, Any], model_name: str) -> list[dict[st
         proof = entry.get("proof")
         if isinstance(proof, str) and proof.strip():
             parsed["proof"] = proof.strip()
+        verified_by = entry.get("verified_by")
+        if isinstance(verified_by, str) and verified_by.strip():
+            parsed["verified_by"] = verified_by.strip()
         out.append(parsed)
     return out
 

@@ -1,5 +1,6 @@
 import { Markdown } from '../Markdown'
-import type { CustomDoc, DocglowModel, ModelQuestion } from '../../types'
+import { TestBadge } from '../tests/TestBadge'
+import type { CustomDoc, DocglowModel, ModelQuestion, TestResult } from '../../types'
 
 interface QuestionsTabProps {
   model: DocglowModel
@@ -54,6 +55,33 @@ function ProofLink({ proof, customDocs }: { proof: string; customDocs: readonly 
   )
 }
 
+const VERIFY_LABEL: Record<string, string> = {
+  pass: 'verified',
+  fail: 'failing',
+  error: 'failing',
+  warn: 'warning',
+}
+
+/**
+ * Verification chip for a question bound to a dbt test via `verified_by`.
+ * The named test re-verifies the documented answer on every build; its latest
+ * status is the question's data-drift signal.
+ */
+function VerifiedChip({ testName, testResults }: { testName: string; testResults: readonly TestResult[] }) {
+  const result = testResults.find(t => t.test_name === testName)
+  const status = result?.status ?? 'not_run'
+  const label = VERIFY_LABEL[status] ?? 'not run'
+  return (
+    <span
+      className="inline-flex items-center gap-1"
+      data-testid="question-verified-chip"
+      title={`Verified by dbt test ${testName} — latest status: ${status}`}
+    >
+      <TestBadge status={status} label={label} />
+    </span>
+  )
+}
+
 /**
  * Native Questions tab: the business questions a model answers, authored in
  * dbt model YAML under `meta.docglow.questions` and attached to the payload
@@ -89,6 +117,9 @@ export function QuestionsTab({ model }: QuestionsTabProps) {
                 {i + 1}.
               </span>
               <span className="text-sm font-semibold">{q.question}</span>
+              {q.verified_by && (
+                <VerifiedChip testName={q.verified_by} testResults={model.test_results} />
+              )}
             </div>
             <div className="mt-2 pl-6">
               <Markdown content={q.answer} className="text-sm" />

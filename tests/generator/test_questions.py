@@ -51,7 +51,7 @@ def test_strips_whitespace_and_omits_blank_proof():
             "meta": {
                 "docglow": {
                     "questions": [
-                        {"question": "  Q?  ", "answer": "  A.  ", "proof": "   "},
+                        {"question": "  Q?  ", "answer": "  A.  ", "proof": "   ", "verified_by": ""},
                     ]
                 }
             },
@@ -61,6 +61,31 @@ def test_strips_whitespace_and_omits_blank_proof():
     attach_questions(models)
 
     assert models["model.x.m"]["questions"] == [{"question": "Q?", "answer": "A."}]
+
+
+def test_passes_through_verified_by():
+    models = {
+        "model.x.m": {
+            "name": "m",
+            "meta": {
+                "docglow": {
+                    "questions": [
+                        {
+                            "question": "Q?",
+                            "answer": "A.",
+                            "verified_by": "  assert_q_holds  ",
+                        },
+                    ]
+                }
+            },
+        }
+    }
+
+    attach_questions(models)
+
+    assert models["model.x.m"]["questions"] == [
+        {"question": "Q?", "answer": "A.", "verified_by": "assert_q_holds"}
+    ]
 
 
 def test_skips_malformed_entries(caplog):

@@ -187,6 +187,12 @@ export interface ModelQuestion {
    * for an anchor within the model's own guide doc.
    */
   readonly proof?: string;
+  /**
+   * Optional name of a dbt test that re-verifies this answer on every build
+   * (matched against the model's test_results[].test_name). Rendered as a
+   * verified/failing chip — the question's data-drift signal.
+   */
+  readonly verified_by?: string;
 }
 
 /** A static HTML document tab attached to a model at generate time. */
