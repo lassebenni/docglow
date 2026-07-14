@@ -135,6 +135,11 @@ def run_server(project_dir: Path, target_dir: Path | None = None) -> None:
         sys.exit(1)
 
     data = build_docglow_data(artifacts)
+
+    from docglow.generator.questions import attach_questions
+
+    attach_questions(data["models"])
+
     model_count = len(data["models"])
     source_count = len(data["sources"])
     logger.info("Data loaded: %d models, %d sources", model_count, source_count)

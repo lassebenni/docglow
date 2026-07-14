@@ -22,6 +22,7 @@ export type {
   DocglowSource,
   HistogramBin,
   LastRun,
+  ModelQuestion,
   ProfilingMeta,
   SampleData,
   TestResult,

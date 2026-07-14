@@ -9,6 +9,7 @@ import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
 import { StatisticsTab } from '../components/models/StatisticsTab'
+import { QuestionsTab } from '../components/models/QuestionsTab'
 import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
@@ -115,10 +116,10 @@ function DependencyList({
   )
 }
 
-type BuiltInTab = 'columns' | 'documentation' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests' | 'statistics'
+type BuiltInTab = 'columns' | 'documentation' | 'questions' | 'sql' | 'data' | 'lineage' | 'erd' | 'tests' | 'statistics'
 
 const BUILT_IN_TABS = [
-  'columns', 'documentation', 'sql', 'data', 'lineage', 'erd', 'tests', 'statistics',
+  'columns', 'documentation', 'questions', 'sql', 'data', 'lineage', 'erd', 'tests', 'statistics',
 ] as const satisfies readonly BuiltInTab[]
 
 function isBuiltInTab(tab: string): tab is BuiltInTab {
@@ -322,9 +323,11 @@ export function ModelPage() {
 
   const hasSampleData = Boolean(model.sample_data)
   const hasProfiles = model.columns.some(c => c.profile != null)
+  const hasQuestions = (model.questions?.length ?? 0) > 0
   const tabs: { key: string; label: string }[] = [
     { key: 'columns', label: `Columns (${model.columns.length})` },
     { key: 'documentation', label: 'Documentation' },
+    ...(hasQuestions ? [{ key: 'questions' as const, label: `Questions (${model.questions!.length})` }] : []),
     ...customDocs.map(doc => ({ key: doc.slug, label: doc.label })),
     { key: 'sql', label: 'SQL' },
     ...(hasProfiles ? [{ key: 'statistics' as const, label: 'Statistics' }] : []),
@@ -423,6 +426,10 @@ export function ModelPage() {
             <p className="text-sm text-[var(--text-muted)]">No model description.</p>
           )}
         </div>
+      )}
+
+      {activeTab === 'questions' && (
+        <QuestionsTab model={model} />
       )}
 
       {activeCustomDoc && (

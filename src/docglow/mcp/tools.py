@@ -91,6 +91,7 @@ def _get_model(data: dict[str, Any], params: dict[str, Any]) -> Any:
         "test_results": model.get("test_results", []),
         "last_run": model.get("last_run"),
         "catalog_stats": model.get("catalog_stats", {}),
+        "questions": model.get("questions", []),
     }
 
 
