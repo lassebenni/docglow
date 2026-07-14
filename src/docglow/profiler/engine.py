@@ -269,6 +269,7 @@ def profile_models(
                                 table_name,
                                 col_spec.name,
                                 adapter=adapter,
+                                limit=distinct,
                             )
                             try:
                                 tv_result = conn.execute(text(tv_sql))
