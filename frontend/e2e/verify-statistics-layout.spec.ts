@@ -177,16 +177,24 @@ test.describe('Statistics layout verification', () => {
     }
   })
 
-  test('value distributions show record counts per stat', async ({ page }) => {
+  test('value distributions show exact record counts per value', async ({ page }) => {
     const main = page.locator('main')
     await expect(main.getByText('Value Distributions (Numeric)')).toBeVisible()
 
-    const minRow = main.locator('tr').filter({ hasText: 'Min' }).filter({ hasText: '-18' })
-    await expect(minRow).toBeVisible()
+    const returnedCard = main
+      .locator('span.font-mono.font-medium', { hasText: 'units_returned' })
+      .locator('xpath=ancestor::div[contains(@class,"rounded-lg")][1]')
+    const minRow = returnedCard.locator('tr').filter({ hasText: 'Min' })
+    await expect(minRow).toContainText('-18')
     await expect(minRow).toContainText('17')
 
-    const maxRow = main.locator('tr').filter({ hasText: 'Max' }).filter({ hasText: '2,650,000' })
-    await expect(maxRow).toBeVisible()
+    const medianRow = returnedCard.locator('tr').filter({ hasText: 'Median' })
+    await expect(medianRow).toContainText('0')
+    await expect(medianRow).toContainText('2,650,000')
+    await expect(medianRow).not.toContainText('2,692,400')
+
+    const maxRow = returnedCard.locator('tr').filter({ hasText: 'Max' })
     await expect(maxRow).toContainText('0')
+    await expect(maxRow).toContainText('2,650,000')
   })
 })

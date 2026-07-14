@@ -1,10 +1,15 @@
 import { useMemo, useState, useRef } from 'react'
-import type { DocglowModel, HistogramBin, TemporalBin } from '../../types'
+import type { DocglowModel, HistogramBin, TemporalBin, TopValue } from '../../types'
 import { formatNumber, formatPercent } from '../../utils/formatting'
 import { Histogram, NullBar, TopValuesChart } from './ColumnTable'
 
 interface StatisticsTabProps {
   model: DocglowModel
+}
+
+interface ValueFrequency {
+  value: number
+  count: number
 }
 
 interface QuantileStat {
@@ -14,99 +19,83 @@ interface QuantileStat {
   highlight?: boolean
 }
 
-function binForValue(bins: HistogramBin[], value: number): HistogramBin | null {
-  if (bins.length === 0) return null
-  for (let i = 0; i < bins.length; i++) {
-    const bin = bins[i]
-    const isLast = i === bins.length - 1
-    if (value >= bin.low && (isLast ? value <= bin.high : value < bin.high)) {
-      return bin
-    }
-  }
-  return bins[bins.length - 1]
+function parseTopValueNumber(raw: string): number | null {
+  const parsed = Number(raw)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
-function estimateQuantileStats(
-  bins: HistogramBin[],
-  min: number,
-  max: number,
-  profileMedian?: number | null,
-): QuantileStat[] {
-  const total = bins.reduce((acc, b) => acc + b.count, 0)
-  if (total === 0 || max <= min || bins.length === 0) {
-    return [
-      { label: 'Min', value: min, count: 0 },
-      { label: 'Q1', value: min, count: 0 },
-      { label: 'Median', value: min, count: 0, highlight: true },
-      { label: 'Q3', value: min, count: 0 },
-      { label: 'Max', value: max, count: 0 },
-    ]
-  }
-
-  const getVal = (targetCount: number) => {
-    let cum = 0
-    for (const bin of bins) {
-      if (cum + bin.count >= targetCount) {
-        const fraction = bin.count > 0 ? (targetCount - cum) / bin.count : 0
-        return {
-          value: bin.low + fraction * (bin.high - bin.low),
-          count: bin.count,
-        }
-      }
-      cum += bin.count
-    }
-    const last = bins[bins.length - 1]
-    return { value: max, count: last.count }
-  }
-
-  const q1 = getVal(total * 0.25)
-  const estimatedMedian = getVal(total * 0.5)
-  const medianValue = profileMedian ?? estimatedMedian.value
-  const medianBin = binForValue(bins, medianValue)
-  const q3 = getVal(total * 0.75)
-  const minBin = bins[0]
-  const maxBin = bins[bins.length - 1]
-
-  return [
-    { label: 'Min', value: min, count: minBin.count },
-    { label: 'Q1', value: q1.value, count: q1.count },
-    { label: 'Median', value: medianValue, count: medianBin?.count ?? estimatedMedian.count, highlight: true },
-    { label: 'Q3', value: q3.value, count: q3.count },
-    { label: 'Max', value: max, count: maxBin.count },
-  ]
+function sortedValueFrequencies(topValues: TopValue[]): ValueFrequency[] {
+  return topValues
+    .map(entry => {
+      const value = parseTopValueNumber(entry.value)
+      if (value == null) return null
+      return { value, count: entry.frequency }
+    })
+    .filter((entry): entry is ValueFrequency => entry != null)
+    .sort((a, b) => a.value - b.value)
 }
 
-function countAtExactValue(
-  topValues: { value: string; frequency: number }[] | null | undefined,
-  target: number,
-): number | null {
-  if (!topValues) return null
+function countAtExactValue(topValues: TopValue[], target: number): number | null {
   const match = topValues.find(
-    v => v.value === String(target) || Number(v.value) === target,
+    entry => entry.value === String(target) || parseTopValueNumber(entry.value) === target,
   )
   return match?.frequency ?? null
+}
+
+function valueAtPercentile(entries: ValueFrequency[], percentile: number): ValueFrequency | null {
+  if (entries.length === 0) return null
+  const total = entries.reduce((sum, entry) => sum + entry.count, 0)
+  if (total === 0) return entries[0]
+
+  const target = total * percentile
+  let cumulative = 0
+  for (const entry of entries) {
+    cumulative += entry.count
+    if (cumulative >= target) {
+      return entry
+    }
+  }
+  return entries[entries.length - 1]
+}
+
+function quantileStatsFromTopValues(
+  topValues: TopValue[],
+  min: number,
+  max: number,
+): QuantileStat[] | null {
+  const entries = sortedValueFrequencies(topValues)
+  if (entries.length === 0) return null
+
+  const q1 = valueAtPercentile(entries, 0.25)
+  const median = valueAtPercentile(entries, 0.5)
+  const q3 = valueAtPercentile(entries, 0.75)
+  if (!q1 || !median || !q3) return null
+
+  const minCount = countAtExactValue(topValues, min) ?? entries[0].count
+  const maxCount = countAtExactValue(topValues, max) ?? entries[entries.length - 1].count
+
+  return [
+    { label: 'Min', value: min, count: minCount },
+    { label: 'Q1', value: q1.value, count: q1.count },
+    { label: 'Median', value: median.value, count: median.count, highlight: true },
+    { label: 'Q3', value: q3.value, count: q3.count },
+    { label: 'Max', value: max, count: maxCount },
+  ]
 }
 
 interface NumericDistributionProps {
   bins: HistogramBin[]
   min: number
   max: number
-  median?: number | null
-  topValues?: { value: string; frequency: number }[] | null
+  topValues?: TopValue[] | null
   rowCount: number
 }
 
-function NumericDistribution({ bins, min, max, median, topValues, rowCount }: NumericDistributionProps) {
-  const stats = estimateQuantileStats(bins, min, max, median).map(stat => {
-    const exactCount = countAtExactValue(topValues, stat.value)
-    return {
-      ...stat,
-      count: exactCount ?? stat.count,
-      isExact: exactCount != null,
-    }
-  })
+function NumericDistribution({ bins, min, max, topValues, rowCount }: NumericDistributionProps) {
+  const stats = topValues && topValues.length > 0 ? quantileStatsFromTopValues(topValues, min, max) : null
   const formatVal = (v: number) => v.toLocaleString(undefined, { maximumFractionDigits: 2 })
-  const hasExactCounts = stats.some(s => s.isExact)
+  const coveredRows = topValues?.reduce((sum, entry) => sum + entry.frequency, 0) ?? 0
+  const hasFullCoverage = rowCount > 0 && coveredRows >= rowCount
 
   return (
     <div className="space-y-3">
@@ -114,35 +103,39 @@ function NumericDistribution({ bins, min, max, median, topValues, rowCount }: Nu
         <TopValuesChart values={topValues} rowCount={rowCount} />
       )}
       <Histogram bins={bins} height={48} />
-      <div className="border border-[var(--border)] rounded-md overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-[var(--bg)] text-[var(--text-muted)] border-b border-[var(--border)]">
-            <tr>
-              <th className="text-left px-3 py-1.5 font-medium">Stat</th>
-              <th className="text-right px-3 py-1.5 font-medium">Value</th>
-              <th className="text-right px-3 py-1.5 font-medium">Records</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-[var(--border)]">
-            {stats.map(stat => (
-              <tr key={stat.label}>
-                <td className={`px-3 py-1.5 ${stat.highlight ? 'text-primary font-semibold' : ''}`}>
-                  {stat.label}
-                </td>
-                <td className="px-3 py-1.5 text-right font-mono tabular-nums">{formatVal(stat.value)}</td>
-                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-[var(--text-muted)]">
-                  {stat.count.toLocaleString()}
-                </td>
+      {stats && (
+        <div className="border border-[var(--border)] rounded-md overflow-hidden">
+          <table className="w-full text-xs">
+            <thead className="bg-[var(--bg)] text-[var(--text-muted)] border-b border-[var(--border)]">
+              <tr>
+                <th className="text-left px-3 py-1.5 font-medium">Stat</th>
+                <th className="text-right px-3 py-1.5 font-medium">Value</th>
+                <th className="text-right px-3 py-1.5 font-medium">Records with value</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-[10px] text-[var(--text-muted)]">
-        {hasExactCounts
-          ? 'Record counts use exact value frequencies where available; otherwise the histogram bin containing the value.'
-          : 'Record counts reflect the histogram bin containing each value (10 bins across min–max).'}
-      </p>
+            </thead>
+            <tbody className="divide-y divide-[var(--border)]">
+              {stats.map(stat => (
+                <tr key={stat.label}>
+                  <td className={`px-3 py-1.5 ${stat.highlight ? 'text-primary font-semibold' : ''}`}>
+                    {stat.label}
+                  </td>
+                  <td className="px-3 py-1.5 text-right font-mono tabular-nums">{formatVal(stat.value)}</td>
+                  <td className="px-3 py-1.5 text-right font-mono tabular-nums text-[var(--text-muted)]">
+                    {stat.count.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {stats && (
+        <p className="text-[10px] text-[var(--text-muted)]">
+          {hasFullCoverage
+            ? 'Record counts show how many rows have each exact value at the corresponding percentile.'
+            : `Record counts are based on ${coveredRows.toLocaleString()} profiled values; regenerate profiles for full coverage.`}
+        </p>
+      )}
     </div>
   )
 }
@@ -637,7 +630,6 @@ export function StatisticsTab({ model }: StatisticsTabProps) {
                       bins={col.profile!.histogram!}
                       min={Number(col.profile!.min)}
                       max={Number(col.profile!.max)}
-                      median={col.profile!.median}
                       topValues={col.profile!.top_values}
                       rowCount={col.profile!.row_count}
                     />
