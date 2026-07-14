@@ -113,22 +113,22 @@ export function NullBar({ rate }: { rate: number }) {
 export function TopValuesChart({ values, rowCount }: { values: TopValue[]; rowCount: number }) {
   const maxFreq = Math.max(...values.map(v => v.frequency))
   return (
-    <div className="space-y-0.5">
+    <div className="space-y-1">
       {values.slice(0, 5).map((v, i) => (
-        <div key={i} className="flex items-center gap-2 text-xs">
-          <span className="w-24 truncate font-mono" title={v.value}>{v.value}</span>
-          <div className="flex-1 h-1.5 bg-[var(--bg)] rounded-full overflow-hidden">
+        <div key={i} className="grid grid-cols-[minmax(4rem,6rem)_1fr_auto] items-center gap-x-2 text-xs">
+          <span className="truncate font-mono" title={v.value}>{v.value}</span>
+          <div className="h-1.5 bg-[var(--bg)] rounded-full overflow-hidden min-w-0">
             <div
               className="h-full rounded-full bg-primary/60"
               style={{ width: `${(v.frequency / maxFreq) * 100}%` }}
             />
           </div>
-          <span className="text-[var(--text-muted)] w-8 text-right">{v.frequency}</span>
-          {rowCount > 0 && (
-            <span className="text-[var(--text-muted)] w-12 text-right">
-              {formatPercent(v.frequency / rowCount)}
-            </span>
-          )}
+          <span className="tabular-nums text-[var(--text-muted)] whitespace-nowrap text-right">
+            {v.frequency.toLocaleString()}
+            {rowCount > 0 && (
+              <span className="text-[var(--text-muted)]/70"> ({formatPercent(v.frequency / rowCount)})</span>
+            )}
+          </span>
         </div>
       ))}
     </div>
