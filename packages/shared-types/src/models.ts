@@ -74,12 +74,17 @@ export interface HistogramBin {
 
 export interface TestResult {
   readonly test_name: string;
+  readonly test_unique_id: string;
   readonly test_type: string;
   readonly column_name: string | null;
   readonly status: "pass" | "fail" | "warn" | "error" | "not_run";
   readonly execution_time: number;
   readonly failures: number;
   readonly message: string | null;
+  /** Compiled SQL from run_results or manifest (warehouse-ready). */
+  readonly compiled_sql?: string | null;
+  /** Raw Jinja SQL from the test node when compiled SQL is unavailable. */
+  readonly raw_sql?: string | null;
 }
 
 export interface LastRun {

@@ -26,7 +26,12 @@ from typing import Any
 
 from docglow.artifacts.manifest import Manifest
 from docglow.artifacts.run_results import RunResults
-from docglow.generator.transforms.lookups import build_run_results_map, normalize_test_status
+from docglow.generator.transforms.lookups import (
+    build_run_results_map,
+    normalize_test_status,
+    test_sql_fields,
+    test_type_from_node,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,33 +103,10 @@ def _tests_by_name(manifest: Manifest) -> dict[str, Any]:
     }
 
 
-def _test_type(test_node: Any) -> str:
-    if test_node.test_metadata:
-        return test_node.test_metadata.name
-    if test_node.resource_type == "unit_test":
-        return "unit_test"
-    return ""
-
-
-def _test_sql(test_node: Any, run_result: Any | None) -> tuple[str | None, str | None]:
-    """Return (compiled_sql, raw_sql) for a dbt test node.
-
-    Prefer run_results compiled SQL (post-run), then manifest compiled_code,
-    then raw Jinja source as a last resort for the expandable panel."""
-    compiled = None
-    raw = (getattr(test_node, "raw_code", None) or "").strip() or None
-    if run_result and run_result.compiled_code:
-        compiled = run_result.compiled_code.strip() or None
-    elif test_node.compiled_code:
-        compiled = test_node.compiled_code.strip() or None
-    return compiled, raw
-
-
 def _sql_fields(test_node: Any | None, run_result: Any | None) -> dict[str, str | None]:
     if test_node is None:
         return {"compiled_sql": None, "raw_sql": None}
-    compiled, raw = _test_sql(test_node, run_result)
-    return {"compiled_sql": compiled, "raw_sql": raw}
+    return test_sql_fields(test_node, run_result)
 
 
 def _verification_block(
@@ -154,7 +136,7 @@ def _verification_block(
         return {
             "test_name": test_name,
             "test_unique_id": test_node.unique_id,
-            "test_type": _test_type(test_node),
+            "test_type": test_type_from_node(test_node),
             "status": "not_run",
             "failures": 0,
             "message": "Test was not in the run that produced run_results.json",
@@ -166,7 +148,7 @@ def _verification_block(
     return {
         "test_name": test_name,
         "test_unique_id": test_node.unique_id,
-        "test_type": _test_type(test_node),
+        "test_type": test_type_from_node(test_node),
         "status": normalize_test_status(run_result.status),
         "failures": run_result.failures or 0,
         "message": run_result.message,

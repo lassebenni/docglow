@@ -10,6 +10,8 @@ from docglow.artifacts.run_results import RunResult
 from docglow.generator.transforms.lookups import (
     build_column_tests,
     normalize_test_status,
+    test_sql_fields,
+    test_type_from_node,
 )
 
 __all__ = ["transform_model", "normalize_test_status"]
@@ -180,12 +182,7 @@ def _build_test_results(
     results: list[dict[str, Any]] = []
 
     for test_node in test_nodes_by_model.get(model_id, []):
-        test_type = ""
-        if test_node.test_metadata:
-            test_type = test_node.test_metadata.name
-        elif test_node.resource_type == "unit_test":
-            test_type = "unit_test"
-
+        test_type = test_type_from_node(test_node)
         run_result = run_results_by_id.get(test_node.unique_id)
         status = "not_run"
         execution_time = 0.0
@@ -201,12 +198,14 @@ def _build_test_results(
         results.append(
             {
                 "test_name": test_node.name,
+                "test_unique_id": test_node.unique_id,
                 "test_type": test_type,
                 "column_name": test_node.column_name,
                 "status": status,
                 "execution_time": execution_time,
                 "failures": failures,
                 "message": message,
+                **test_sql_fields(test_node, run_result),
             }
         )
 
