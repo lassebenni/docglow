@@ -355,8 +355,19 @@ def stage_strip_sql(ctx: PipelineContext) -> None:
 
     for collection in (ctx.models, ctx.seeds, ctx.snapshots):
         for uid in collection:
+            node = collection[uid]
+            if collection is ctx.models:
+                test_results = [
+                    {
+                        **result,
+                        "compiled_sql": "",
+                        "raw_sql": "",
+                    }
+                    for result in node.get("test_results", [])
+                ]
+                node = {**node, "test_results": test_results}
             collection[uid] = {
-                **collection[uid],
+                **node,
                 "raw_sql": "",
                 "compiled_sql": "",
             }

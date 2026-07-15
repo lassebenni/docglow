@@ -356,6 +356,7 @@
       "test_results": [
         {
           "test_name": "relationships_order_items_order_id__order_id__ref_orders_",
+          "test_unique_id": "test.jaffle_shop.relationships_order_items_order_id__order_id__ref_orders_.fixture",
           "test_type": "relationships",
           "column_name": "order_id",
           "status": "pass",
@@ -377,6 +378,7 @@
         },
         {
           "test_name": "unique_orders_order_id",
+          "test_unique_id": "test.jaffle_shop.unique_orders_order_id.fixture",
           "test_type": "unique",
           "column_name": "order_id",
           "status": "pass",
@@ -386,6 +388,7 @@
         },
         {
           "test_name": "relationships_orders_customer_id__customer_id__ref_stg_customers_",
+          "test_unique_id": "test.jaffle_shop.relationships_orders_customer_id__customer_id__ref_stg_customers_.fixture",
           "test_type": "relationships",
           "column_name": "customer_id",
           "status": "pass",
@@ -395,6 +398,7 @@
         },
         {
           "test_name": "dbt_utils_expression_is_true_orders_order_items_subtotal_subtotal",
+          "test_unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_orders_order_items_subtotal_subtotal.fixture",
           "test_type": "expression_is_true",
           "column_name": null,
           "status": "pass",
@@ -404,6 +408,7 @@
         },
         {
           "test_name": "dbt_utils_expression_is_true_orders_order_total_subtotal_tax_paid",
+          "test_unique_id": "test.jaffle_shop.dbt_utils_expression_is_true_orders_order_total_subtotal_tax_paid.fixture",
           "test_type": "expression_is_true",
           "column_name": null,
           "status": "pass",

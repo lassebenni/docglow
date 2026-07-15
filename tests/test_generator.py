@@ -201,6 +201,13 @@ class TestSlimFlag:
         for model in data["models"].values():
             assert model["raw_sql"] == "", f"raw_sql not stripped for {model['name']}"
             assert model["compiled_sql"] == "", f"compiled_sql not stripped for {model['name']}"
+            for result in model.get("test_results", []):
+                assert result.get("compiled_sql", "") == "", (
+                    f"test compiled_sql not stripped for {result.get('test_name')}"
+                )
+                assert result.get("raw_sql", "") == "", (
+                    f"test raw_sql not stripped for {result.get('test_name')}"
+                )
 
     def test_slim_strips_sql_from_seeds(self, tmp_path: Path) -> None:
         """With --slim, seeds should also have empty SQL fields."""
