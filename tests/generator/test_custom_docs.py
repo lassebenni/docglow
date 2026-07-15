@@ -33,7 +33,12 @@ def test_attach_from_meta(tmp_path):
     attach_custom_docs(models, project_dir=project, output_dir=output)
 
     assert models["model.x.my_model"]["custom_docs"] == [
-        {"slug": "guide", "label": "Guide", "url": "docs/my_model/guide.html"}
+        {
+            "slug": "guide",
+            "label": "Guide",
+            "url": "docs/my_model/guide.html",
+            "source_file": "docs/my_model.html",
+        }
     ]
     assert (output / "docs" / "my_model" / "guide.html").read_text(encoding="utf-8").startswith(
         "<html>"

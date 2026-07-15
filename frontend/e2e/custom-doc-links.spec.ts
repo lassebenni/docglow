@@ -39,8 +39,18 @@ function buildCustomDocData() {
     test_results: [],
     last_run: null,
     custom_docs: [
-      { slug: 'guide', label: 'Guide', url: 'docs/demo_model/guide.html' },
-      { slug: 'workbook', label: 'Workbook', url: 'docs/demo_model/workbook.html' },
+      {
+        slug: 'guide',
+        label: 'Guide',
+        url: 'docs/demo_model/guide.html',
+        source_file: 'docs/demo_model/guide.html',
+      },
+      {
+        slug: 'workbook',
+        label: 'Workbook',
+        url: 'docs/demo_model/workbook.html',
+        source_file: 'docs/demo_model/workbook.html',
+      },
     ],
     questions: [
       {

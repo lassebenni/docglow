@@ -5,10 +5,22 @@ export interface ResolvedCustomDocLink {
   anchor: string
 }
 
+function pathBasename(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\/+/, '')
+  const parts = normalized.split('/')
+  return parts[parts.length - 1] ?? normalized
+}
+
+function sourceBasename(doc: CustomDoc): string | null {
+  if (!doc.source_file) return null
+  return pathBasename(doc.source_file)
+}
+
 /**
  * Resolve in-doc links authored as "<slug>#<anchor>" (e.g. workbook#cte-foo),
- * sibling "*.html" files, or same-page "#anchor" fragments against the model's
- * custom_docs slugs. Returns null when the href should use normal navigation.
+ * sibling "*.html" files, repo-relative source paths, or same-page "#anchor"
+ * fragments against the model's custom_docs slugs. Returns null when the href
+ * should use normal navigation.
  */
 export function resolveCustomDocLink(
   href: string,
@@ -46,6 +58,13 @@ export function resolveCustomDocLink(
     if (slugs.has(slug)) {
       return { slug, anchor }
     }
+
+    // repo-relative paths copied into docglow: match href basename to source_file
+    const hrefBase = htmlMatch[1]! + '.html'
+    const bySource = customDocs.find(doc => sourceBasename(doc) === hrefBase)
+    if (bySource) {
+      return { slug: bySource.slug, anchor }
+    }
   }
 
   // site-relative copy path: docs/<model>/<slug>.html
@@ -54,6 +73,12 @@ export function resolveCustomDocLink(
     const slug = siteMatch[1]!
     if (slugs.has(slug)) {
       return { slug, anchor }
+    }
+
+    const hrefBase = `${slug}.html`
+    const bySource = customDocs.find(doc => sourceBasename(doc) === hrefBase)
+    if (bySource) {
+      return { slug: bySource.slug, anchor }
     }
   }
 
