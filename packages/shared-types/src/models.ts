@@ -175,6 +175,23 @@ export interface DocglowModel {
   readonly questions?: readonly ModelQuestion[];
 }
 
+/** Latest dbt test result bound to a documented question via ``verified_by``. */
+export interface QuestionVerification {
+  readonly test_name: string;
+  readonly test_unique_id: string;
+  readonly test_type: string;
+  readonly status: "pass" | "fail" | "warn" | "error" | "not_run" | "misconfigured";
+  readonly failures: number;
+  readonly message: string | null;
+  readonly execution_time: number;
+  /** ISO timestamp from run_results.metadata.generated_at when available. */
+  readonly verified_at: string | null;
+  /** Compiled SQL from run_results or manifest (warehouse-ready). */
+  readonly compiled_sql?: string | null;
+  /** Raw Jinja SQL from the test node when compiled SQL is unavailable. */
+  readonly raw_sql?: string | null;
+}
+
 /** A business question the model answers, authored in ``meta.docglow.questions``. */
 export interface ModelQuestion {
   /** The business question, plain prose. */
@@ -188,11 +205,12 @@ export interface ModelQuestion {
    */
   readonly proof?: string;
   /**
-   * Optional name of a dbt test that re-verifies this answer on every build
-   * (matched against the model's test_results[].test_name). Rendered as a
-   * verified/failing chip — the question's data-drift signal.
+   * Optional name of a dbt test that re-verifies this answer on every build.
+   * Site generation attaches a ``verification`` block with the latest result.
    */
   readonly verified_by?: string;
+  /** Populated at site-generation time when ``verified_by`` is set. */
+  readonly verification?: QuestionVerification;
 }
 
 /** A static HTML document tab attached to a model at generate time. */

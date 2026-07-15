@@ -134,6 +134,16 @@ def generate_site(
 
     attach_questions(docglow_data["models"])
 
+    from docglow.generator.questions import attach_question_verification
+
+    attach_question_verification(
+        docglow_data["models"],
+        artifacts.manifest,
+        artifacts.run_results,
+    )
+    if artifacts.run_results and artifacts.run_results.metadata.generated_at:
+        docglow_data["metadata"]["test_run_at"] = artifacts.run_results.metadata.generated_at
+
     logger.info("Bundling site...")
     bundle_site(docglow_data, resolved_output, static=static, head_script=head_script)
 

@@ -33,6 +33,8 @@ export interface DocglowMetadata {
   readonly api_base_url: string | null;
   readonly published_at: string | null;
   readonly features: HostedFeatures | null;
+  /** ISO timestamp from run_results.metadata.generated_at when bundled. */
+  readonly test_run_at?: string | null;
 }
 
 export type LineageBadgeAbbreviation = "smart" | "truncate" | "middle" | "none";

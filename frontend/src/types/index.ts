@@ -25,6 +25,7 @@ export type {
   HistogramBin,
   LastRun,
   ModelQuestion,
+  QuestionVerification,
   ProfilingMeta,
   SampleData,
   TestResult,
