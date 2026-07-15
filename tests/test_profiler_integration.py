@@ -126,6 +126,30 @@ class TestProfilerIntegration:
         assert p.get("top_values") is not None
         assert len(p["top_values"]) == 3
 
+    def test_pii_column_skips_top_values(self, duckdb_path: str) -> None:
+        models = {
+            "model.test.orders": _make_model(
+                columns=[
+                    {
+                        "name": "status",
+                        "data_type": "VARCHAR",
+                        "meta": {"pii": True},
+                    },
+                ]
+            ),
+        }
+
+        profiles, _meta = profile_models(
+            models,
+            adapter="duckdb",
+            connection_params={"path": duckdb_path},
+            use_cache=False,
+        )
+
+        p = profiles["model.test.orders"]["status"]
+        assert p["distinct_count"] == 3
+        assert p.get("top_values") is None
+
     def test_profile_date_columns(self, duckdb_path: str) -> None:
         models = {
             "model.test.orders": _make_model(
@@ -255,6 +279,36 @@ class TestProfilerIntegration:
         assert p["customer_id"]["is_unique"] is False
         assert p["status"]["distinct_count"] == 3
         assert p["is_active"]["distinct_count"] == 2
+
+    def test_pii_columns_suppress_top_values(self, duckdb_path: str) -> None:
+        """Columns flagged meta.pii get aggregate stats but no top_values.
+
+        top_values embeds the actual most-frequent literal values; for PII
+        columns that would leak raw data into the bundle. The guard must be
+        column-specific — a non-PII low-cardinality column still gets them.
+        """
+        models = {
+            "model.test.orders": _make_model(
+                columns=[
+                    {"name": "status", "data_type": "VARCHAR", "meta": {"pii": True}},
+                    {"name": "customer_id", "data_type": "INTEGER"},
+                ]
+            ),
+        }
+
+        profiles, _meta = profile_models(
+            models,
+            adapter="duckdb",
+            connection_params={"path": duckdb_path},
+            use_cache=False,
+        )
+
+        p = profiles["model.test.orders"]
+        # status is low-cardinality (3 distinct) but PII → top_values suppressed
+        assert p["status"]["distinct_count"] == 3
+        assert p["status"].get("top_values") is None
+        # non-PII low-cardinality column is unaffected
+        assert p["customer_id"].get("top_values") is not None
 
     def test_profile_with_sampling_metadata(self, duckdb_path: str) -> None:
         models = {

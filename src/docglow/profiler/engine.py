@@ -156,6 +156,23 @@ def profile_models(
     profiled_count = 0
     cached_count = 0
 
+    # PII guard: never collect top_values for columns flagged ``meta.pii: true``.
+    # Aggregate stats (null_rate, distinct_count, min/max length) are safe, but
+    # top_values would embed the actual most-frequent literal values (names,
+    # emails, card numbers) into the published bundle JSON — a data leak that
+    # front-end masking cannot undo. Suppress at collection time.
+    pii_columns: set[tuple[str, str]] = set()
+    for model_id, model in models.items():
+        for col in model.get("columns", []):
+            if isinstance(col, dict) and col.get("meta", {}).get("pii"):
+                pii_columns.add((model_id, col["name"]))
+    if pii_columns:
+        logger.info(
+            "PII guard: suppressing top_values for %d column(s) across %d model(s)",
+            len(pii_columns),
+            len({m for m, _ in pii_columns}),
+        )
+
     try:
         with engine.connect() as conn:
             for model_id, model in models.items():
@@ -262,6 +279,7 @@ def profile_models(
                         has_low_cardinality = (
                             0 < distinct <= top_values_threshold
                             and col_spec.category in ("string", "numeric", "boolean")
+                            and (model_id, col_spec.name) not in pii_columns
                         )
                         if has_low_cardinality:
                             tv_sql = build_top_values_query(
