@@ -3,8 +3,18 @@ import { resolveCustomDocLink } from '../utils/customDocLinks'
 import type { CustomDoc } from '../types'
 
 const docs: readonly CustomDoc[] = [
-  { slug: 'guide', label: 'Guide', url: 'docs/exp_saleplanner_item_series_daily/guide.html' },
-  { slug: 'workbook', label: 'Workbook', url: 'docs/exp_saleplanner_item_series_daily/workbook.html' },
+  {
+    slug: 'guide',
+    label: 'Guide',
+    url: 'docs/exp_saleplanner_item_series_daily/guide.html',
+    source_file: 'docs/concepts/saleplanner/exp_saleplanner_item_series.html',
+  },
+  {
+    slug: 'workbook',
+    label: 'Workbook',
+    url: 'docs/exp_saleplanner_item_series_daily/workbook.html',
+    source_file: 'analyses/saleplanner/2026_07_08_saleplanner__marts.html',
+  },
 ]
 
 describe('resolveCustomDocLink', () => {
@@ -54,6 +64,29 @@ describe('resolveCustomDocLink', () => {
     ).toEqual({
       slug: 'workbook',
       anchor: 'cte-snapshot_freshness_check',
+    })
+  })
+
+  it('resolves repo-relative source paths by source_file basename', () => {
+    expect(
+      resolveCustomDocLink(
+        '../../../analyses/saleplanner/2026_07_08_saleplanner__marts.html#cte-snapshot_freshness_check',
+        'guide',
+        docs,
+      ),
+    ).toEqual({
+      slug: 'workbook',
+      anchor: 'cte-snapshot_freshness_check',
+    })
+    expect(
+      resolveCustomDocLink(
+        '../../docs/concepts/saleplanner/exp_saleplanner_item_series.html',
+        'workbook',
+        docs,
+      ),
+    ).toEqual({
+      slug: 'guide',
+      anchor: '',
     })
   })
 

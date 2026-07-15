@@ -226,6 +226,8 @@ export interface CustomDoc {
   readonly label: string;
   /** Site-relative path to the copied HTML file (e.g. docs/my_model/concept.html). */
   readonly url: string;
+  /** Project-relative source path at generate time (e.g. analyses/foo/workbook.html). */
+  readonly source_file?: string;
 }
 
 /** Pre-dumped warehouse sample attached to a model at site-generation time. */
