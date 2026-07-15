@@ -116,3 +116,42 @@ def test_noop_when_no_docs(tmp_path):
     attach_custom_docs(models, project_dir=project, output_dir=output)
 
     assert "custom_docs" not in models["model.x.m"]
+
+
+def test_skips_meta_doc_outside_project(tmp_path, caplog):
+    project = tmp_path / "project"
+    project.mkdir()
+    outside = tmp_path / "outside.html"
+    _write_html(outside)
+    output = tmp_path / "site"
+    output.mkdir()
+    models = {
+        "model.x.m": {
+            "name": "m",
+            "meta": {
+                "docglow": {
+                    "docs": [{"label": "Guide", "file": str(outside)}],
+                }
+            },
+        }
+    }
+
+    with caplog.at_level(logging.WARNING, logger="docglow.generator.custom_docs"):
+        attach_custom_docs(models, project_dir=project, output_dir=output)
+
+    assert "custom_docs" not in models["model.x.m"]
+    assert any("outside project_dir" in r.message for r in caplog.records)
+
+
+def test_convention_doc_outside_project_uses_basename(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    docs_dir = tmp_path / "external-docs"
+    _write_html(docs_dir / "orders" / "orders.html")
+    output = tmp_path / "site"
+    output.mkdir()
+    models = {"model.x.orders": {"name": "orders", "meta": {}}}
+
+    attach_custom_docs(models, project_dir=project, output_dir=output, docs_dir=docs_dir)
+
+    assert models["model.x.orders"]["custom_docs"][0]["source_file"] == "orders.html"
