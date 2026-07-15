@@ -105,6 +105,22 @@ def _copy_doc(
     return f"docs/{model_name}/{slug}.html"
 
 
+def _is_within_project(source: Path, project_dir: Path) -> bool:
+    try:
+        source.resolve().relative_to(project_dir.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _source_file_field(source: Path, project_dir: Path) -> str:
+    """Return a project-relative path for source_file, or basename when outside."""
+    try:
+        return source.resolve().relative_to(project_dir.resolve()).as_posix()
+    except ValueError:
+        return source.name
+
+
 def attach_custom_docs(
     models: dict[str, dict[str, Any]],
     *,
@@ -149,12 +165,24 @@ def attach_custom_docs(
                     name,
                 )
                 continue
+            if not _is_within_project(source, project_dir):
+                logger.warning(
+                    "Custom doc file %s for model %s is outside project_dir — skipping",
+                    spec["file"],
+                    name,
+                )
+                continue
             try:
                 url = _copy_doc(source=source, output_dir=output_dir, model_name=name, slug=slug)
             except OSError as e:
                 logger.warning("Failed to copy custom doc %s for model %s: %s", source, name, e)
                 continue
-            entries.append({"slug": slug, "label": spec["label"], "url": url})
+            entries.append({
+                "slug": slug,
+                "label": spec["label"],
+                "url": url,
+                "source_file": _source_file_field(source, project_dir),
+            })
             seen_slugs.add(slug)
 
         if resolved_docs_dir is not None:
@@ -176,7 +204,12 @@ def attach_custom_docs(
                         e,
                     )
                     continue
-                entries.append({"slug": slug, "label": "Guide", "url": url})
+                entries.append({
+                    "slug": slug,
+                    "label": "Guide",
+                    "url": url,
+                    "source_file": _source_file_field(source, project_dir),
+                })
                 seen_slugs.add(slug)
 
         if entries:
