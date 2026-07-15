@@ -77,12 +77,15 @@ class DocglowColumn:
 @dataclass(frozen=True)
 class DocglowTestResult:
     test_name: str
+    test_unique_id: str
     test_type: str
     column_name: str | None
     status: str
     execution_time: float
     failures: int
     message: str | None
+    compiled_sql: str | None = None
+    raw_sql: str | None = None
 
 
 @dataclass(frozen=True)

@@ -61,6 +61,33 @@ def normalize_test_status(status: str) -> str:
     return _TEST_STATUS_MAP.get(status.lower(), status)
 
 
+def test_type_from_node(test_node: ManifestNode) -> str:
+    """Return the dbt generic test name, or ``unit_test`` for unit tests."""
+    if test_node.test_metadata:
+        return test_node.test_metadata.name
+    if test_node.resource_type == "unit_test":
+        return "unit_test"
+    return ""
+
+
+def test_sql_fields(
+    test_node: ManifestNode,
+    run_result: RunResult | None,
+) -> dict[str, str | None]:
+    """Return compiled and raw SQL for a dbt test node.
+
+    Prefer run_results compiled SQL (post-run), then manifest compiled_code,
+    then raw Jinja source as a last resort.
+    """
+    compiled: str | None = None
+    raw = (test_node.raw_code or "").strip() or None
+    if run_result and run_result.compiled_code:
+        compiled = run_result.compiled_code.strip() or None
+    elif test_node.compiled_code:
+        compiled = test_node.compiled_code.strip() or None
+    return {"compiled_sql": compiled, "raw_sql": raw}
+
+
 def build_column_tests(
     unique_id: str,
     test_nodes_by_id: dict[str, list[ManifestNode]],

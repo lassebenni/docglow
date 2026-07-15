@@ -365,12 +365,15 @@
         },
         {
           "test_name": "not_null_orders_order_id",
+          "test_unique_id": "test.jaffle_shop.not_null_orders_order_id.fixture",
           "test_type": "not_null",
           "column_name": "order_id",
           "status": "pass",
           "execution_time": 0.014256477355957031,
           "failures": 0,
-          "message": null
+          "message": null,
+          "compiled_sql": "select order_id\nfrom \"jaffle_shop\".\"main\".\"orders\"\nwhere order_id is null",
+          "raw_sql": "{{ test_not_null(**_dbt_generic_test_kwargs) }}"
         },
         {
           "test_name": "unique_orders_order_id",

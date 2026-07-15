@@ -205,14 +205,19 @@ class TestBuildDocglowData:
         assert "not_null" in test_types or "unique" in test_types
 
     def test_model_test_results(self, tmp_path: Path) -> None:
-        """Model should have test results with statuses."""
+        """Model should have test results with statuses and SQL when run."""
         data = _load_fixtures(tmp_path)
         orders = data["models"]["model.jaffle_shop.orders"]
 
         assert len(orders["test_results"]) > 0
+        has_sql = False
         for result in orders["test_results"]:
             assert result["status"] in ("pass", "fail", "warn", "error", "not_run")
             assert result["test_name"] != ""
+            assert result["test_unique_id"] != ""
+            if result.get("compiled_sql"):
+                has_sql = True
+        assert has_sql, "expected at least one test with compiled_sql from run_results"
 
     def test_model_dependencies(self, tmp_path: Path) -> None:
         """Model should have upstream dependencies."""

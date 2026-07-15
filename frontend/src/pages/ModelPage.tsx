@@ -10,6 +10,7 @@ import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
 import { StatisticsTab } from '../components/models/StatisticsTab'
 import { QuestionsTab } from '../components/models/QuestionsTab'
+import { TestsTab } from '../components/tests/TestsTab'
 import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
@@ -766,38 +767,7 @@ export function ModelPage() {
       )}
 
       {activeTab === 'tests' && (
-        <div className="border border-[var(--border)] rounded-lg overflow-hidden">
-          {model.test_results.length === 0 ? (
-            <div className="p-4 text-sm text-[var(--text-muted)]">No tests defined for this model.</div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead className="bg-[var(--bg-surface)]">
-                <tr>
-                  <th className="text-left px-4 py-2 font-medium">Test</th>
-                  <th className="text-left px-4 py-2 font-medium">Type</th>
-                  <th className="text-left px-4 py-2 font-medium">Column</th>
-                  <th className="text-left px-4 py-2 font-medium">Status</th>
-                  <th className="text-right px-4 py-2 font-medium">Time</th>
-                </tr>
-              </thead>
-              <tbody>
-                {model.test_results.map((test, i) => (
-                  <tr key={i} className="border-t border-[var(--border)]">
-                    <td className="px-4 py-2 font-mono text-xs">{test.test_name}</td>
-                    <td className="px-4 py-2">{test.test_type}</td>
-                    <td className="px-4 py-2">{test.column_name ?? '—'}</td>
-                    <td className="px-4 py-2">
-                      <TestBadge status={test.status} />
-                    </td>
-                    <td className="px-4 py-2 text-right text-[var(--text-muted)]">
-                      {(test.execution_time * 1000).toFixed(0)}ms
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+        <TestsTab testResults={model.test_results} />
       )}
     </div>
   )
