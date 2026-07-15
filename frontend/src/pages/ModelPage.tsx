@@ -139,6 +139,7 @@ export function ModelPage() {
   const location = useLocation()
   const { data, getModel, getColumnLineage } = useProjectStore()
   const [activeTab, setActiveTab] = useState<string>(() => parseTab(tabParam, []))
+  const [pendingDocAnchor, setPendingDocAnchor] = useState<string | null>(null)
   const [sqlMode, setSqlMode] = useState<'compiled' | 'raw'>('compiled')
 
   const decodedId = id ? decodeURIComponent(id) : ''
@@ -153,13 +154,27 @@ export function ModelPage() {
     setActiveTab(parseTab(tabParam, customSlugs))
   }, [tabParam, customSlugs])
 
+  // Questions-tab proof links and iframe cross-links can pass a doc anchor via
+  // router state; consume it once the target custom-doc tab mounts.
+  useEffect(() => {
+    const anchor = (location.state as { docAnchor?: string } | null)?.docAnchor
+    if (!anchor) return
+    setPendingDocAnchor(anchor)
+    navigate(location.pathname + location.hash, { replace: true, state: {} })
+  }, [location.state, location.pathname, location.hash, navigate])
+
   // State → URL: update the path on every tab click so the address bar is
   // shareable.  Uses replace so a user clicking through five tabs doesn't
   // pile five history entries onto the back button.  `columns` is the
   // canonical "no tab segment" URL, matching the existing column-anchor
   // links and any external bookmarks that predate this route.
-  const selectTab = useCallback((tab: string) => {
+  const selectTab = useCallback((tab: string, options?: { docAnchor?: string | null }) => {
     setActiveTab(tab)
+    if (options && 'docAnchor' in options) {
+      setPendingDocAnchor(options.docAnchor ?? null)
+    } else {
+      setPendingDocAnchor(null)
+    }
     if (!decodedId) return
     const encoded = encodeURIComponent(decodedId)
     const path = tab === 'columns' ? `/model/${encoded}` : `/model/${encoded}/${tab}`
@@ -171,6 +186,10 @@ export function ModelPage() {
       : ''
     navigate(path + colAnchor, { replace: true })
   }, [navigate, decodedId, location.hash])
+
+  const navigateToCustomDoc = useCallback((slug: string, anchor?: string) => {
+    selectTab(slug, { docAnchor: anchor ?? null })
+  }, [selectTab])
 
   // Scroll to column anchor when navigating with a hash (e.g. #col-closer_id)
   useEffect(() => {
@@ -433,7 +452,13 @@ export function ModelPage() {
       )}
 
       {activeCustomDoc && (
-        <CustomDocFrame doc={activeCustomDoc} />
+        <CustomDocFrame
+          doc={activeCustomDoc}
+          customDocs={customDocs}
+          onNavigateDoc={navigateToCustomDoc}
+          pendingAnchor={pendingDocAnchor}
+          onPendingAnchorConsumed={() => setPendingDocAnchor(null)}
+        />
       )}
 
       {activeTab === 'sql' && (

@@ -1,8 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CustomDoc } from '../../types'
+import { resolveCustomDocLink, scrollIframeToAnchor } from '../../utils/customDocLinks'
 
 interface CustomDocFrameProps {
   doc: CustomDoc
+  customDocs: readonly CustomDoc[]
+  onNavigateDoc: (slug: string, anchor?: string) => void
+  pendingAnchor?: string | null
+  onPendingAnchorConsumed?: () => void
 }
 
 function FullscreenToggle({
@@ -33,12 +38,45 @@ function FullscreenToggle({
   )
 }
 
-export function CustomDocFrame({ doc }: CustomDocFrameProps) {
+export function CustomDocFrame({
+  doc,
+  customDocs,
+  onNavigateDoc,
+  pendingAnchor,
+  onPendingAnchorConsumed,
+}: CustomDocFrameProps) {
   const [isFullscreen, setIsFullscreen] = useState(false)
+  const iframeRef = useRef<HTMLIFrameElement>(null)
 
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen(f => !f)
   }, [])
+
+  const wireIframeLinks = useCallback(() => {
+    const iframe = iframeRef.current
+    const contentDoc = iframe?.contentDocument
+    if (!contentDoc || contentDoc.documentElement.dataset.docglowLinkCapture === '1') {
+      return
+    }
+    contentDoc.documentElement.dataset.docglowLinkCapture = '1'
+
+    contentDoc.addEventListener('click', (event: MouseEvent) => {
+      const anchor = (event.target as Element | null)?.closest('a')
+      if (!anchor) return
+      const href = anchor.getAttribute('href')
+      if (!href) return
+
+      const resolved = resolveCustomDocLink(href, doc.slug, customDocs)
+      if (!resolved) return
+
+      event.preventDefault()
+      if (resolved.slug === doc.slug) {
+        scrollIframeToAnchor(contentDoc, resolved.anchor)
+        return
+      }
+      onNavigateDoc(resolved.slug, resolved.anchor || undefined)
+    }, true)
+  }, [customDocs, doc.slug, onNavigateDoc])
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -49,6 +87,32 @@ export function CustomDocFrame({ doc }: CustomDocFrameProps) {
     document.addEventListener('keydown', onKeyDown)
     return () => document.removeEventListener('keydown', onKeyDown)
   }, [isFullscreen])
+
+  useEffect(() => {
+    const iframe = iframeRef.current
+    if (!iframe) return
+
+    const handleLoad = () => {
+      wireIframeLinks()
+      if (pendingAnchor) {
+        const contentDoc = iframe.contentDocument
+        if (contentDoc && scrollIframeToAnchor(contentDoc, pendingAnchor)) {
+          onPendingAnchorConsumed?.()
+        }
+      }
+    }
+
+    iframe.addEventListener('load', handleLoad)
+    return () => iframe.removeEventListener('load', handleLoad)
+  }, [doc.url, wireIframeLinks, pendingAnchor, onPendingAnchorConsumed])
+
+  useEffect(() => {
+    if (!pendingAnchor) return
+    const contentDoc = iframeRef.current?.contentDocument
+    if (contentDoc && scrollIframeToAnchor(contentDoc, pendingAnchor)) {
+      onPendingAnchorConsumed?.()
+    }
+  }, [pendingAnchor, onPendingAnchorConsumed])
 
   return (
     <div
@@ -63,6 +127,8 @@ export function CustomDocFrame({ doc }: CustomDocFrameProps) {
         <FullscreenToggle isFullscreen={isFullscreen} onToggle={toggleFullscreen} />
       </div>
       <iframe
+        ref={iframeRef}
+        key={doc.slug}
         title={doc.label}
         src={doc.url}
         className="w-full flex-1 border-0 min-h-0"

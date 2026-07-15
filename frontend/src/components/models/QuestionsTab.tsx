@@ -1,3 +1,4 @@
+import { useNavigate, useParams } from 'react-router-dom'
 import { Markdown } from '../Markdown'
 import { SqlViewer } from './SqlViewer'
 import { TestBadge } from '../tests/TestBadge'
@@ -24,6 +25,8 @@ function resolveProof(proof: string, customDocs: readonly CustomDoc[]): Resolved
 }
 
 function ProofLink({ proof, customDocs }: { proof: string; customDocs: readonly CustomDoc[] }) {
+  const navigate = useNavigate()
+  const { id } = useParams<{ id: string }>()
   const resolved = resolveProof(proof, customDocs)
   if (!resolved) {
     return (
@@ -33,21 +36,24 @@ function ProofLink({ proof, customDocs }: { proof: string; customDocs: readonly 
     )
   }
   const { doc, anchor } = resolved
-  const href = anchor ? `${doc.url}#${anchor}` : doc.url
   return (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
+    <button
+      type="button"
       data-testid="question-proof-link"
-      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-      title={`Open ${doc.label}${anchor ? ` at #${anchor}` : ''} in a new tab`}
+      onClick={() => {
+        if (!id) return
+        navigate(`/model/${encodeURIComponent(id)}/${doc.slug}`, {
+          state: anchor ? { docAnchor: anchor } : {},
+        })
+      }}
+      className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline cursor-pointer"
+      title={`Open ${doc.label}${anchor ? ` at #${anchor}` : ''}`}
     >
       <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
         <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
       </svg>
       {doc.label}{anchor ? ` · #${anchor}` : ''}
-    </a>
+    </button>
   )
 }
 
