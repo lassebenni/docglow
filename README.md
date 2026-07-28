@@ -64,6 +64,13 @@ docglow serve --dir ./demo-site
 
 This uses the bundled [jaffle_shop](https://github.com/dbt-labs/jaffle-shop) example project with pre-built dbt artifacts.
 
+For local frontend feature testing (rebuilds the SPA and attaches sample Data-tab fixtures for `orders` / `customers`):
+
+```bash
+pip install -e ".[dev]"
+cd frontend && npm ci && npm run demo
+```
+
 ## Quick Start
 
 ```bash
