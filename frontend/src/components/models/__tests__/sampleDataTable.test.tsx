@@ -14,6 +14,8 @@ import {
 import {
   cellMatches,
   compareCells,
+  filterColumnsByName,
+  highlightText,
   renderCell,
 } from '../SampleDataTable'
 
@@ -61,6 +63,23 @@ describe('expandSampleRows', () => {
     const rows = expandSampleRows(data, cols, withheld)
     expect(rows[0]).toEqual(['B01', WITHHELD_CELL_DISPLAY, 'D-A'])
     expect(rows[1]).toEqual(['B02', WITHHELD_CELL_DISPLAY, null])
+  })
+})
+
+describe('filterColumnsByName', () => {
+  const cols = ['pos_receipt_sk', 'date_key', 'location_id', 'buyer_name']
+
+  it('returns all columns when the query is empty', () => {
+    expect(filterColumnsByName(cols, '')).toEqual(cols)
+  })
+
+  it('filters case-insensitively by substring', () => {
+    expect(filterColumnsByName(cols, 'key')).toEqual(['date_key'])
+    expect(filterColumnsByName(cols, 'LOC')).toEqual(['location_id'])
+  })
+
+  it('returns an empty list when nothing matches', () => {
+    expect(filterColumnsByName(cols, 'zzz')).toEqual([])
   })
 })
 
@@ -119,6 +138,18 @@ describe('compareCells', () => {
 
   it('treats booleans as non-numeric — they sort lexically (false < true)', () => {
     expect(compareCells(true, false)).toBeGreaterThan(0)
+  })
+})
+
+describe('highlightText', () => {
+  it('returns the plain string when query is empty', () => {
+    expect(renderToStaticMarkup(<>{highlightText('date_key', '')}</>)).toBe('date_key')
+  })
+
+  it('wraps column-name matches in <mark> spans', () => {
+    const html = renderToStaticMarkup(<>{highlightText('date_key', 'key')}</>)
+    expect(html).toContain('>key<')
+    expect(html).toContain('date_')
   })
 })
 

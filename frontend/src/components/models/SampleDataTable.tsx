@@ -19,7 +19,8 @@ interface SampleDataTableProps {
 /**
  * Interactive table for the pre-dumped warehouse sample.
  *
- * - Substring search filters rows across every column (case-insensitive).
+ * - Substring search filters rows across visible columns (case-insensitive).
+ * - Column-name search narrows which columns are shown (case-insensitive).
  * - Withheld PII columns appear in warehouse order with a •••• placeholder;
  *   values are never sampled from the database.
  * - Click a column header to cycle tri-state asc → desc → none (withheld
@@ -27,6 +28,7 @@ interface SampleDataTableProps {
  */
 export function SampleDataTable({ data }: SampleDataTableProps) {
   const [search, setSearch] = useState('')
+  const [columnSearch, setColumnSearch] = useState('')
   const [sort, setSort] = useState<SortState>(null)
 
   const withheld = useMemo(() => withheldColumnSet(data), [data])
@@ -36,11 +38,25 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
     [data, displayColumns, withheld],
   )
 
+  const visibleColumns = useMemo(
+    () => filterColumnsByName(displayColumns, columnSearch),
+    [displayColumns, columnSearch],
+  )
+  const lowerColumnQuery = columnSearch.trim().toLowerCase()
+
+  const visibleIndexes = useMemo(
+    () => visibleColumns.map(col => displayColumns.indexOf(col)),
+    [visibleColumns, displayColumns],
+  )
+
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
     if (!q) return displayRows
-    return displayRows.filter(row => row.some(cell => cellMatches(cell, q)))
-  }, [displayRows, search])
+    if (visibleIndexes.length === 0) return []
+    return displayRows.filter(row =>
+      visibleIndexes.some(idx => cellMatches(row[idx], q)),
+    )
+  }, [displayRows, search, visibleIndexes])
 
   const originalIndex = useMemo(() => {
     const m = new Map<readonly SampleCell[], number>()
@@ -49,12 +65,12 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
   }, [displayRows])
 
   const sortedRows = useMemo(() => {
-    if (!sort) return filteredRows
+    if (!sort || !visibleColumns.includes(sort.column)) return filteredRows
     const idx = displayColumns.indexOf(sort.column)
     if (idx < 0) return filteredRows
     const direction = sort.direction === 'asc' ? 1 : -1
     return [...filteredRows].sort((a, b) => direction * compareCells(a[idx], b[idx]))
-  }, [filteredRows, sort, displayColumns])
+  }, [filteredRows, sort, displayColumns, visibleColumns])
 
   function onHeaderClick(column: string) {
     if (withheld.has(column)) return
@@ -77,6 +93,13 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
       ].join('\n')
     : ''
 
+  const emptyMessage =
+    visibleColumns.length === 0
+      ? 'No columns match.'
+      : sortedRows.length === 0
+        ? 'No rows match.'
+        : null
+
   return (
     <div className="flex flex-col gap-2" data-testid="model-data-tab">
       <div className="flex items-center gap-3 text-xs text-[var(--text-muted)] flex-wrap">
@@ -85,6 +108,18 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Search rows…"
+          aria-label="Search rows"
+          data-testid="data-tab-row-search"
+          className="px-2 py-1 text-xs border border-[var(--border)] rounded
+                     bg-[var(--bg)] outline-none focus:border-primary w-56"
+        />
+        <input
+          type="text"
+          value={columnSearch}
+          onChange={e => setColumnSearch(e.target.value)}
+          placeholder="Search columns…"
+          aria-label="Search columns"
+          data-testid="data-tab-column-search"
           className="px-2 py-1 text-xs border border-[var(--border)] rounded
                      bg-[var(--bg)] outline-none focus:border-primary w-56"
         />
@@ -93,6 +128,15 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
           {' of '}
           <span className="font-medium text-[var(--text)]">{data.row_count}</span>
           {' rows'}
+          {lowerColumnQuery ? (
+            <>
+              {' · '}
+              <span className="font-medium text-[var(--text)]">{visibleColumns.length}</span>
+              {' of '}
+              <span className="font-medium text-[var(--text)]">{displayColumns.length}</span>
+              {' columns'}
+            </>
+          ) : null}
           {data.row_count >= data.limit ? ` (limit ${data.limit})` : ''}
           {' — sampled from '}
           <code className="text-[var(--text)]">{data.schema}.{data.table}</code>
@@ -112,7 +156,7 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
         <table className="text-xs w-max">
           <thead>
             <tr>
-              {displayColumns.map(col => {
+              {visibleColumns.map(col => {
                 const isWithheld = withheld.has(col)
                 const active = !isWithheld && sort?.column === col
                 const indicator = isWithheld
@@ -134,7 +178,7 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
                         className="inline-flex items-center gap-1"
                         title="PII — values withheld from sample"
                       >
-                        <span>{col}</span>
+                        <span>{highlightText(col, lowerColumnQuery)}</span>
                         <span className="text-[var(--text-muted)] text-[10px]">{indicator}</span>
                       </span>
                     ) : (
@@ -145,7 +189,7 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
                                     ${active ? 'text-primary' : 'text-[var(--text)]'}
                                     hover:text-primary`}
                       >
-                        <span>{col}</span>
+                        <span>{highlightText(col, lowerColumnQuery)}</span>
                         <span className="text-[var(--text-muted)] text-[10px]">{indicator}</span>
                       </button>
                     )}
@@ -155,13 +199,13 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
             </tr>
           </thead>
           <tbody>
-            {sortedRows.length === 0 ? (
+            {emptyMessage ? (
               <tr>
                 <td
-                  colSpan={displayColumns.length}
+                  colSpan={Math.max(visibleColumns.length, 1)}
                   className="px-3 py-6 text-center text-[var(--text-muted)]"
                 >
-                  No rows match.
+                  {emptyMessage}
                 </td>
               </tr>
             ) : (
@@ -170,17 +214,20 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
                   key={originalIndex.get(row) ?? i}
                   className="even:bg-[var(--bg-surface)]/40"
                 >
-                  {row.map((cell, j) => (
-                    <td
-                      key={j}
-                      className={`px-3 py-1.5 whitespace-nowrap max-w-[24rem] truncate
-                                 border-b border-[var(--border)]/50
-                                 ${isWithheldCell(cell) ? 'text-warning/80 italic' : ''}`}
-                      title={cellToTitle(cell)}
-                    >
-                      {renderCell(cell, lowerQuery)}
-                    </td>
-                  ))}
+                  {visibleIndexes.map(idx => {
+                    const cell = row[idx]
+                    return (
+                      <td
+                        key={displayColumns[idx]}
+                        className={`px-3 py-1.5 whitespace-nowrap max-w-[24rem] truncate
+                                   border-b border-[var(--border)]/50
+                                   ${isWithheldCell(cell) ? 'text-warning/80 italic' : ''}`}
+                        title={cellToTitle(cell)}
+                      >
+                        {renderCell(cell, lowerQuery)}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))
             )}
@@ -189,6 +236,13 @@ export function SampleDataTable({ data }: SampleDataTableProps) {
       </div>
     </div>
   )
+}
+
+/** Filter column names by a case-insensitive substring. Empty/whitespace query → all columns. */
+export function filterColumnsByName(columns: readonly string[], query: string): string[] {
+  const q = query.trim().toLowerCase()
+  if (!q) return [...columns]
+  return columns.filter(col => col.toLowerCase().includes(q))
 }
 
 /** True iff `lowerQuery` is a case-insensitive substring of String(cell). NULL never matches. */
@@ -216,6 +270,11 @@ export function renderCell(cell: SampleCell, lowerQuery: string): ReactNode {
     return <span className="text-[var(--text-muted)]">∅</span>
   }
   const text = typeof cell === 'boolean' ? (cell ? 'true' : 'false') : String(cell)
+  return highlightText(text, lowerQuery)
+}
+
+/** Wrap every non-overlapping case-insensitive match of `lowerQuery` in <mark>. */
+export function highlightText(text: string, lowerQuery: string): ReactNode {
   if (!lowerQuery) return text
 
   const lowerText = text.toLowerCase()
