@@ -44,11 +44,16 @@ npm ci
 npm run build                   # tsc -b && vite build
 npm run sync-static             # copy dist/ → ../src/docglow/static/ (needed before local docglow generate)
 npm run build:sync              # build + sync-static in one step
+npm run demo                    # build:sync → generate jaffle demo w/ sample Data tab → serve
 npm run test                    # vitest
 npm run test:e2e                # playwright
 
 # Generate a site (quick test)
 docglow generate --project-dir examples/jaffle-shop --static
+
+# Local interactive UI demo (Data tab, etc.) — same as npm run demo
+./scripts/dev_demo.sh
+# SKIP_BUILD=1 ./scripts/dev_demo.sh   # reuse existing static bundle
 ```
 
 ## Project Structure

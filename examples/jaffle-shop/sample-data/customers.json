@@ -1,0 +1,64 @@
+{
+  "schema": "main",
+  "table": "customers",
+  "columns": [
+    "customer_id",
+    "customer_name",
+    "count_lifetime_orders",
+    "first_ordered_at",
+    "last_ordered_at",
+    "lifetime_spend_pretax",
+    "lifetime_tax_paid",
+    "lifetime_spend",
+    "customer_type"
+  ],
+  "rows": [
+    [
+      101,
+      "Alice",
+      2,
+      "2024-01-15",
+      "2024-02-01",
+      37.0,
+      3.7,
+      40.7,
+      "returning"
+    ],
+    [
+      102,
+      "Bob",
+      1,
+      "2024-01-16",
+      "2024-01-16",
+      8.0,
+      0.8,
+      8.8,
+      "new"
+    ],
+    [
+      103,
+      "Carol",
+      1,
+      "2024-02-10",
+      "2024-02-10",
+      4.5,
+      0.45,
+      4.95,
+      "new"
+    ],
+    [
+      104,
+      "Dave",
+      1,
+      "2024-03-01",
+      "2024-03-01",
+      18.0,
+      1.8,
+      19.8,
+      "new"
+    ]
+  ],
+  "row_count": 4,
+  "limit": 25,
+  "generated_at": "2026-07-27T16:00:00Z"
+}

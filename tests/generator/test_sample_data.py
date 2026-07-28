@@ -84,3 +84,22 @@ def test_attach_noop_on_none_dir():
     models = {"model.x.m": {"name": "m"}}
     attach_sample_data(models, None)
     assert "sample_data" not in models["model.x.m"]
+
+
+def test_jaffle_sample_data_fixtures_attach():
+    """Committed demo fixtures must stay attachable for scripts/dev_demo.sh."""
+    from pathlib import Path
+
+    fixtures = Path(__file__).resolve().parents[2] / "examples" / "jaffle-shop" / "sample-data"
+    models = {
+        "model.jaffle_shop.orders": {"name": "orders"},
+        "model.jaffle_shop.customers": {"name": "customers"},
+    }
+
+    attach_sample_data(models, fixtures)
+
+    assert "sample_data" in models["model.jaffle_shop.orders"]
+    assert "sample_data" in models["model.jaffle_shop.customers"]
+    assert models["model.jaffle_shop.orders"]["sample_data"]["table"] == "orders"
+    assert len(models["model.jaffle_shop.orders"]["sample_data"]["columns"]) >= 5
+    assert models["model.jaffle_shop.customers"]["sample_data"]["row_count"] == 4

@@ -20,6 +20,7 @@ Thumbs.db
 # Project
 dev/
 site/
+demo-site/
 .docglow-column-lineage-cache.json
 .docglow-column-lineage-failures.log
 # dbt/docglow build output. Ignore all target/ contents, but keep the three
