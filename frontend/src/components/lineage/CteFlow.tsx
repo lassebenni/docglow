@@ -564,6 +564,15 @@ export function CteFlow({ graph }: CteFlowProps) {
     return viewGraph.column_lineage[selected.nodeId]?.[selected.column] ?? []
   }, [selected, viewGraph.column_lineage])
 
+  /** old → new when this CTE field is a rename at the selected node */
+  const selectedRename = useMemo(() => {
+    if (!selected) return null
+    const renameDep = selectedUpstream.find(d => d.transformation === 'rename' && d.source_column)
+    if (!renameDep?.source_column) return null
+    if (renameDep.source_column === selected.column) return null
+    return { oldName: renameDep.source_column, newName: selected.column }
+  }, [selected, selectedUpstream])
+
   const selectedDownstream = useMemo(() => {
     if (!selected) return []
     return collectColumnDownstream(viewGraph.column_lineage, selected.nodeId, selected.column)
@@ -920,6 +929,32 @@ export function CteFlow({ graph }: CteFlowProps) {
                     {transformationGlyph(selectedKind)} {transformationLabel(selectedKind)}
                   </>
                 )}
+            </div>
+          )}
+          {selectedRename && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
+                Rename
+              </div>
+              <div
+                style={{
+                  margin: 0,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'var(--bg-surface, #f1f5f9)',
+                  fontSize: 12,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  color: 'var(--text, #0f172a)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span>{selectedRename.oldName}</span>
+                <span style={{ color: PATH_COLOR, fontWeight: 700 }}>→</span>
+                <span style={{ color: PATH_COLOR, fontWeight: 700 }}>{selectedRename.newName}</span>
+              </div>
             </div>
           )}
           {selectSqlLines && (
