@@ -3,7 +3,6 @@ import type { SqlGraph } from '../types'
 import {
   aggFnGlyph,
   collapsePassthroughCtes,
-  findDefiningOps,
   highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../utils/sqlGraphView'
@@ -80,20 +79,6 @@ describe('collapsePassthroughCtes', () => {
     expect(collapsed.nodes.find(n => n.id === 'cte:order_items')).toBeUndefined()
     const edges = new Set(collapsed.edges.map(e => `${e.source}->${e.target}`))
     expect(edges.has('parent:model.order_items->cte:order_items_summary')).toBe(true)
-  })
-})
-
-describe('findDefiningOps', () => {
-  it('finds derived op for column', () => {
-    const hits = findDefiningOps(sample, 'flag')
-    expect(hits).toHaveLength(1)
-    expect(hits[0]?.op.expression).toBe('x > 0')
-    expect(hits[0]?.cteId).toBe('cte:calc')
-  })
-
-  it('pathExpandOnly skips derived ops', () => {
-    const hits = findDefiningOps(sample, 'flag', undefined, { pathExpandOnly: true })
-    expect(hits).toHaveLength(0)
   })
 })
 

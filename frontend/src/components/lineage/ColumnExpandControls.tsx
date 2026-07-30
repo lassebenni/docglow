@@ -6,9 +6,6 @@ export const OVER_CAP_DETAIL_TEXT = 'Narrow the graph with filters or pinning to
 
 export type LineageViewMode = 'table' | 'columns' | 'ctes'
 
-/** @deprecated Prefer LineageViewMode */
-export type ColumnViewMode = LineageViewMode
-
 /**
  * Pure helpers — exported for direct unit testing.
  * The component below is a thin render wrapper over these + the store.

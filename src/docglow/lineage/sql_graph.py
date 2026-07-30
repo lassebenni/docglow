@@ -644,7 +644,7 @@ def _build_column_lineage(
         cols = output_columns or src_cols
         set_columns(output_id, cols)
         for col in cols:
-            if col in src_cols or src_cols:
+            if col in src_cols:
                 add_dep(output_id, col, upstream, col, "passthrough")
 
     return column_lineage

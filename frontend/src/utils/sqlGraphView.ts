@@ -1,5 +1,4 @@
-import type { SqlGraph, SqlGraphAggFn, SqlGraphNode, SqlGraphOp } from '../types'
-import { colKey } from './sqlGraphColumns'
+import type { SqlGraph, SqlGraphAggFn, SqlGraphNode } from '../types'
 
 /** Collapse pure passthrough CTEs by rewiring neighbors A→passthrough→B into A→B. */
 export function collapsePassthroughCtes(graph: SqlGraph): SqlGraph {
@@ -65,34 +64,6 @@ export function collapsePassthroughCtes(graph: SqlGraph): SqlGraph {
     nodes,
     edges,
   }
-}
-
-const PATH_OP_KINDS = new Set(['filter', 'window'])
-
-/** Find ops that define a column — path auto-expand only for filter/window. */
-export function findDefiningOps(
-  graph: SqlGraph,
-  column: string,
-  pathKeys?: Set<string>,
-  options?: { pathExpandOnly?: boolean },
-): { cteId: string; op: SqlGraphOp }[] {
-  const pathExpandOnly = options?.pathExpandOnly ?? false
-  const colLower = column.toLowerCase()
-  const hits: { cteId: string; op: SqlGraphOp }[] = []
-  for (const n of graph.nodes) {
-    if (n.kind !== 'cte' || !n.ops?.length) continue
-    if (pathKeys && !pathKeys.has(colKey(n.id, column))) {
-      const defines = n.ops.some(o => o.columns?.some(c => c.toLowerCase() === colLower))
-      if (!defines) continue
-    }
-    for (const op of n.ops) {
-      if (pathExpandOnly && !PATH_OP_KINDS.has(op.kind)) continue
-      if (op.columns?.some(c => c.toLowerCase() === colLower)) {
-        hits.push({ cteId: n.id, op })
-      }
-    }
-  }
-  return hits
 }
 
 /** Join-key column names + neighboring node ids for a join node. */

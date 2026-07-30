@@ -169,6 +169,31 @@ class TestBuildSqlGraph:
         assert deps[0]["source_node"] == "parent:model.proj.stg_order_items"
         assert deps[0]["transformation"] == "passthrough"
 
+    def test_output_deps_skip_columns_absent_upstream(self) -> None:
+        sql = """
+        with base as (select order_id from analytics.stg_orders)
+        select * from base
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_orders": {"name": "stg_orders", "schema": "analytics"},
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={"analytics.stg_orders": {"order_id": "varchar", "customer_id": "varchar"}},
+            output_columns=["order_id", "customer_id"],
+        )
+        assert graph is not None
+        out = graph["column_lineage"]["output:model.proj.orders"]
+        assert "order_id" in out
+        assert out["order_id"][0]["source_node"] == "cte:base"
+        assert "customer_id" not in out
+
     def test_derived_expression_captured(self) -> None:
         sql = """
         with
