@@ -262,3 +262,45 @@ class TestBuildSqlGraph:
         assert "row_number" in win_ops[0]["expression"].lower()
         assert "window" in (numbered.get("transforms") or [])
 
+    def test_passthrough_flag_and_derived_ops(self) -> None:
+        sql = """
+        with
+        base as (select * from analytics.stg_orders),
+        flagged as (
+            select
+                order_id,
+                customer_id,
+                count_food_items > 0 as is_food_order
+            from base
+        )
+        select * from flagged
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_orders": {"name": "stg_orders", "schema": "analytics"},
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.stg_orders": {
+                    "order_id": "varchar",
+                    "customer_id": "varchar",
+                    "count_food_items": "int",
+                }
+            },
+            output_columns=["order_id", "customer_id", "is_food_order"],
+        )
+        assert graph is not None
+        by_id = {n["id"]: n for n in graph["nodes"]}
+        assert by_id["cte:base"].get("passthrough") is True
+        assert not by_id["cte:flagged"].get("passthrough")
+        derived = [o for o in by_id["cte:flagged"].get("ops") or [] if o["kind"] == "derived"]
+        assert derived
+        assert derived[0].get("columns") == ["is_food_order"]
+        assert derived[0].get("expression")
+

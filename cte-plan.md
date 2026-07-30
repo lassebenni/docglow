@@ -41,11 +41,14 @@ with defining SQL `expression` and ambient transform glyphs.
 
 ### v3 — Expand CTE internals (done)
 
-On-demand WHERE / CASE / WINDOW op nodes inside a CTE.
+On-demand WHERE / CASE / WINDOW (+ group / derived / cast / coalesce) op nodes.
 
-- Backend: `SqlGraphNode.ops[]` with `{ id, kind, label, expression?, columns? }`
-- Frontend: ▶ on CTEs that have ops → materialize op nodes in the flow; click op → expression panel
-- CTEs with window/filter also get `transforms: ["window"|"filter"]` badges
+- Backend: `SqlGraphNode.ops[]` + `passthrough` flag on pure `SELECT *` CTEs
+- Frontend: ▶ expand → op nodes; click op → expression panel
+- Field path click auto-expands defining CTE ops
+- Default-collapse passthrough CTEs (toggle: Show passthrough CTEs)
+- Click join node → highlight join-key columns on neighbors
+
 
 ## v1 wire contract
 

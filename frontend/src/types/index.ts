@@ -118,7 +118,14 @@ export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
 export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output' | 'op'
 
-export type SqlGraphOpKind = 'filter' | 'case' | 'window'
+export type SqlGraphOpKind =
+  | 'filter'
+  | 'case'
+  | 'window'
+  | 'aggregate'
+  | 'derived'
+  | 'cast'
+  | 'calc'
 
 export interface SqlGraphJoinKey {
   readonly left_column: string
@@ -144,6 +151,7 @@ export interface SqlGraphNode {
   readonly transforms?: ReadonlyArray<'aggregate' | 'filter' | 'window' | 'other'>
   readonly columns?: ReadonlyArray<string>
   readonly ops?: ReadonlyArray<SqlGraphOp>
+  readonly passthrough?: boolean
   readonly expression?: string
   readonly op_kind?: SqlGraphOpKind
 }

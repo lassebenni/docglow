@@ -18,7 +18,7 @@ from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
 
-_MAX_OPS_PER_CTE = 8
+_MAX_OPS_PER_CTE = 12
 
 
 def build_sql_graph(
@@ -35,7 +35,7 @@ def build_sql_graph(
 
     v1: parent / cte / join / output structure.
     v2: ``columns`` on nodes + ``column_lineage`` for field drill-down.
-    v3: ``ops`` on CTE nodes (where / case / window) for on-demand expand.
+    v3: ``ops`` on CTE nodes for on-demand expand (where/case/window/group/derived/…).
     """
     if not compiled_sql or not compiled_sql.strip():
         return None
@@ -143,6 +143,7 @@ def build_sql_graph(
             elif op["kind"] == "window" and "window" not in transforms:
                 transforms.append("window")
 
+        passthrough = _select_is_passthrough(select, exp)
         add_node(
             {
                 "id": cte_id,
@@ -151,6 +152,7 @@ def build_sql_graph(
                 "cte_name": alias,
                 **({"transforms": transforms} if transforms else {}),
                 **({"ops": ops} if ops else {}),
+                **({"passthrough": True} if passthrough else {}),
             }
         )
 
@@ -169,7 +171,7 @@ def build_sql_graph(
         from_short = from_key.rsplit(".", 1)[-1]
         if from_key in cte_aliases or from_short in cte_aliases:
             src = f"cte:{from_short if from_short in cte_aliases else from_key}"
-            add_edge(src, cte_id, label="aggregate" if transforms else None)
+            add_edge(src, cte_id)
         else:
             collapsed = _normalize_table_ref(from_raw, cte_sources)
             parent_id = ensure_parent(collapsed or from_raw)
@@ -302,15 +304,32 @@ def build_sql_graph(
     }
 
 
+def _select_is_passthrough(select: Any, exp: Any) -> bool:
+    """True for ``SELECT * FROM x`` with no filter/join/group."""
+    if select.args.get("where") or select.args.get("having") or select.args.get("group"):
+        return False
+    if select.args.get("joins"):
+        return False
+    exprs = select.expressions or []
+    if len(exprs) != 1:
+        return False
+    only = exprs[0]
+    if isinstance(only, exp.Star):
+        return True
+    if isinstance(only, exp.Column) and only.name == "*":
+        return True
+    return False
+
+
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
-    """Extract WHERE / CASE / WINDOW ops for on-demand CTE expand (v3)."""
+    """Extract CTE-internal ops for on-demand expand."""
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
 
     def add(kind: str, label: str, expression: str | None, columns: list[str] | None = None) -> None:
         if len(ops) >= _MAX_OPS_PER_CTE:
             return
-        key = f"{kind}:{expression or ''}"
+        key = f"{kind}:{expression or ''}:{','.join(columns or [])}"
         if key in seen_expr:
             return
         seen_expr.add(key)
@@ -330,6 +349,28 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
         where_expr = where.this if getattr(where, "this", None) is not None else where
         add("filter", "where", _expression_sql(where_expr))
 
+    having = select.args.get("having")
+    if having is not None:
+        having_expr = having.this if getattr(having, "this", None) is not None else having
+        add("filter", "having", _expression_sql(having_expr))
+
+    group = select.args.get("group")
+    if group is not None:
+        add("aggregate", "group by", _expression_sql(group) or "GROUP BY")
+
+    cmp_types = (
+        exp.EQ,
+        exp.NEQ,
+        exp.GT,
+        exp.GTE,
+        exp.LT,
+        exp.LTE,
+        exp.And,
+        exp.Or,
+        exp.Not,
+    )
+    coalesce_cls = getattr(exp, "Coalesce", None)
+
     for expression in select.expressions or []:
         out_name: str | None = None
         inner = expression
@@ -343,10 +384,30 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
             continue
 
         cols = [out_name] if out_name else None
-        for win in inner.find_all(exp.Window):
+        windows = list(inner.find_all(exp.Window))
+        cases = list(inner.find_all(exp.Case))
+        for win in windows:
             add("window", "window", _expression_sql(win), cols)
-        for case in inner.find_all(exp.Case):
+        for case in cases:
             add("case", "case", _expression_sql(case), cols)
+
+        if windows or cases:
+            continue
+        if isinstance(inner, (exp.Column, exp.Star)):
+            continue
+
+        if isinstance(inner, exp.Cast):
+            add("cast", "cast", _expression_sql(inner), cols)
+            continue
+        if coalesce_cls is not None and isinstance(inner, coalesce_cls):
+            add("calc", "coalesce", _expression_sql(inner), cols)
+            continue
+        if isinstance(inner, cmp_types) or any(isinstance(n, cmp_types) for n in inner.walk()):
+            add("derived", "derived", _expression_sql(inner), cols)
+            continue
+        # Skip per-column aggregates when GROUP BY already captured the block
+        if group is None and inner.find(exp.AggFunc) is not None:
+            add("aggregate", "aggregate", _expression_sql(inner), cols)
 
     return ops
 
