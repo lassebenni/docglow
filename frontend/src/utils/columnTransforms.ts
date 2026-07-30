@@ -1,15 +1,9 @@
-import type { ColumnLineageDependency, ColumnLineageData, TransformationType } from '../types'
+import { TRANSFORMATION_STRENGTH, type TransformationType } from '@docglow/shared-types'
+import type { ColumnLineageDependency, ColumnLineageData } from '../types'
 
-const PRIORITY: Record<TransformationType, number> = {
-  unknown: 0,
-  untraced: 0,
-  direct: 1,
-  passthrough: 2,
-  rename: 3,
-  constant: 4,
-  derived: 5,
-  aggregated: 6,
-}
+const PRIORITY: Record<TransformationType, number> = Object.fromEntries(
+  TRANSFORMATION_STRENGTH.map((kind, i) => [kind, i]),
+) as Record<TransformationType, number>
 
 /** Ambient glyph for a column's transformation kind. */
 export function transformationGlyph(kind: TransformationType | null | undefined): string | null {

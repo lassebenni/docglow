@@ -348,60 +348,11 @@ def enrich_lineage_edges_with_join_keys(
     lineage: dict[str, Any],
     join_keys: dict[str, list[dict[str, str]]] | None,
 ) -> None:
-    """Attach join_keys onto lineage edges when both endpoints match a pair.
+    """No-op — join keys are canonical on the top-level ``join_keys`` map only.
 
-    Mutates ``lineage["edges"]`` in place. Sibling-only pairs (no matching
-    depends_on edge) remain available via the top-level ``join_keys`` map.
+    Kept for call-site compatibility during the transition; does not mutate edges.
     """
-    if not join_keys or not lineage.get("edges"):
-        return
-
-    # Index pairs by frozenset of the two model ids for O(1) edge lookup.
-    by_endpoints: dict[frozenset[str], list[dict[str, str]]] = {}
-    for pairs in join_keys.values():
-        for pair in pairs:
-            left = pair.get("left_model")
-            right = pair.get("right_model")
-            if not left or not right:
-                continue
-            key = frozenset({left, right})
-            by_endpoints.setdefault(key, []).append(pair)
-
-    if not by_endpoints:
-        return
-
-    enriched: list[dict[str, Any]] = []
-    for edge in lineage["edges"]:
-        source = edge.get("source")
-        target = edge.get("target")
-        if not source or not target:
-            enriched.append(edge)
-            continue
-        pairs = by_endpoints.get(frozenset({source, target}))
-        if not pairs:
-            enriched.append(edge)
-            continue
-        edge_keys: list[dict[str, str]] = []
-        seen: set[tuple[str, str]] = set()
-        for pair in pairs:
-            if pair["left_model"] == source and pair["right_model"] == target:
-                sc, tc = pair["left_column"], pair["right_column"]
-            elif pair["right_model"] == source and pair["left_model"] == target:
-                sc, tc = pair["right_column"], pair["left_column"]
-            else:
-                continue
-            marker = (sc, tc)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            edge_keys.append({"source_column": sc, "target_column": tc})
-        if edge_keys:
-            enriched.append({**edge, "join_keys": edge_keys})
-        else:
-            enriched.append(edge)
-
-    lineage["edges"] = enriched
-
+    return
 
 def _backfill_columns_from_lineage(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],

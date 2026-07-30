@@ -331,10 +331,7 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     if not ctx.column_lineage_enabled:
         return
 
-    from docglow.generator.data import (
-        _build_column_lineage,
-        enrich_lineage_edges_with_join_keys,
-    )
+    from docglow.generator.data import _build_column_lineage
 
     column_lineage, join_keys, join_bases, join_indirect = _build_column_lineage(
         ctx.column_lineage_enabled,
@@ -352,7 +349,8 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     ctx.join_keys = join_keys
     ctx.join_bases = join_bases
     ctx.join_indirect = join_indirect
-    enrich_lineage_edges_with_join_keys(ctx.lineage, join_keys)
+    # Join keys live only on the top-level join_keys map (canonical). Edge
+    # embedding was removed to avoid dual half-shaped payloads.
 
 
 def stage_strip_sql(ctx: PipelineContext) -> None:

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from docglow.lineage.analyzer import resolve_join_key_pairs
-from docglow.lineage.join_keys import extract_join_pairs, join_key_column_names
+from docglow.lineage.join_keys import (
+    extract_join_pairs,
+    join_key_column_names,
+    resolve_join_key_pairs,
+)
 from docglow.lineage.table_resolver import TableResolver
 
 
@@ -152,10 +155,10 @@ class TestResolveJoinKeyPairs:
         )
         resolved = resolve_join_key_pairs(pairs, resolver)
         assert len(resolved) == 1
-        assert resolved[0]["left_model"] == "model.proj.orders"
-        assert resolved[0]["right_model"] == "model.proj.users"
-        assert resolved[0]["left_column"] == "user_id"
-        assert resolved[0]["right_column"] == "id"
+        assert resolved[0].left_model == "model.proj.orders"
+        assert resolved[0].right_model == "model.proj.users"
+        assert resolved[0].left_column == "user_id"
+        assert resolved[0].right_column == "id"
 
     def test_drops_unresolved_sides(self) -> None:
         resolver = TableResolver(
@@ -234,3 +237,35 @@ class TestJoinKeysCacheRoundTrip:
             max_workers=1,
         )
         assert first.join_keys == second.join_keys
+
+
+class TestAnalyzeJoins:
+    def test_single_pass_matches_individual_extractors(self) -> None:
+        from docglow.lineage.join_keys import (
+            analyze_joins,
+            extract_indirect_join_parents,
+            extract_join_base_table,
+            extract_join_pairs,
+        )
+
+        sql = """
+        with
+        order_items as (select * from analytics.stg_order_items),
+        orders as (select * from analytics.stg_orders),
+        supplies as (select * from analytics.stg_supplies),
+        order_supplies_summary as (
+            select product_id, sum(supply_cost) as supply_cost from supplies group by 1
+        ),
+        joined as (
+            select *
+            from order_items
+            left join orders on order_items.order_id = orders.order_id
+            left join order_supplies_summary
+              on order_items.product_id = order_supplies_summary.product_id
+        )
+        select * from joined
+        """
+        analysis = analyze_joins(sql)
+        assert list(analysis.pairs) == extract_join_pairs(sql)
+        assert analysis.base_table == extract_join_base_table(sql)
+        assert list(analysis.indirect) == extract_indirect_join_parents(sql)
