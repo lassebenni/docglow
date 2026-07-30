@@ -17,6 +17,9 @@ build/
 .DS_Store
 Thumbs.db
 
+# Local UI verification screenshots (never commit to PRs)
+assets/verify-*.png
+
 # Project
 dev/
 site/

@@ -153,10 +153,12 @@ when asked to “verify with browser screenshot” (or when a visual regression 
 2. open the exact route you’re validating:
    - model lineage tab: `http://127.0.0.1:<port>/#/model/<model_unique_id>/lineage`
    - global lineage: `http://127.0.0.1:<port>/#/lineage`
-3. save screenshots into this repo under `assets/`:
+3. save screenshots into this repo under `assets/` for chat review only:
    - `assets/verify-<topic>-<state>.png` (e.g. `table`, `columns`, `panel-open`)
 4. in your response, embed the screenshot using the absolute local path:
    - `![caption](/Users/lasse/Documents/clients/vantilburg/docglow/assets/verify-...png)`
+
+**Never commit `assets/verify-*.png` to git or include them in PRs** (gitignored). Keep them local for review only.
 
 optional: if headless browser automation works, take the screenshot with a short node/playwright script from `frontend/` and write directly to `../assets/<filename>.png`.
 
