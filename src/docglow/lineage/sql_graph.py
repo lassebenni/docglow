@@ -38,8 +38,9 @@ def build_sql_graph(
 
     v1: parent / cte / join / output structure.
     v2: ``columns`` on nodes + ``column_lineage`` for field drill-down.
-    v3: ``ops`` on CTE nodes for on-demand expand (where/case/window/…).
+    v3: ``ops`` on CTE nodes for on-demand expand (where/having).
     v4: ``column_agg`` + ``select_sql`` on aggregate CTEs; no group/case op nodes.
+    v5: no window/case/derived op nodes — expressions on column panel + multi-column deps.
     """
     if not compiled_sql or not compiled_sql.strip():
         return None
@@ -140,13 +141,14 @@ def build_sql_graph(
         is_agg = _select_is_aggregate(select, exp)
         if is_agg:
             transforms.append("aggregate")
+        if _select_has_window(select, exp):
+            transforms.append("window")
 
+        # Only WHERE/HAVING as expandable ops — column formulas live on the panel
         ops = _extract_cte_ops(select, exp, cte_id=cte_id)
         for op in ops:
             if op["kind"] == "filter" and "filter" not in transforms:
                 transforms.append("filter")
-            elif op["kind"] == "window" and "window" not in transforms:
-                transforms.append("window")
 
         passthrough = _select_is_passthrough(select, exp)
         column_agg = _column_agg_map(select, exp) if is_agg else None
@@ -386,15 +388,23 @@ def _column_agg_map(select: Any, exp: Any) -> dict[str, str]:
     return out
 
 
+def _select_has_window(select: Any, exp: Any) -> bool:
+    """True if any projection contains a window function."""
+    for expression in select.expressions or []:
+        inner = expression.this if isinstance(expression, exp.Alias) else expression
+        if inner is not None and hasattr(inner, "find") and inner.find(exp.Window) is not None:
+            return True
+    return False
+
+
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
     """Extract CTE-internal ops for on-demand expand.
 
-    Aggregate SELECTs only expose filter/window ops — group/case/agg fragments
-    belong on the CTE node via ``column_agg`` + ``select_sql``.
+    Only WHERE / HAVING become graph op nodes. Window / CASE / derived / agg
+    formulas are shown on the column panel via ``expression`` + lineage deps.
     """
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
-    is_agg = _select_is_aggregate(select, exp)
 
     def add(kind: str, label: str, expression: str | None, columns: list[str] | None = None) -> None:
         if len(ops) >= _MAX_OPS_PER_CTE:
@@ -423,61 +433,6 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
     if having is not None:
         having_expr = having.this if getattr(having, "this", None) is not None else having
         add("filter", "having", _expression_sql(having_expr))
-
-    cmp_types = (
-        exp.EQ,
-        exp.NEQ,
-        exp.GT,
-        exp.GTE,
-        exp.LT,
-        exp.LTE,
-        exp.And,
-        exp.Or,
-        exp.Not,
-    )
-    coalesce_cls = getattr(exp, "Coalesce", None)
-
-    for expression in select.expressions or []:
-        out_name: str | None = None
-        inner = expression
-        if isinstance(expression, exp.Alias):
-            out_name = expression.alias
-            inner = expression.this
-        elif hasattr(expression, "alias_or_name") and expression.alias_or_name:
-            out_name = expression.alias_or_name
-
-        if inner is None or not hasattr(inner, "find_all"):
-            continue
-
-        cols = [out_name] if out_name else None
-        windows = list(inner.find_all(exp.Window))
-        for win in windows:
-            add("window", "window", _expression_sql(win), cols)
-
-        # Aggregate CTE: skip case/derived/cast — full SELECT is on the node
-        if is_agg:
-            continue
-
-        cases = list(inner.find_all(exp.Case))
-        for case in cases:
-            add("case", "case", _expression_sql(case), cols)
-
-        if windows or cases:
-            continue
-        if isinstance(inner, (exp.Column, exp.Star)):
-            continue
-
-        if isinstance(inner, exp.Cast):
-            add("cast", "cast", _expression_sql(inner), cols)
-            continue
-        if coalesce_cls is not None and isinstance(inner, coalesce_cls):
-            add("calc", "coalesce", _expression_sql(inner), cols)
-            continue
-        if isinstance(inner, cmp_types) or any(isinstance(n, cmp_types) for n in inner.walk()):
-            add("derived", "derived", _expression_sql(inner), cols)
-            continue
-        if inner.find(exp.AggFunc) is not None:
-            add("aggregate", "aggregate", _expression_sql(inner), cols)
 
     return ops
 
@@ -603,33 +558,44 @@ def _build_column_lineage(
             elif proj["kind"] == "expr":
                 out_name = proj["out"]
                 out_cols.append(out_name)
-                src_rel = proj.get("table")
-                src_col = proj.get("source_col")
                 expr_sql = proj.get("expression")
-                src_id = resolve_rel(src_rel) if src_rel else None
-                if src_id is None:
-                    from_ = select.args.get("from_")
-                    from_raw = _table_ref(from_.this, exp) if from_ else None
-                    src_id = resolve_rel(from_raw) if from_raw else None
-                if proj.get("constant"):
+                from_ = select.args.get("from_")
+                from_raw = _table_ref(from_.this, exp) if from_ else None
+                default_src = resolve_rel(from_raw) if from_raw else None
+                xform = "aggregated" if is_agg or proj.get("aggregated") else "derived"
+
+                sources = proj.get("sources") or []
+                if not sources and proj.get("source_col"):
+                    sources = [{"table": proj.get("table"), "column": proj["source_col"]}]
+
+                if proj.get("constant") or not sources:
                     add_dep(
                         cte_id,
                         out_name,
-                        src_id or "",
-                        src_col or "",
-                        "constant",
+                        default_src or "",
+                        "",
+                        "constant" if proj.get("constant") else xform,
                         expression=expr_sql,
                     )
-                elif src_id and src_col:
-                    xform = "aggregated" if is_agg or proj.get("aggregated") else "derived"
-                    add_dep(
-                        cte_id,
-                        out_name,
-                        src_id,
-                        src_col,
-                        xform,
-                        expression=expr_sql,
-                    )
+                else:
+                    for src in sources:
+                        src_col = src.get("column")
+                        if not src_col:
+                            continue
+                        src_rel = src.get("table")
+                        src_id = resolve_rel(src_rel) if src_rel else None
+                        if src_id is None:
+                            src_id = default_src
+                        if not src_id:
+                            continue
+                        add_dep(
+                            cte_id,
+                            out_name,
+                            src_id,
+                            src_col,
+                            xform,
+                            expression=expr_sql,
+                        )
 
         set_columns(cte_id, out_cols)
 
@@ -668,6 +634,24 @@ def _build_column_lineage(
 def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
     """Parse SELECT projections into star / column / expr descriptors."""
     out: list[dict[str, Any]] = []
+
+    def expr_sources(inner: Any) -> list[dict[str, str | None]]:
+        if not hasattr(inner, "find_all"):
+            return []
+        seen: set[tuple[str | None, str]] = set()
+        sources: list[dict[str, str | None]] = []
+        for col in inner.find_all(exp.Column):
+            name = col.name
+            if not name or name == "*":
+                continue
+            table = col.table or None
+            key = (table.lower() if table else None, name.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            sources.append({"table": table, "column": name})
+        return sources
+
     for expression in select.expressions or []:
         # table.*
         if isinstance(expression, exp.Column) and expression.name == "*":
@@ -690,17 +674,18 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                     }
                 )
             else:
-                cols = list(inner.find_all(exp.Column)) if hasattr(inner, "find_all") else []
-                src = cols[0] if cols else None
+                sources = expr_sources(inner)
+                src = sources[0] if sources else None
                 aggregated = inner.find(exp.AggFunc) is not None
                 out.append(
                     {
                         "kind": "expr",
-                        "out": out_name or (src.name if src else "expr"),
-                        "table": src.table if src else None,
-                        "source_col": src.name if src else None,
+                        "out": out_name or ((src or {}).get("column") if src else "expr"),
+                        "table": (src or {}).get("table") if src else None,
+                        "source_col": (src or {}).get("column") if src else None,
+                        "sources": sources,
                         "aggregated": aggregated,
-                        "constant": not cols,
+                        "constant": not sources,
                         "expression": _expression_sql(expression),
                     }
                 )
@@ -718,17 +703,20 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
             continue
 
         # bare expression without alias
-        cols = list(expression.find_all(exp.Column)) if hasattr(expression, "find_all") else []
-        src = cols[0] if cols else None
+        sources = expr_sources(expression)
+        src = sources[0] if sources else None
         aggregated = expression.find(exp.AggFunc) is not None if hasattr(expression, "find") else False
         out.append(
             {
                 "kind": "expr",
-                "out": src.name if src else expression.alias_or_name if hasattr(expression, "alias_or_name") else "expr",
-                "table": src.table if src else None,
-                "source_col": src.name if src else None,
+                "out": (src or {}).get("column")
+                if src
+                else (expression.alias_or_name if hasattr(expression, "alias_or_name") else "expr"),
+                "table": (src or {}).get("table") if src else None,
+                "source_col": (src or {}).get("column") if src else None,
+                "sources": sources,
                 "aggregated": aggregated,
-                "constant": not cols,
+                "constant": not sources,
                 "expression": _expression_sql(expression),
             }
         )

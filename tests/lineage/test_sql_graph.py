@@ -207,7 +207,7 @@ class TestBuildSqlGraph:
         assert "jaffle" in deps[0]["expression"].lower()
         assert "coalesce" in deps[0]["expression"].lower()
 
-    def test_cte_ops_extract_case_and_window(self) -> None:
+    def test_cte_ops_filter_only_window_on_column(self) -> None:
         sql = """
         with
         base as (select * from analytics.stg_orders),
@@ -252,15 +252,21 @@ class TestBuildSqlGraph:
 
         flagged = by_id["cte:flagged"]
         assert any(o["kind"] == "filter" for o in flagged.get("ops") or [])
-        assert any(o["kind"] == "case" for o in flagged.get("ops") or [])
+        assert not any(o["kind"] == "case" for o in flagged.get("ops") or [])
         assert "filter" in (flagged.get("transforms") or [])
+        is_done = graph["column_lineage"]["cte:flagged"]["is_done"]
+        assert is_done[0].get("expression")
+        assert "case" in is_done[0]["expression"].lower()
 
         numbered = by_id["cte:numbered"]
-        win_ops = [o for o in numbered.get("ops") or [] if o["kind"] == "window"]
-        assert win_ops
-        assert win_ops[0].get("expression")
-        assert "row_number" in win_ops[0]["expression"].lower()
         assert "window" in (numbered.get("transforms") or [])
+        assert not any(o["kind"] == "window" for o in numbered.get("ops") or [])
+        n_deps = graph["column_lineage"]["cte:numbered"]["n"]
+        cols = {d["source_column"] for d in n_deps}
+        assert "customer_id" in cols
+        assert "ordered_at" in cols
+        assert n_deps[0].get("expression")
+        assert "row_number" in n_deps[0]["expression"].lower()
 
     def test_aggregate_cte_column_agg_and_no_case_ops(self) -> None:
         sql = """
@@ -326,7 +332,7 @@ class TestBuildSqlGraph:
         assert "sum" in food_deps[0]["expression"].lower()
         assert "case" in food_deps[0]["expression"].lower()
 
-    def test_passthrough_flag_and_derived_ops(self) -> None:
+    def test_passthrough_flag_and_derived_expression(self) -> None:
         sql = """
         with
         base as (select * from analytics.stg_orders),
@@ -363,8 +369,10 @@ class TestBuildSqlGraph:
         by_id = {n["id"]: n for n in graph["nodes"]}
         assert by_id["cte:base"].get("passthrough") is True
         assert not by_id["cte:flagged"].get("passthrough")
-        derived = [o for o in by_id["cte:flagged"].get("ops") or [] if o["kind"] == "derived"]
-        assert derived
-        assert derived[0].get("columns") == ["is_food_order"]
-        assert derived[0].get("expression")
+        assert not any(o["kind"] == "derived" for o in by_id["cte:flagged"].get("ops") or [])
+        deps = graph["column_lineage"]["cte:flagged"]["is_food_order"]
+        assert deps[0]["transformation"] == "derived"
+        assert deps[0].get("expression")
+        assert "count_food_items" in deps[0]["expression"].lower()
+        assert deps[0]["source_column"] == "count_food_items"
 

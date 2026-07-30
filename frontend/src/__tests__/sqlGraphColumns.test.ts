@@ -67,4 +67,39 @@ describe('collectColumnPath', () => {
     expect([...path.keys]).toEqual([colKey('cte:x', 'a')])
     expect(path.steps).toEqual([{ nodeId: 'cte:x', column: 'a' }])
   })
+
+  it('highlights every column used in a multi-input expression', () => {
+    const winLineage: SqlGraphColumnLineage = {
+      'cte:base': {
+        customer_id: [{ source_node: 'parent:stg', source_column: 'customer_id', transformation: 'passthrough' }],
+        ordered_at: [{ source_node: 'parent:stg', source_column: 'ordered_at', transformation: 'passthrough' }],
+      },
+      'cte:numbered': {
+        customer_id: [{ source_node: 'cte:base', source_column: 'customer_id', transformation: 'passthrough' }],
+        ordered_at: [{ source_node: 'cte:base', source_column: 'ordered_at', transformation: 'passthrough' }],
+        n: [
+          {
+            source_node: 'cte:base',
+            source_column: 'customer_id',
+            transformation: 'derived',
+            expression: 'ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ordered_at)',
+          },
+          {
+            source_node: 'cte:base',
+            source_column: 'ordered_at',
+            transformation: 'derived',
+            expression: 'ROW_NUMBER() OVER (PARTITION BY customer_id ORDER BY ordered_at)',
+          },
+        ],
+      },
+    }
+    const path = collectColumnPath(winLineage, 'cte:numbered', 'n')
+    expect(path.keys.has(colKey('cte:base', 'customer_id'))).toBe(true)
+    expect(path.keys.has(colKey('cte:base', 'ordered_at'))).toBe(true)
+    expect(path.keys.has(colKey('parent:stg', 'customer_id'))).toBe(true)
+    expect(path.keys.has(colKey('parent:stg', 'ordered_at'))).toBe(true)
+    // same-node passthrough copies of expression inputs
+    expect(path.keys.has(colKey('cte:numbered', 'customer_id'))).toBe(true)
+    expect(path.keys.has(colKey('cte:numbered', 'ordered_at'))).toBe(true)
+  })
 })

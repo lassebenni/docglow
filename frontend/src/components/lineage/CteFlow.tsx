@@ -36,7 +36,6 @@ import {
   aggFnGlyph,
   aggFnLabel,
   collapsePassthroughCtes,
-  findDefiningOps,
   highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../../utils/sqlGraphView'
@@ -226,9 +225,11 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
           ? 'parent'
           : d.kind === 'output'
             ? 'output'
-            : hasOps
-              ? `cte · ${d.ops!.length} op${d.ops!.length === 1 ? '' : 's'}`
-              : 'cte'
+            : d.transforms?.includes('window')
+              ? 'cte · window'
+              : hasOps
+                ? `cte · ${d.ops!.length} filter${d.ops!.length === 1 ? '' : 's'}`
+                : 'cte'
 
   const cols = isOp ? [] : (d.columns ?? [])
   const overflow = cols.length > MAX_VISIBLE_COLS
@@ -586,41 +587,14 @@ export function CteFlow({ graph }: CteFlowProps) {
   const onColumnClick = useCallback(
     (nodeId: string, column: string) => {
       setJoinHl(null)
-      const nextSelected =
-        selected?.nodeId === nodeId && selected.column === column
+      setSelectedOp(null)
+      setSelected(prev =>
+        prev?.nodeId === nodeId && prev.column === column
           ? null
-          : { nodeId, column }
-      setSelected(nextSelected)
-      if (!nextSelected) {
-        setSelectedOp(null)
-        return
-      }
-      // Aggregate CTE fields use the column panel (full SELECT) — don't open CASE fragments
-      const clicked = graph.nodes.find(n => n.id === nodeId)
-      if (clicked?.transforms?.includes('aggregate') || clicked?.select_sql) {
-        setSelectedOp(null)
-        return
-      }
-      const pathResult = collectColumnPath(graph.column_lineage, nodeId, column)
-      const defining = findDefiningOps(graph, column, pathResult.keys, {
-        pathExpandOnly: true,
-      })
-      if (defining.length) {
-        setExpanded(prev => {
-          const next = new Set(prev)
-          for (const d of defining) next.add(d.cteId)
-          return next
-        })
-        const preferred =
-          defining.find(d => d.cteId === nodeId)?.op
-          ?? defining[defining.length - 1]?.op
-          ?? null
-        setSelectedOp(preferred)
-      } else {
-        setSelectedOp(null)
-      }
+          : { nodeId, column },
+      )
     },
-    [selected, graph],
+    [],
   )
 
   const onToggleExpand = useCallback((cteId: string) => {
