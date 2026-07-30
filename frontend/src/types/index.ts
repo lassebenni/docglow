@@ -70,14 +70,15 @@ export type {
 } from "@docglow/shared-types";
 
 export { gradeFromScore, HEALTH_GRADE_THRESHOLDS, PLAN_LIMITS } from "@docglow/shared-types";
-
-// Types extended with new transformation types (pending @docglow/shared-types v0.2.0)
-export type TransformationType = 'direct' | 'derived' | 'aggregated' | 'passthrough' | 'rename' | 'unknown';
+import type { TransformationType } from "@docglow/shared-types";
+export type { TransformationType };
 
 export interface ColumnLineageDependency {
-  readonly source_model: string;
-  readonly source_column: string;
+  readonly source_model?: string;
+  readonly source_column?: string;
   readonly transformation: TransformationType;
+  /** Defining SQL for derived/aggregated/constant columns (alias stripped). */
+  readonly expression?: string;
 }
 
 export interface ColumnDownstreamDependency {
@@ -92,7 +93,19 @@ export interface ColumnEdge {
   readonly targetModel: string;
   readonly targetColumn: string;
   readonly transformation: TransformationType;
+  readonly expression?: string;
 }
+
+/** Join ON/USING key pair (local until shared-types dist is rebuilt/published). */
+export interface JoinKeyPair {
+  readonly left_model: string;
+  readonly left_column: string;
+  readonly right_model: string;
+  readonly right_column: string;
+  readonly join_type?: string;
+}
+
+export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
 // SearchEntry extended with fields added after @docglow/shared-types v0.1.0.
 // These augmentations will be removed once shared-types is republished.
@@ -102,11 +115,6 @@ declare module "@docglow/shared-types" {
     readonly id: string;
     readonly column_name?: string;
     readonly model_name?: string;
-  }
-
-  // UI config added in 0.7.3; will be removed from here once shared-types is republished.
-  interface DocglowData {
-    readonly ui?: UiConfig;
   }
 }
 

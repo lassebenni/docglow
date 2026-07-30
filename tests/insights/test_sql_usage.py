@@ -12,6 +12,20 @@ class TestDetectSqlUsage:
         assert "join_key" in result.get("user_id", set())
         assert "join_key" in result.get("id", set())
 
+    def test_multi_eq_join_keys(self) -> None:
+        sql = """
+        SELECT * FROM sku a
+        JOIN size b ON a.size_code = b.size_code AND a.group_code = b.group_code
+        """
+        result = detect_sql_usage(sql, ["size_code", "group_code", "sku_name"])
+        assert "join_key" in result.get("size_code", set())
+        assert "join_key" in result.get("group_code", set())
+
+    def test_using_join_key(self) -> None:
+        sql = "SELECT * FROM orders a JOIN products p USING (product_id)"
+        result = detect_sql_usage(sql, ["product_id", "name"])
+        assert "join_key" in result.get("product_id", set())
+
     def test_group_by(self) -> None:
         sql = "SELECT status, count(*) FROM orders GROUP BY status"
         result = detect_sql_usage(sql, ["status"])

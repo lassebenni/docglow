@@ -609,6 +609,9 @@ export function ModelPage() {
             </div>
 
             <div className="h-4 w-px bg-[var(--border)]" />
+            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
+
+            <div className="h-4 w-px bg-[var(--border)]" />
 
             {/* Parent outputs — surfaces siblings of focal (other children of its direct parents) */}
             <label
@@ -695,9 +698,6 @@ export function ModelPage() {
               </button>
             )}
 
-            <div className="h-4 w-px bg-[var(--border)]" />
-            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
-
             <span className="text-xs text-[var(--text-muted)] ml-auto">
               {filteredSubgraph.nodes.length} nodes · {filteredSubgraph.edges.length} edges
             </span>
@@ -733,6 +733,9 @@ export function ModelPage() {
               layerConfig={layoutMode === 'dag' ? [] : data?.lineage.layer_config}
               onNavigateAway={() => setLineageFullscreen(false)}
               columnLineageData={data?.column_lineage}
+              joinKeysData={data?.join_keys}
+              joinBasesData={data?.join_bases}
+              joinIndirectData={data?.join_indirect}
               modelColumns={modelColumnsMap}
             />
           </div>

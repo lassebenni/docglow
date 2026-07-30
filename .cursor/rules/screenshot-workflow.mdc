@@ -1,0 +1,38 @@
+---
+description: take and store screenshots from locally running docglow ui
+alwaysApply: true
+---
+
+# screenshot workflow (cursor/claude)
+
+when asked to “verify with browser screenshot” (or when a visual regression could exist), do this:
+
+1. ensure the app is running locally (examples):
+   - `./scripts/dev_demo.sh` (interactive demo)
+   - `docglow serve --dir ./demo-site --port 8083 --no-open`
+2. open the exact UI route you’re validating:
+   - model lineage tab: `http://127.0.0.1:<port>/#/model/<model_unique_id>/lineage`
+   - global lineage: `http://127.0.0.1:<port>/#/lineage`
+3. take screenshots and save them under this repo:
+   - `assets/verify-<topic>-<state>.png`
+   - use clear state names, e.g. `table`, `columns`, `panel-open`
+4. include the screenshot in your response by embedding the absolute local path:
+   - `![caption](/Users/lasse/Documents/clients/vantilburg/docglow/assets/verify-...png)`
+
+## do not commit
+
+- **Never** add `assets/verify-*.png` to git or include them in PRs (they are gitignored).
+- Keep screenshots local for chat review only; delete when done if you want, but do not stage them.
+- Do not commit `.github/assets/` or `docs/assets/` product screenshots as part of verify workflows unless the user explicitly asks to update docs/marketing assets.
+
+## automation (optional)
+
+if playwright is already able to run in the current environment, you can automate screenshots with a short node script:
+
+- run from `frontend/` so `node_modules` are available:
+  - `cd frontend`
+  - use `page.goto(url)` and `page.screenshot({ path: '../assets/<filename>.png' })`
+
+## fallback
+
+if browser automation cannot launch (missing/blocked headless browser), take a manual screenshot in the system browser and save it to `assets/verify-...png`.

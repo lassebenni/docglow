@@ -250,6 +250,50 @@ class TestParseColumnLineage:
         assert "is_active" in result
         assert all(d.transformation == "derived" for d in result["is_active"])
 
+    def test_null_literal_is_constant_with_expression(self) -> None:
+        """NULL AS col has no upstream leaves — emit constant + expression."""
+        sql = """
+        WITH renamed AS (
+            SELECT id AS order_id, NULL AS tax_paid FROM raw_orders
+        )
+        SELECT * FROM renamed
+        """
+        result = parse_column_lineage(
+            sql,
+            schema={"raw_orders": {"id": "INT"}},
+            known_columns=["order_id", "tax_paid"],
+        )
+        assert "tax_paid" in result
+        assert all(d.transformation == "constant" for d in result["tax_paid"])
+        assert any(d.expression and d.expression.upper() == "NULL" for d in result["tax_paid"])
+        assert all(not d.source_table for d in result["tax_paid"])
+
+    def test_select_star_cte_classifies_inner_derived_expression(self) -> None:
+        """Outer SELECT * must not mask CTE-defining coalesce as passthrough."""
+        sql = """
+        WITH renamed AS (
+            SELECT
+                sku AS product_id,
+                COALESCE(type = 'jaffle', false) AS is_food_item
+            FROM raw_products
+        )
+        SELECT * FROM renamed
+        """
+        result = parse_column_lineage(
+            sql,
+            schema={"raw_products": {"sku": "varchar", "type": "varchar"}},
+            known_columns=["product_id", "is_food_item"],
+        )
+        assert "product_id" in result
+        assert all(d.transformation == "rename" for d in result["product_id"])
+        assert all(d.expression is None for d in result["product_id"])
+
+        assert "is_food_item" in result
+        food = result["is_food_item"]
+        assert all(d.transformation == "derived" for d in food)
+        assert any(d.expression and "COALESCE" in d.expression.upper() for d in food)
+        assert any(d.expression and "jaffle" in d.expression for d in food)
+
     def test_direct_no_longer_appears_in_output(self) -> None:
         """'direct' should never appear in new lineage output."""
         sql = (

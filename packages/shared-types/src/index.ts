@@ -5,7 +5,15 @@ export type {
   ColumnEdge,
   ColumnLineageData,
   ColumnLineageDependency,
+  JoinKeyPair,
+  JoinKeysData,
+  JoinBasesData,
+  JoinIndirectData,
+  JoinIndirectParent,
+  LineageEdgeJoinKey,
+  TransformationType,
 } from "./artifacts.js";
+export { TRANSFORMATION_STRENGTH } from "./artifacts.js";
 
 // Docglow model/source/exposure/metric types
 export type {

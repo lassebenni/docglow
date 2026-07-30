@@ -160,6 +160,7 @@ class LineageNode:
 class LineageEdge:
     source: str
     target: str
+    join_keys: tuple[dict[str, str], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -274,10 +275,20 @@ def _build_column_lineage(
     seeds: dict[str, Any],
     snapshots: dict[str, Any],
     max_workers: int | None = None,
-) -> dict[str, Any] | None:
-    """Build column-level lineage if enabled."""
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, list[dict[str, str]]] | None,
+    dict[str, str] | None,
+    dict[str, list[dict[str, str]]] | None,
+]:
+    """Build column-level lineage, join keys, bases, and indirect parents.
+
+    Returns:
+        ``(column_lineage, join_keys, join_bases, join_indirect)`` — all
+        ``None`` when disabled.
+    """
     if not enabled:
-        return None
+        return None, None, None, None
 
     from pathlib import Path as _Path
 
@@ -299,7 +310,7 @@ def _build_column_lineage(
             max_depth=depth,
         )
 
-    column_lineage = analyze_column_lineage(
+    result = analyze_column_lineage(
         models=models,
         sources=sources,
         seeds=seeds,
@@ -316,12 +327,32 @@ def _build_column_lineage(
         max_workers=max_workers,
     )
 
+    column_lineage = result.lineage
+    join_keys = result.join_keys
+    join_bases = result.join_bases
+    join_indirect = result.join_indirect
+
     # Backfill columns for models that have lineage but no catalog/manifest columns.
     if column_lineage:
         _backfill_columns_from_lineage(column_lineage, models, seeds, snapshots)
 
-    return column_lineage
+    return (
+        column_lineage,
+        join_keys or None,
+        join_bases or None,
+        join_indirect or None,
+    )
 
+
+def enrich_lineage_edges_with_join_keys(
+    lineage: dict[str, Any],
+    join_keys: dict[str, list[dict[str, str]]] | None,
+) -> None:
+    """No-op — join keys are canonical on the top-level ``join_keys`` map only.
+
+    Kept for call-site compatibility during the transition; does not mutate edges.
+    """
+    return
 
 def _backfill_columns_from_lineage(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],

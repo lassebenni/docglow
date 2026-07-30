@@ -11,23 +11,36 @@ import {
   type Edge,
   type NodeTypes,
   type NodeMouseHandler,
+  type EdgeMouseHandler,
   type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import { useNavigate } from 'react-router-dom'
-import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData } from '../../types'
+import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData, JoinKeysData } from '../../types'
 import { getUnionChain } from '../../utils/graphTraversal'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 import { buildReverseIndex, getColumnTraceResult } from '../../utils/columnLineageGraph'
+import {
+  columnExpression,
+  columnKindMapForModel,
+  strongestTransformation,
+  transformationGlyph,
+  upstreamSourceDeps,
+} from '../../utils/columnTransforms'
+import { getJoinKeysForEdge } from '../../utils/joinKeys'
+import { ColumnDetailPanel } from './ColumnDetailPanel'
 import { DagNode } from './DagNode'
 import { FolderNode } from './FolderNode'
+import { JoinKeysPanel, PanelRow } from './LineagePanels'
+import { useJoinHighlights } from './useJoinHighlights'
 
 const NODE_WIDTH = 180
 const NODE_HEIGHT = 44
 const FOLDER_NODE_WIDTH = 220
 const FOLDER_NODE_HEIGHT = 60
 const HIGHLIGHT_DEPTH_CAP = 4
+const JOIN_EDGE_AMBER = '#f59e0b'
 
 const RESOURCE_COLORS: Record<string, string> = {
   model: '#2563eb',
@@ -356,6 +369,12 @@ export interface LineageFlowProps {
   onNavigateAway?: () => void
   /** Column-level lineage data for column highlighting */
   columnLineageData?: ColumnLineageData
+  /** Join ON/USING key pairs keyed by the model that owns the SQL */
+  joinKeysData?: JoinKeysData
+  /** FROM (foundation) parent keyed by the model that owns the JOIN SQL */
+  joinBasesData?: Record<string, string>
+  /** Parents reached only via joined aggregate/intermediate CTEs */
+  joinIndirectData?: Record<string, ReadonlyArray<{ readonly model: string; readonly kind: string }>>
   /** Map of model ID → list of column names (for DagNode expansion) */
   modelColumns?: Record<string, string[]>
 }
@@ -372,11 +391,15 @@ function LineageFlowInner({
   layerConfig,
   onNavigateAway,
   columnLineageData,
+  joinKeysData,
+  joinBasesData,
+  joinIndirectData,
   modelColumns,
 }: LineageFlowProps) {
   const navigate = useNavigate()
   const { fitView, getNodes } = useReactFlow()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
 
   // Column highlight state
   const selectedColumn = useColumnHighlightStore(s => s.selectedColumn)
@@ -385,6 +408,7 @@ function LineageFlowInner({
   const manuallyCollapsedIds = useColumnHighlightStore(s => s.manuallyCollapsedIds)
   const clearColumnSelection = useColumnHighlightStore(s => s.clearSelection)
   const resetExpandState = useColumnHighlightStore(s => s.resetExpandState)
+  const expandAll = useColumnHighlightStore(s => s.expandAll)
 
   // Make bulk expand/collapse state ephemeral per LineageFlow mount: when the
   // user navigates between pages and back, expand state from prior views does
@@ -418,6 +442,28 @@ function LineageFlowInner({
       reverseIndex,
     )
   }, [selectedColumn, columnLineageData, reverseIndex])
+
+  // Column click clears join-edge selection (panel exclusivity)
+  useEffect(() => {
+    if (selectedColumn) setSelectedEdgeId(null)
+  }, [selectedColumn])
+
+  const {
+    selectedEdgeJoin,
+    connectedJoinHighlights,
+    joinBaseNodeIds,
+    joinTypeBadges,
+  } = useJoinHighlights({
+    selectedEdgeId,
+    edges,
+    nodes,
+    joinKeysData,
+    joinBasesData,
+    joinIndirectData,
+    pinnedIds,
+    effectiveExpandedIds,
+  })
+
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isDraggingRef = useRef(false)
   const [dragOverrides, setDragOverrides] = useState<Record<string, { x: number; y: number }>>({})
@@ -586,11 +632,20 @@ function LineageFlowInner({
       const hasColumnLineage =
         columnLineageData != null &&
         (columnLineageData[ln.id] != null || upstreamColumnLineageIds.has(ln.id))
-      const nodeHighlightedCols = columnTrace?.highlightedColumns.get(ln.id)
-      const inColumnTrace = nodeHighlightedCols != null && nodeHighlightedCols.size > 0
+      const traceCols = columnTrace?.highlightedColumns.get(ln.id)
+      const selectedJoinCols = selectedEdgeJoin?.highlights.get(ln.id)
+      const ambientJoinColors = connectedJoinHighlights?.get(ln.id)
+      let nodeHighlightedCols = traceCols
+      if (selectedJoinCols && selectedJoinCols.size > 0) {
+        nodeHighlightedCols = new Set([...(traceCols ?? []), ...selectedJoinCols])
+      }
+      const hasAmbientJoinColors = ambientJoinColors != null && ambientJoinColors.size > 0
+      const inColumnTrace =
+        (nodeHighlightedCols != null && nodeHighlightedCols.size > 0) || hasAmbientJoinColors
 
       // When column trace is active, dim nodes not involved
       const dimmedByColumnTrace = columnTrace != null && !inColumnTrace
+        && !(selectedEdgeJoin && (ln.id === selectedEdgeJoin.sourceId || ln.id === selectedEdgeJoin.targetId))
 
       return {
         id: ln.id,
@@ -610,6 +665,10 @@ function LineageFlowInner({
           hasColumnLineage,
           autoExpanded: autoExpandNodeIds.has(ln.id),
           highlightedColumns: nodeHighlightedCols,
+          joinKeyColors: hasAmbientJoinColors ? ambientJoinColors : undefined,
+          columnKinds: columnKindMapForModel(columnLineageData, ln.id),
+          isJoinBase: joinBaseNodeIds.has(ln.id),
+          joinTypeBadge: joinBaseNodeIds.has(ln.id) ? undefined : joinTypeBadges.get(ln.id),
           inColumnTrace: inColumnTrace && !effectiveExpandedIds.has(ln.id),
           noColumnData: false, // Updated in applyHighlightPass below
         },
@@ -621,7 +680,7 @@ function LineageFlowInner({
     })
 
     return [...bandNodes, ...dataNodes]
-  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
+  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds, selectedEdgeJoin, connectedJoinHighlights, joinBaseNodeIds, joinTypeBadges])
 
   // Reset drag overrides when the layout recomputes (depth/filter changes)
   const layoutRef = useRef(layout)
@@ -719,25 +778,33 @@ function LineageFlowInner({
 
   // Build React Flow edges — base structure without highlight styling
   const rfEdgesBase = useMemo((): Edge[] => {
-    const modelEdges: Edge[] = layout.edges.map((e) => ({
-      id: `${e.source}__${e.target}`,
-      source: e.source,
-      target: e.target,
-      type: 'smoothstep',
-      animated: false,
-      style: {
-        stroke: 'var(--text-muted, #94a3b8)',
-        strokeWidth: 1.5,
-        opacity: 0.5,
-      },
-      markerEnd: MARKER_DEFAULT,
-    }))
+    const modelEdges: Edge[] = layout.edges.map((e) => {
+      const pairs = getJoinKeysForEdge(e.source, e.target, e, joinKeysData)
+      const hasJoinKeys = pairs.length > 0
+      return {
+        id: `${e.source}__${e.target}`,
+        source: e.source,
+        target: e.target,
+        type: 'smoothstep',
+        animated: false,
+        className: hasJoinKeys ? 'join-key-edge' : undefined,
+        style: {
+          stroke: 'var(--text-muted, #94a3b8)',
+          strokeWidth: 1.5,
+          opacity: 0.5,
+        },
+        markerEnd: MARKER_DEFAULT,
+        data: { hasJoinKeys },
+      }
+    })
 
     // Column-level edges
     if (!columnTrace) return modelEdges
 
     const COLUMN_EDGE_COLORS: Record<string, string> = {
       direct: '#16a34a',
+      passthrough: '#16a34a',
+      rename: '#0d9488',
       derived: '#f59e0b',
       aggregated: '#7c3aed',
     }
@@ -746,6 +813,11 @@ function LineageFlowInner({
       const sourceExpanded = effectiveExpandedIds.has(ce.sourceModel)
       const targetExpanded = effectiveExpandedIds.has(ce.targetModel)
       const edgeColor = COLUMN_EDGE_COLORS[ce.transformation] ?? '#f59e0b'
+      const showLabel =
+        ce.transformation === 'derived'
+        || ce.transformation === 'aggregated'
+        || ce.transformation === 'rename'
+      const glyph = transformationGlyph(ce.transformation)
 
       return {
         id: `col__${ce.sourceModel}__${ce.sourceColumn}__${ce.targetModel}__${ce.targetColumn}`,
@@ -755,24 +827,31 @@ function LineageFlowInner({
         targetHandle: targetExpanded ? `col-${ce.targetColumn}-target` : undefined,
         type: 'smoothstep',
         animated: false,
-        label: ce.transformation,
-        labelStyle: {
-          fontSize: 9,
-          fontWeight: 600,
-          fill: edgeColor,
-          letterSpacing: '0.02em',
-        },
-        labelBgStyle: {
-          fill: 'var(--bg, #fff)',
-          fillOpacity: 0.85,
-          rx: 3,
-          ry: 3,
-        },
-        labelBgPadding: [4, 2] as [number, number],
+        label: showLabel ? (glyph ?? ce.transformation) : undefined,
+        labelStyle: showLabel
+          ? {
+              fontSize: 11,
+              fontWeight: 700,
+              fill: edgeColor,
+              letterSpacing: '0.02em',
+            }
+          : undefined,
+        labelBgStyle: showLabel
+          ? {
+              fill: 'var(--bg, #fff)',
+              fillOpacity: 0.85,
+              rx: 3,
+              ry: 3,
+            }
+          : undefined,
+        labelBgPadding: showLabel ? ([4, 2] as [number, number]) : undefined,
         style: {
           stroke: edgeColor,
-          strokeWidth: 2,
-          strokeDasharray: '6 3',
+          strokeWidth: ce.transformation === 'passthrough' || ce.transformation === 'direct' ? 1.5 : 2,
+          strokeDasharray:
+            ce.transformation === 'passthrough' || ce.transformation === 'direct' || ce.transformation === 'rename'
+              ? undefined
+              : '6 3',
           opacity: 0.9,
         },
         markerEnd: MARKER_COLUMN,
@@ -781,17 +860,36 @@ function LineageFlowInner({
     })
 
     return [...modelEdges, ...columnEdges]
-  }, [layout.edges, MARKER_DEFAULT, MARKER_COLUMN, columnTrace, effectiveExpandedIds])
+  }, [layout.edges, MARKER_DEFAULT, MARKER_COLUMN, columnTrace, effectiveExpandedIds, joinKeysData])
 
   // Lightweight pass: apply highlight styling to edges without recreating the base array
   const rfEdges = useMemo((): Edge[] => {
-    if (!highlightedSet && !columnTrace) return rfEdgesBase
-
     const isColumnTraceActive = columnTrace != null
+    const hasJoinSelection = selectedEdgeJoin != null
+
+    if (!highlightedSet && !isColumnTraceActive && !hasJoinSelection) return rfEdgesBase
 
     return rfEdgesBase.map(edge => {
       // Skip column edges — they're already styled
       if (edge.id.startsWith('col__')) return edge
+
+      const isJoinSelected = selectedEdgeId === edge.id
+      if (isJoinSelected) {
+        return {
+          ...edge,
+          style: {
+            stroke: JOIN_EDGE_AMBER,
+            strokeWidth: 2.5,
+            opacity: 1,
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed as const,
+            color: JOIN_EDGE_AMBER,
+            width: 16,
+            height: 12,
+          },
+        }
+      }
 
       const isHighlighted = highlightedSet
         ? highlightedSet.has(edge.source) && highlightedSet.has(edge.target)
@@ -802,12 +900,18 @@ function LineageFlowInner({
         style: {
           stroke: isHighlighted ? '#2563eb' : 'var(--text-muted, #94a3b8)',
           strokeWidth: isHighlighted ? 2 : 1.5,
-          opacity: isColumnTraceActive ? 0.08 : !highlightedSet ? 0.5 : isHighlighted ? 0.8 : 0.15,
+          opacity: isColumnTraceActive || hasJoinSelection
+            ? 0.08
+            : !highlightedSet
+              ? 0.5
+              : isHighlighted
+                ? 0.8
+                : 0.15,
         },
         markerEnd: isHighlighted ? MARKER_HIGHLIGHTED : MARKER_DEFAULT,
       }
     })
-  }, [rfEdgesBase, highlightedSet, columnTrace, MARKER_HIGHLIGHTED, MARKER_DEFAULT])
+  }, [rfEdgesBase, highlightedSet, columnTrace, selectedEdgeId, selectedEdgeJoin, MARKER_HIGHLIGHTED, MARKER_DEFAULT])
 
   // Fit view when data changes
   useEffect(() => {
@@ -855,6 +959,7 @@ function LineageFlowInner({
       clickTimerRef.current = setTimeout(() => {
         clickTimerRef.current = null
         // Single click: open side panel
+        setSelectedEdgeId(null)
         setSelectedNodeId(prev => prev === node.id ? null : node.id)
         if (onNodeClick) onNodeClick(node.id)
       }, 250)
@@ -864,14 +969,56 @@ function LineageFlowInner({
   // Close panel when clicking canvas background
   const handlePaneClick = useCallback(() => {
     setSelectedNodeId(null)
+    setSelectedEdgeId(null)
     clearColumnSelection()
   }, [clearColumnSelection])
+
+  const handleEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
+    event.stopPropagation()
+    if (edge.id.startsWith('col__')) return
+    const hasKeys = Boolean((edge.data as { hasJoinKeys?: boolean } | undefined)?.hasJoinKeys)
+    if (!hasKeys) {
+      // Still allow selecting for consistency, but only highlight if keys exist
+      setSelectedEdgeId(prev => (prev === edge.id ? null : edge.id))
+      setSelectedNodeId(null)
+      clearColumnSelection()
+      return
+    }
+    setSelectedEdgeId(prev => {
+      const next = prev === edge.id ? null : edge.id
+      if (next) {
+        expandAll([edge.source, edge.target], 50)
+      }
+      return next
+    })
+    setSelectedNodeId(null)
+    clearColumnSelection()
+  }, [clearColumnSelection, expandAll])
 
   // Lookup for selected node detail panel
   const selectedNodeData = useMemo(() => {
     if (!selectedNodeId) return null
     return nodes.find(n => n.id === selectedNodeId) ?? null
   }, [selectedNodeId, nodes])
+
+  const selectedEdgePairs = selectedEdgeJoin?.pairs ?? []
+  const nameOf = useCallback(
+    (modelId: string) => nodes.find(n => n.id === modelId)?.name ?? modelId.split('.').pop() ?? modelId,
+    [nodes],
+  )
+
+  const selectedColumnDetail = useMemo(() => {
+    if (!selectedColumn || !columnLineageData) return null
+    const deps = columnLineageData[selectedColumn.modelId]?.[selectedColumn.columnName] ?? []
+    return {
+      modelId: selectedColumn.modelId,
+      columnName: selectedColumn.columnName,
+      kind: strongestTransformation(deps),
+      expression: columnExpression(deps),
+      deps,
+      upstreamDeps: upstreamSourceDeps(deps),
+    }
+  }, [selectedColumn, columnLineageData])
 
   if (nodes.length === 0) {
     return <div className="text-[var(--text-muted)] text-sm">No lineage data available.</div>
@@ -886,11 +1033,12 @@ function LineageFlowInner({
       onNodeDragStart={handleNodeDragStart}
       onNodeDragStop={handleNodeDragStop}
       onNodeClick={handleNodeClick}
+      onEdgeClick={handleEdgeClick}
       onPaneClick={handlePaneClick}
       nodesDraggable={true}
       nodesConnectable={false}
       nodesFocusable={false}
-      edgesFocusable={false}
+      edgesFocusable={true}
       edgesReconnectable={false}
       elementsSelectable={false}
       selectNodesOnDrag={false}
@@ -996,18 +1144,26 @@ function LineageFlowInner({
           </button>
         </div>
       )}
+      {!selectedNodeData && !selectedEdgeJoin && selectedColumnDetail && (
+        <ColumnDetailPanel
+          detail={selectedColumnDetail}
+          nameOf={nameOf}
+          onClose={() => clearColumnSelection()}
+        />
+      )}
+      {!selectedNodeData && selectedEdgeJoin && selectedEdgePairs.length > 0 && (
+        <JoinKeysPanel
+          sourceId={selectedEdgeJoin.sourceId}
+          targetId={selectedEdgeJoin.targetId}
+          pairs={selectedEdgePairs}
+          nameOf={nameOf}
+          onClose={() => setSelectedEdgeId(null)}
+        />
+      )}
     </ReactFlow>
   )
 }
 
-function PanelRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <span style={{ color: 'var(--text-muted, #64748b)' }}>{label}</span>
-      <span style={{ color: 'var(--text, #0f172a)', fontWeight: 500, textAlign: 'right', wordBreak: 'break-word' }}>{value}</span>
-    </div>
-  )
-}
 
 export function LineageFlow(props: LineageFlowProps) {
   return (

@@ -30,11 +30,17 @@ _DIALECT_MAP: dict[str, str] = {
 
 @dataclass(frozen=True)
 class ColumnDependency:
-    """A single column-level dependency."""
+    """A single column-level dependency.
 
-    source_table: str  # Table name as parsed from SQL (e.g. "schema.table")
-    source_column: str  # Column name in the source table
-    transformation: str  # "passthrough" | "rename" | "aggregated" | "derived" | "unknown"
+    For ``constant`` / ``untraced`` columns there is no upstream table; use empty
+    ``source_table`` / ``source_column`` and rely on ``transformation`` (+ optional
+    ``expression`` for literals).
+    """
+
+    source_table: str  # Table name as parsed from SQL (e.g. "schema.table"); "" if none
+    source_column: str  # Column name in the source table; "" if none
+    transformation: str  # passthrough|rename|aggregated|derived|constant|untraced|unknown
+    expression: str | None = None  # Defining SQL expr for derived/aggregated/constant
 
 
 def detect_dialect(adapter_type: str | None) -> str | None:
@@ -206,7 +212,7 @@ def _trace_column_in_executor(
                 schema=schema or {},
                 dialect=dialect,
             )
-            deps = _collect_dependencies(node)
+            deps = _collect_dependencies(node, output_column=col_name)
             if deps:
                 return deps
         except Exception:  # noqa: BLE001
@@ -221,7 +227,7 @@ def _trace_column_in_executor(
                 schema={},
                 dialect=dialect,
             )
-            return _collect_dependencies(node)
+            return _collect_dependencies(node, output_column=col_name)
         except Exception:  # noqa: BLE001
             return []
 
@@ -370,7 +376,10 @@ def _get_excluded_columns(select: Any) -> set[str]:
     return excluded
 
 
-def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
+def _collect_dependencies(
+    root_node: Any,
+    output_column: str | None = None,
+) -> list[ColumnDependency]:
     """Walk a SQLGlot lineage node tree and collect leaf dependencies.
 
     The lineage tree has:
@@ -380,13 +389,18 @@ def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
     For nodes with Table sources (true leaves), we extract the table and column.
     When a leaf is a '*' (from SELECT *), we look at the parent node for the
     actual column name.
+
+    Transformation is classified across the whole lineage tree (not just the
+    outermost SELECT), so CTE-defining expressions like
+    ``coalesce(type = 'jaffle', false)`` stay ``derived`` even when the outer
+    query is ``SELECT * FROM cte``.
     """
     from sqlglot import exp
 
     deps: list[ColumnDependency] = []
     seen: set[tuple[str, str]] = set()
 
-    root_transformation = _classify_transformation(root_node.expression)
+    transformation, expression = _classify_lineage_tree(root_node)
 
     # Collect all nodes with their parent context
     all_nodes: list[tuple[Any, Any | None]] = []
@@ -417,15 +431,56 @@ def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
                 continue
             seen.add(key)
 
+            dep_transformation = transformation
+            if (
+                dep_transformation == "passthrough"
+                and output_column
+                and output_column.lower() != source_column.lower()
+            ):
+                dep_transformation = "rename"
+
             deps.append(
                 ColumnDependency(
                     source_table=source_table,
                     source_column=source_column,
-                    transformation=root_transformation,
+                    transformation=dep_transformation,
+                    expression=(
+                        expression
+                        if dep_transformation in ("derived", "aggregated", "constant")
+                        else None
+                    ),
                 )
             )
 
+    if not deps:
+        # Literal / NULL columns have no table leaves — still emit a constant entry
+        # so the UI can show a glyph + formula instead of treating them as missing.
+        const_expr = expression
+        if transformation != "constant":
+            const_expr = _constant_expression_sql(root_node)
+            if const_expr is not None:
+                transformation = "constant"
+        if transformation == "constant":
+            return [
+                ColumnDependency(
+                    source_table="",
+                    source_column="",
+                    transformation="constant",
+                    expression=const_expr or expression,
+                )
+            ]
+
     return deps
+
+
+def _constant_expression_sql(root_node: Any) -> str | None:
+    """If the lineage root is a constant/literal, return its SQL; else None."""
+    expr = getattr(root_node, "expression", None)
+    if expr is None:
+        return None
+    if _classify_transformation(expr) != "constant":
+        return None
+    return _expression_sql(expr)
 
 
 def _walk_with_parent(node: Any, parent: Any | None, result: list[tuple[Any, Any | None]]) -> None:
@@ -453,13 +508,86 @@ def _extract_column_from_node_name(name: str) -> str:
     return name
 
 
+# Keep ordered in sync with TRANSFORMATION_STRENGTH in @docglow/shared-types.
+_PRIORITY = {
+    "unknown": 0,
+    "untraced": 0,
+    "passthrough": 1,
+    "rename": 2,
+    "constant": 3,
+    "derived": 4,
+    "aggregated": 5,
+}
+
+
+def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
+    """Classify transformation from the full lineage tree + capture defining SQL.
+
+    Outer ``SELECT * FROM cte`` nodes often look like simple column aliases.
+    Walk downstream expressions and keep the strongest classification, along
+    with the SQL for the first derived/aggregated/constant defining expression.
+
+    Leaf lineage nodes carry the source ``Table`` as ``expression`` — those are
+    not transformations and must be ignored or everything looks ``derived``.
+    """
+    from sqlglot import exp
+
+    best_kind = "unknown"
+    best_priority = -1
+    best_expression: str | None = None
+
+    def consider(expression: Any) -> None:
+        nonlocal best_kind, best_priority, best_expression
+        if isinstance(expression, exp.Table):
+            return
+        kind = _classify_transformation(expression)
+        priority = _PRIORITY.get(kind, 0)
+        if priority > best_priority:
+            best_priority = priority
+            best_kind = kind
+            if kind in ("derived", "aggregated", "constant"):
+                best_expression = _expression_sql(expression)
+        elif (
+            priority == best_priority
+            and kind in ("derived", "aggregated", "constant")
+            and best_expression is None
+        ):
+            best_expression = _expression_sql(expression)
+
+    def walk(node: Any) -> None:
+        if getattr(node, "expression", None) is not None:
+            consider(node.expression)
+        for child in getattr(node, "downstream", []) or []:
+            walk(child)
+
+    walk(root_node)
+    return best_kind, best_expression
+
+
+def _expression_sql(expression: Any) -> str | None:
+    """Return a compact SQL string for a defining expression (alias stripped)."""
+    if expression is None:
+        return None
+    try:
+        from sqlglot import exp
+    except ImportError:
+        return None
+
+    inner = expression.this if isinstance(expression, exp.Alias) else expression
+    try:
+        return inner.sql()
+    except Exception:  # noqa: BLE001
+        return str(inner) if inner is not None else None
+
+
 def _classify_transformation(expression: Any) -> str:
-    """Classify the transformation type based on the root node's expression.
+    """Classify the transformation type based on a single expression node.
 
     Returns:
         "passthrough" — column passes through unchanged (SELECT a FROM ...)
         "aggregated" — column is inside an aggregate function (SUM, COUNT, etc.)
         "derived" — column is transformed in some other way (CASE, CONCAT, etc.)
+        "constant" — literal / NULL with no column reference
         "unknown" — expression is None (could not be parsed)
     """
     from sqlglot import exp
@@ -472,9 +600,13 @@ def _classify_transformation(expression: Any) -> str:
     if isinstance(inner, exp.Alias):
         inner = inner.this
 
-    # Simple column reference — passthrough (rename detection deferred to Phase 2)
+    # Simple column reference — passthrough (rename detection uses output name)
     if isinstance(inner, exp.Column):
         return "passthrough"
+
+    # Literals / NULL (including CAST of a constant)
+    if _is_constant_node(inner, exp):
+        return "constant"
 
     # Direct aggregate function
     agg_types = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max, exp.AnyValue)
@@ -488,6 +620,20 @@ def _classify_transformation(expression: Any) -> str:
                 return "aggregated"
 
     return "derived"
+
+
+def _is_constant_node(node: Any, exp: Any) -> bool:
+    """True when ``node`` is a SQL literal/NULL (optionally wrapped in Cast)."""
+    if node is None:
+        return False
+    if isinstance(node, (exp.Null, exp.Literal, exp.Boolean)):
+        return True
+    if isinstance(node, exp.Cast):
+        return _is_constant_node(node.this, exp)
+    # Paren / nested wrappers around a constant
+    if isinstance(node, exp.Paren):
+        return _is_constant_node(node.this, exp)
+    return False
 
 
 def build_schema_mapping(

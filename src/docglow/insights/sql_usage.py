@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from docglow.lineage.join_keys import extract_join_pairs, join_key_column_names
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,12 +73,9 @@ def detect_sql_usage(
                 cols.append(col.name)
         return cols
 
-    # Walk JOIN conditions
-    for join in tree.find_all(exp.Join):
-        on_clause = join.find(exp.EQ)
-        if on_clause:
-            for col_name in _extract_column_names(on_clause):
-                _add(col_name, "join_key")
+    # Join keys — shared extractor (multi-EQ ON + USING)
+    for col_name in join_key_column_names(extract_join_pairs(compiled_sql, dialect=dialect)):
+        _add(col_name, "join_key")
 
     # Walk GROUP BY
     for group in tree.find_all(exp.Group):

@@ -333,6 +333,7 @@ function LineageCell({
     if (!upstream || upstream.length === 0) return []
     const map = new Map<string, ColumnLineageDependency[]>()
     for (const dep of upstream) {
+      if (!dep.source_model) continue
       const existing = map.get(dep.source_model) ?? []
       map.set(dep.source_model, [...existing, dep])
     }
@@ -370,7 +371,7 @@ function LineageCell({
             <LineageBadge
               key={`up-${modelId}`}
               modelId={modelId}
-              columns={modelDeps.map(d => d.source_column)}
+              columns={modelDeps.map(d => d.source_column).filter((c): c is string => Boolean(c))}
               transformation={modelDeps[0].transformation}
               direction="upstream"
             />

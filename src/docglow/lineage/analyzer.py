@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from collections import deque
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,10 +21,17 @@ from docglow.lineage.column_parser import (
     build_schema_mapping,
     parse_column_lineage,
 )
+from docglow.lineage.join_keys import (
+    analyze_joins,
+    resolve_join_analysis,
+)
 from docglow.lineage.macro_expander import expand_macros
 from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
+
+# Bumped when cached lineage semantics change (join analysis / transform kinds).
+_CACHE_FORMAT_VERSION = 8
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -35,12 +43,39 @@ _JINJA_GENERIC = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 _JINJA_BLOCK = re.compile(r"\{%.*?%\}", re.DOTALL)
 
 
+@dataclass(frozen=True)
+class ColumnLineageResult(Mapping[str, dict[str, list[dict[str, str]]]]):
+    """Project-wide column lineage + join-key analysis result.
+
+    Implements Mapping so existing callers that treat the return value as
+    ``{model_uid: {column: deps}}`` keep working; use ``.join_keys`` for pairs
+    and ``.join_bases`` for the FROM (foundation) parent of each model's joins.
+    """
+
+    lineage: dict[str, dict[str, list[dict[str, str]]]]
+    join_keys: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    join_bases: dict[str, str] = field(default_factory=dict)
+    join_indirect: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> dict[str, list[dict[str, str]]]:
+        return self.lineage[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.lineage)
+
+    def __len__(self) -> int:
+        return len(self.lineage)
+
+
 @dataclass
 class _ModelLineageResult:
     """Result of analyzing column lineage for a single model."""
 
     uid: str
     lineage: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    join_keys: list[dict[str, str]] = field(default_factory=list)
+    join_base: str | None = None
+    join_indirect: list[dict[str, str]] = field(default_factory=list)
     cache_entry: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, str] | None = None
     cached: bool = False
@@ -158,9 +193,15 @@ def _analyze_single_model(
     # Check cache
     if cached_entry and cached_entry.get("sql_hash") == sql_hash:
         cached_lineage = cached_entry.get("lineage")
+        cached_joins = cached_entry.get("join_keys") or []
+        cached_base = cached_entry.get("join_base")
+        cached_indirect = cached_entry.get("join_indirect") or []
         return _ModelLineageResult(
             uid=uid,
             lineage=cached_lineage or {},
+            join_keys=list(cached_joins) if isinstance(cached_joins, list) else [],
+            join_base=cached_base if isinstance(cached_base, str) else None,
+            join_indirect=(list(cached_indirect) if isinstance(cached_indirect, list) else []),
             cached=True,
         )
 
@@ -177,7 +218,13 @@ def _analyze_single_model(
         logger.debug("Failed to parse column lineage for %s: %s", uid, e)
         return _ModelLineageResult(
             uid=uid,
-            cache_entry={"sql_hash": sql_hash, "lineage": {}},
+            cache_entry={
+                "sql_hash": sql_hash,
+                "lineage": {},
+                "join_keys": [],
+                "join_base": None,
+                "join_indirect": [],
+            },
             failure={
                 "model": uid,
                 "name": data.get("name", ""),
@@ -185,9 +232,16 @@ def _analyze_single_model(
             },
         )
 
+    join_analysis = resolve_join_analysis(analyze_joins(sql, dialect=dialect), resolver)
+    resolved_joins = [p.to_dict() for p in join_analysis.pairs]
+    join_base = join_analysis.base_model
+    join_indirect = [p.to_dict() for p in join_analysis.indirect]
+
     if not raw_lineage:
         failure = None
+        model_lineage: dict[str, list[dict[str, str]]] = {}
         if known_columns:
+            model_lineage = {c: [{"transformation": "untraced"}] for c in known_columns}
             failure = {
                 "model": uid,
                 "name": data.get("name", ""),
@@ -195,29 +249,58 @@ def _analyze_single_model(
             }
         return _ModelLineageResult(
             uid=uid,
-            cache_entry={"sql_hash": sql_hash, "lineage": {}},
+            lineage=model_lineage,
+            join_keys=resolved_joins,
+            join_base=join_base,
+            join_indirect=join_indirect,
+            cache_entry={
+                "sql_hash": sql_hash,
+                "lineage": model_lineage,
+                "join_keys": resolved_joins,
+                "join_base": join_base,
+                "join_indirect": join_indirect,
+            },
             failure=failure,
         )
 
     model_lineage = _resolve_dependencies(raw_lineage, resolver)
-    cache_entry_out = {"sql_hash": sql_hash, "lineage": model_lineage}
 
-    # Track partially traced models
+    # Catalog columns with no parse result → explicit untraced markers (not silent gaps).
+    if known_columns:
+        for col in known_columns:
+            if col not in model_lineage:
+                model_lineage[col] = [{"transformation": "untraced"}]
+
+    cache_entry_out = {
+        "sql_hash": sql_hash,
+        "lineage": model_lineage,
+        "join_keys": resolved_joins,
+        "join_base": join_base,
+        "join_indirect": join_indirect,
+    }
+
+    # Track partially traced models (untraced still counts as a soft failure for the log)
     failure = None
-    if known_columns and len(model_lineage) < len(known_columns):
-        traced = set(model_lineage.keys())
-        missed = [c for c in known_columns if c not in traced]
-        if missed:
+    if known_columns:
+        untraced = [
+            c
+            for c, deps in model_lineage.items()
+            if deps and all(d.get("transformation") == "untraced" for d in deps)
+        ]
+        if untraced:
             failure = {
                 "model": uid,
                 "name": data.get("name", ""),
-                "error": f"Partial: {len(missed)}/{len(known_columns)} columns not traced",
-                "columns": ", ".join(missed[:20]),
+                "error": f"Partial: {len(untraced)}/{len(known_columns)} columns not traced",
+                "columns": ", ".join(untraced[:20]),
             }
 
     return _ModelLineageResult(
         uid=uid,
         lineage=model_lineage,
+        join_keys=resolved_joins,
+        join_base=join_base,
+        join_indirect=join_indirect,
         cache_entry=cache_entry_out,
         failure=failure,
     )
@@ -367,7 +450,7 @@ def analyze_column_lineage(
     cache_path: Path | None = None,
     subset: set[str] | None = None,
     max_workers: int | None = None,
-) -> dict[str, dict[str, list[dict[str, str]]]]:
+) -> ColumnLineageResult:
     """Analyze column-level lineage for all models.
 
     Uses compiled_sql when available, falls back to raw_sql with Jinja
@@ -393,7 +476,7 @@ def analyze_column_lineage(
             Defaults to min(8, cpu_count). Set to 1 for sequential.
 
     Returns:
-        Dict of {model_unique_id: {column_name: [dependency_dicts]}}.
+        ColumnLineageResult with lineage and join_keys maps keyed by model uid.
     """
     resolver = TableResolver(
         models=models,
@@ -410,6 +493,9 @@ def analyze_column_lineage(
     cache_hits = 0
 
     column_lineage: dict[str, dict[str, list[dict[str, str]]]] = {}
+    join_keys: dict[str, list[dict[str, str]]] = {}
+    join_bases: dict[str, str] = {}
+    join_indirect: dict[str, list[dict[str, str]]] = {}
     parse_failures = 0
     total_models = 0
     failure_details: list[dict[str, str]] = []
@@ -430,6 +516,14 @@ def analyze_column_lineage(
                 cached_entry = cache.get(uid)
                 if cached_entry and cached_entry.get("lineage"):
                     column_lineage[uid] = cached_entry["lineage"]
+                if cached_entry and cached_entry.get("join_keys"):
+                    join_keys[uid] = list(cached_entry["join_keys"])
+                cached_base = cached_entry.get("join_base") if cached_entry else None
+                if isinstance(cached_base, str) and cached_base:
+                    join_bases[uid] = cached_base
+                cached_indirect = cached_entry.get("join_indirect") if cached_entry else None
+                if isinstance(cached_indirect, list) and cached_indirect:
+                    join_indirect[uid] = list(cached_indirect)
 
     # Determine which models to analyze
     uids_to_analyze = (
@@ -480,6 +574,9 @@ def analyze_column_lineage(
                     result,
                     all_models,
                     column_lineage,
+                    join_keys,
+                    join_bases,
+                    join_indirect,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -509,6 +606,9 @@ def analyze_column_lineage(
                     result,
                     all_models,
                     column_lineage,
+                    join_keys,
+                    join_bases,
+                    join_indirect,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -542,13 +642,21 @@ def analyze_column_lineage(
     if failure_details:
         _write_failure_report(failure_details, cache_path)
 
-    return column_lineage
+    return ColumnLineageResult(
+        lineage=column_lineage,
+        join_keys=join_keys,
+        join_bases=join_bases,
+        join_indirect=join_indirect,
+    )
 
 
 def _merge_result(
     result: _ModelLineageResult,
     all_models: dict[str, dict[str, Any]],
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],
+    join_keys: dict[str, list[dict[str, str]]],
+    join_bases: dict[str, str],
+    join_indirect: dict[str, list[dict[str, str]]],
     cache: dict[str, Any],
     failure_details: list[dict[str, str]],
     analyzed_count: int,
@@ -565,6 +673,12 @@ def _merge_result(
     if result.cached:
         if result.lineage:
             column_lineage[result.uid] = result.lineage
+        if result.join_keys:
+            join_keys[result.uid] = result.join_keys
+        if result.join_base:
+            join_bases[result.uid] = result.join_base
+        if result.join_indirect:
+            join_indirect[result.uid] = result.join_indirect
         return
 
     model_name = all_models[result.uid].get("name", result.uid.split(".")[-1])
@@ -579,6 +693,12 @@ def _merge_result(
         cache[result.uid] = result.cache_entry
     if result.lineage:
         column_lineage[result.uid] = result.lineage
+    if result.join_keys:
+        join_keys[result.uid] = result.join_keys
+    if result.join_base:
+        join_bases[result.uid] = result.join_base
+    if result.join_indirect:
+        join_indirect[result.uid] = result.join_indirect
     if result.failure:
         failure_details.append(result.failure)
 
@@ -714,18 +834,33 @@ def _resolve_dependencies(
     for col_name, deps in raw_lineage.items():
         resolved_deps: list[dict[str, str]] = []
         for dep in deps:
+            if dep.transformation == "constant":
+                entry: dict[str, str] = {"transformation": "constant"}
+                if dep.expression:
+                    entry["expression"] = dep.expression
+                resolved_deps.append(entry)
+                continue
+
+            if dep.transformation == "untraced":
+                resolved_deps.append({"transformation": "untraced"})
+                continue
+
+            if not dep.source_table:
+                continue
+
             source_model = resolver.resolve(dep.source_table)
             if source_model is None:
                 # Unresolvable — could be a CTE or external table
                 continue
 
-            resolved_deps.append(
-                {
-                    "source_model": source_model,
-                    "source_column": dep.source_column,
-                    "transformation": dep.transformation,
-                }
-            )
+            entry = {
+                "source_model": source_model,
+                "source_column": dep.source_column,
+                "transformation": dep.transformation,
+            }
+            if dep.expression and dep.transformation in ("derived", "aggregated"):
+                entry["expression"] = dep.expression
+            resolved_deps.append(entry)
 
         if resolved_deps:
             resolved[col_name] = resolved_deps
@@ -758,10 +893,14 @@ def _load_cache(
     if not isinstance(raw, dict):
         return {}
 
-    # Invalidate if version or dialect changed
+    # Invalidate if version, dialect, or cache format changed
     meta = raw.get(_CACHE_VERSION_KEY, {})
-    if meta.get("docglow_version") != __version__ or meta.get("dialect") != dialect:
-        logger.debug("Column lineage cache invalidated (version/dialect change)")
+    if (
+        meta.get("docglow_version") != __version__
+        or meta.get("dialect") != dialect
+        or meta.get("cache_format") != _CACHE_FORMAT_VERSION
+    ):
+        logger.debug("Column lineage cache invalidated (version/dialect/format change)")
         return {}
 
     # Remove meta key and migrate legacy "direct" → "passthrough"
@@ -804,6 +943,7 @@ def _save_cache(
         _CACHE_VERSION_KEY: {
             "docglow_version": __version__,
             "dialect": dialect,
+            "cache_format": _CACHE_FORMAT_VERSION,
         },
         **cache,
     }

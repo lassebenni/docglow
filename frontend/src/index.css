@@ -156,6 +156,13 @@ body {
   pointer-events: none !important;
 }
 
+/* Join-key table edges — re-enable click for the join-keys detail panel
+   (must come after the global edge pointer-events:none). */
+.react-flow__edge.join-key-edge,
+.react-flow__edge.join-key-edge .react-flow__edge-interaction {
+  pointer-events: visibleStroke !important;
+}
+
 /* Disable the grab cursor on nodes — cursor changes trigger browser repaints */
 .react-flow__node.draggable {
   cursor: default !important;

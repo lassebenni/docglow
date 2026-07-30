@@ -1,31 +1,25 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 
 export const DEFAULT_EXPAND_ALL_CAP = 50
 export const OVER_CAP_DETAIL_TEXT = 'Narrow the graph with filters or pinning to see more.'
+
+export type ColumnViewMode = 'table' | 'columns'
 
 /**
  * Pure helpers — exported for direct unit testing.
  * The component below is a thin render wrapper over these + the store.
  */
 
-export function expandTooltip(candidateCount: number): string | undefined {
-  return candidateCount === 0 ? 'No column lineage data in this graph' : undefined
+export function columnsModeTooltip(candidateCount: number): string | undefined {
+  return candidateCount === 0 ? 'No column lineage data in this graph' : 'Show columns on nodes'
 }
 
-export function collapseTooltip(candidateCount: number): string | undefined {
-  return candidateCount === 0 ? 'Nothing to collapse' : undefined
+export function tableModeTooltip(): string {
+  return 'Collapse to table-level lineage'
 }
 
-export function shouldDisableExpandAll(candidateCount: number): boolean {
-  return candidateCount === 0
-}
-
-// Collapse-all is enabled whenever there are candidates that could be expanded
-// (manually or by the local auto-expand memo in LineageFlow). The store cannot
-// know whether the memo is currently auto-expanding nodes, so we use the
-// candidate count as the proxy. Clicking on an already-empty view is a no-op.
-export function shouldDisableCollapseAll(candidateCount: number): boolean {
+export function shouldDisableColumnMode(candidateCount: number): boolean {
   return candidateCount === 0
 }
 
@@ -45,62 +39,97 @@ export function ColumnExpandControls({
   const expandAll = useColumnHighlightStore(s => s.expandAll)
   const collapseAll = useColumnHighlightStore(s => s.collapseAll)
 
+  const [mode, setMode] = useState<ColumnViewMode>('table')
   const [overCap, setOverCap] = useState<{ expanded: number; total: number } | null>(null)
+  const modeRef = useRef(mode)
+  modeRef.current = mode
 
-  const expandDisabled = shouldDisableExpandAll(candidateIds.length)
-  const collapseDisabled = shouldDisableCollapseAll(candidateIds.length)
+  const disabled = shouldDisableColumnMode(candidateIds.length)
 
-  const handleExpand = useCallback(() => {
+  const applyColumnsMode = useCallback(() => {
     const result = expandAll(candidateIds, cap)
     setOverCap(result.total > cap ? result : null)
   }, [expandAll, candidateIds, cap])
 
-  const handleCollapse = useCallback(() => {
+  const applyTableMode = useCallback(() => {
     collapseAll(candidateIds)
     setOverCap(null)
   }, [collapseAll, candidateIds])
+
+  // Re-apply expand when the visible candidate set changes while in columns mode
+  // (e.g. depth/filter changes), so newly visible nodes get columns too.
+  const candidateKey = candidateIds.join('\0')
+  useEffect(() => {
+    if (modeRef.current !== 'columns') return
+    if (candidateIds.length === 0) {
+      setMode('table')
+      setOverCap(null)
+      return
+    }
+    applyColumnsMode()
+    // candidateKey tracks content changes; applyColumnsMode closes over the latest ids.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: re-run on candidate set change only
+  }, [candidateKey])
+
+  const handleSelect = useCallback(
+    (next: ColumnViewMode) => {
+      if (next === 'columns' && disabled) return
+      setMode(next)
+      if (next === 'columns') {
+        applyColumnsMode()
+      } else {
+        applyTableMode()
+      }
+    },
+    [disabled, applyColumnsMode, applyTableMode],
+  )
 
   const dismissToast = useCallback(() => {
     setOverCap(null)
   }, [])
 
-  const buttonClasses = (disabled: boolean) =>
-    `px-2 py-0.5 text-xs cursor-pointer transition-colors rounded border border-[var(--border)] ${
-      disabled
+  const buttonClasses = (active: boolean, isDisabled: boolean) =>
+    `px-2 py-0.5 text-xs cursor-pointer transition-colors ${
+      isDisabled
         ? 'opacity-50 cursor-not-allowed bg-[var(--bg)] text-[var(--text-muted)]'
-        : 'bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)]'
+        : active
+          ? 'bg-primary text-white'
+          : 'bg-[var(--bg)] text-[var(--text-muted)] hover:text-[var(--text)] hover:bg-[var(--bg-surface)]'
     }`
 
   return (
     <>
-      <div className="flex items-center gap-2">
+      <div
+        className="flex items-center rounded overflow-hidden border border-[var(--border)]"
+        role="group"
+        aria-label="Lineage detail level"
+      >
         <button
           type="button"
-          aria-label="Expand columns on all nodes"
-          title={expandTooltip(candidateIds.length)}
-          disabled={expandDisabled}
-          onClick={handleExpand}
-          className={buttonClasses(expandDisabled)}
+          aria-label="Table-level lineage"
+          aria-pressed={mode === 'table'}
+          title={tableModeTooltip()}
+          onClick={() => handleSelect('table')}
+          className={buttonClasses(mode === 'table', false)}
         >
-          Expand all
+          Table
         </button>
         <button
           type="button"
-          aria-label="Collapse columns on all nodes"
-          title={collapseTooltip(candidateIds.length)}
-          disabled={collapseDisabled}
-          onClick={handleCollapse}
-          className={buttonClasses(collapseDisabled)}
+          aria-label="Column-level lineage"
+          aria-pressed={mode === 'columns'}
+          title={columnsModeTooltip(candidateIds.length)}
+          disabled={disabled}
+          onClick={() => handleSelect('columns')}
+          className={buttonClasses(mode === 'columns', disabled)}
         >
-          Collapse all
+          Columns
         </button>
       </div>
       {overCap && (
         <div
           role="status"
           aria-atomic="true"
-          // Fixed-position toast pinned to the bottom-center of the viewport.
-          // Dismissed by the close button or by the next bulk action click.
           className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 pl-4 pr-2 py-3 rounded-lg shadow-xl bg-[var(--bg-surface)] text-[var(--text)] border border-[var(--border)] max-w-[90vw]"
         >
           <svg
