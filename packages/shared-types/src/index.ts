@@ -5,6 +5,10 @@ export type {
   ColumnEdge,
   ColumnLineageData,
   ColumnLineageDependency,
+  JoinKeyPair,
+  JoinKeysData,
+  JoinBasesData,
+  LineageEdgeJoinKey,
 } from "./artifacts.js";
 
 // Docglow model/source/exposure/metric types

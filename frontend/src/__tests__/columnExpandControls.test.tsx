@@ -2,11 +2,10 @@ import { describe, it, expect } from 'vitest'
 import {
   DEFAULT_EXPAND_ALL_CAP,
   OVER_CAP_DETAIL_TEXT,
-  collapseTooltip,
-  expandTooltip,
+  columnsModeTooltip,
   formatOverCapHeadline,
-  shouldDisableCollapseAll,
-  shouldDisableExpandAll,
+  shouldDisableColumnMode,
+  tableModeTooltip,
 } from '../components/lineage/ColumnExpandControls'
 
 /* No @testing-library/react in this repo and vitest runs in `node` env, so
@@ -14,48 +13,30 @@ import {
    erdInspector.test.tsx. The render branches themselves are thin switches
    over these helpers and the store. */
 
-describe('shouldDisableExpandAll', () => {
-  it('disables when there are no candidate ids', () => {
-    expect(shouldDisableExpandAll(0)).toBe(true)
+describe('shouldDisableColumnMode', () => {
+  it('disables Columns mode when there are no candidate ids', () => {
+    expect(shouldDisableColumnMode(0)).toBe(true)
   })
 
-  it('enables when at least one candidate exists', () => {
-    expect(shouldDisableExpandAll(1)).toBe(false)
-    expect(shouldDisableExpandAll(217)).toBe(false)
-  })
-})
-
-describe('shouldDisableCollapseAll', () => {
-  it('disables when there are no candidates', () => {
-    expect(shouldDisableCollapseAll(0)).toBe(true)
-  })
-
-  it('enables when at least one candidate exists (covers AE2)', () => {
-    // The local auto-expand memo in LineageFlow may have rendered columns even
-    // when no store-tracked expansion has happened, so Collapse all must remain
-    // available whenever candidates exist.
-    expect(shouldDisableCollapseAll(10)).toBe(false)
-    expect(shouldDisableCollapseAll(1)).toBe(false)
+  it('enables Columns mode when at least one candidate exists', () => {
+    expect(shouldDisableColumnMode(1)).toBe(false)
+    expect(shouldDisableColumnMode(217)).toBe(false)
   })
 })
 
-describe('expandTooltip', () => {
-  it('returns the no-data tooltip when there are zero candidates (covers AE4)', () => {
-    expect(expandTooltip(0)).toBe('No column lineage data in this graph')
+describe('columnsModeTooltip', () => {
+  it('returns the no-data tooltip when there are zero candidates', () => {
+    expect(columnsModeTooltip(0)).toBe('No column lineage data in this graph')
   })
 
-  it('returns undefined when candidates exist (no tooltip needed)', () => {
-    expect(expandTooltip(5)).toBeUndefined()
+  it('returns the show-columns tooltip when candidates exist', () => {
+    expect(columnsModeTooltip(5)).toBe('Show columns on nodes')
   })
 })
 
-describe('collapseTooltip', () => {
-  it('returns the nothing-to-collapse tooltip when there are no candidates', () => {
-    expect(collapseTooltip(0)).toBe('Nothing to collapse')
-  })
-
-  it('returns undefined when candidates exist (no tooltip needed)', () => {
-    expect(collapseTooltip(5)).toBeUndefined()
+describe('tableModeTooltip', () => {
+  it('explains table-level collapse', () => {
+    expect(tableModeTooltip()).toBe('Collapse to table-level lineage')
   })
 })
 

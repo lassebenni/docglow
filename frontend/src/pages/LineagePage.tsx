@@ -323,6 +323,9 @@ export function LineagePage() {
             </div>
 
             <div className="h-4 w-px bg-[var(--border)]" />
+            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
+
+            <div className="h-4 w-px bg-[var(--border)]" />
 
             <FilterDropdown
               label="Types"
@@ -416,9 +419,6 @@ export function LineagePage() {
               </>
             )}
 
-            <div className="h-4 w-px bg-[var(--border)]" />
-            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
-
             <span className="text-xs text-[var(--text-muted)] ml-auto">
               {subgraph.nodes.length} nodes · {subgraph.edges.length} edges
             </span>
@@ -453,6 +453,8 @@ export function LineagePage() {
               onTogglePin={handleTogglePin}
               layerConfig={data.lineage.layer_config}
               columnLineageData={data.column_lineage}
+              joinKeysData={data.join_keys}
+              joinBasesData={data.join_bases}
               modelColumns={modelColumnsMap}
             />
           )}

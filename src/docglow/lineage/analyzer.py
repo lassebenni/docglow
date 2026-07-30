@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from collections import deque
+from collections.abc import Iterator, Mapping
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,10 +21,18 @@ from docglow.lineage.column_parser import (
     build_schema_mapping,
     parse_column_lineage,
 )
+from docglow.lineage.join_keys import (
+    UnresolvedJoinKeyPair,
+    extract_join_base_table,
+    extract_join_pairs,
+)
 from docglow.lineage.macro_expander import expand_macros
 from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
+
+# Bumped when cached lineage semantics change (e.g. join-base extraction).
+_CACHE_FORMAT_VERSION = 4
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -35,12 +44,37 @@ _JINJA_GENERIC = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 _JINJA_BLOCK = re.compile(r"\{%.*?%\}", re.DOTALL)
 
 
+@dataclass(frozen=True)
+class ColumnLineageResult(Mapping[str, dict[str, list[dict[str, str]]]]):
+    """Project-wide column lineage + join-key analysis result.
+
+    Implements Mapping so existing callers that treat the return value as
+    ``{model_uid: {column: deps}}`` keep working; use ``.join_keys`` for pairs
+    and ``.join_bases`` for the FROM (foundation) parent of each model's joins.
+    """
+
+    lineage: dict[str, dict[str, list[dict[str, str]]]]
+    join_keys: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    join_bases: dict[str, str] = field(default_factory=dict)
+
+    def __getitem__(self, key: str) -> dict[str, list[dict[str, str]]]:
+        return self.lineage[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self.lineage)
+
+    def __len__(self) -> int:
+        return len(self.lineage)
+
+
 @dataclass
 class _ModelLineageResult:
     """Result of analyzing column lineage for a single model."""
 
     uid: str
     lineage: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    join_keys: list[dict[str, str]] = field(default_factory=list)
+    join_base: str | None = None
     cache_entry: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, str] | None = None
     cached: bool = False
@@ -158,9 +192,13 @@ def _analyze_single_model(
     # Check cache
     if cached_entry and cached_entry.get("sql_hash") == sql_hash:
         cached_lineage = cached_entry.get("lineage")
+        cached_joins = cached_entry.get("join_keys") or []
+        cached_base = cached_entry.get("join_base")
         return _ModelLineageResult(
             uid=uid,
             lineage=cached_lineage or {},
+            join_keys=list(cached_joins) if isinstance(cached_joins, list) else [],
+            join_base=cached_base if isinstance(cached_base, str) else None,
             cached=True,
         )
 
@@ -177,13 +215,21 @@ def _analyze_single_model(
         logger.debug("Failed to parse column lineage for %s: %s", uid, e)
         return _ModelLineageResult(
             uid=uid,
-            cache_entry={"sql_hash": sql_hash, "lineage": {}},
+            cache_entry={
+                "sql_hash": sql_hash,
+                "lineage": {},
+                "join_keys": [],
+                "join_base": None,
+            },
             failure={
                 "model": uid,
                 "name": data.get("name", ""),
                 "error": str(e),
             },
         )
+
+    resolved_joins = _resolve_join_keys(sql, dialect, resolver)
+    join_base = _resolve_join_base(sql, dialect, resolver)
 
     if not raw_lineage:
         failure = None
@@ -195,12 +241,24 @@ def _analyze_single_model(
             }
         return _ModelLineageResult(
             uid=uid,
-            cache_entry={"sql_hash": sql_hash, "lineage": {}},
+            join_keys=resolved_joins,
+            join_base=join_base,
+            cache_entry={
+                "sql_hash": sql_hash,
+                "lineage": {},
+                "join_keys": resolved_joins,
+                "join_base": join_base,
+            },
             failure=failure,
         )
 
     model_lineage = _resolve_dependencies(raw_lineage, resolver)
-    cache_entry_out = {"sql_hash": sql_hash, "lineage": model_lineage}
+    cache_entry_out = {
+        "sql_hash": sql_hash,
+        "lineage": model_lineage,
+        "join_keys": resolved_joins,
+        "join_base": join_base,
+    }
 
     # Track partially traced models
     failure = None
@@ -218,9 +276,56 @@ def _analyze_single_model(
     return _ModelLineageResult(
         uid=uid,
         lineage=model_lineage,
+        join_keys=resolved_joins,
+        join_base=join_base,
         cache_entry=cache_entry_out,
         failure=failure,
     )
+
+
+def _resolve_join_keys(
+    sql: str,
+    dialect: str | None,
+    resolver: TableResolver,
+) -> list[dict[str, str]]:
+    """Extract and resolve join-key pairs for a single model's SQL."""
+    unresolved = extract_join_pairs(sql, dialect=dialect)
+    return resolve_join_key_pairs(unresolved, resolver)
+
+
+def _resolve_join_base(
+    sql: str,
+    dialect: str | None,
+    resolver: TableResolver,
+) -> str | None:
+    """Extract and resolve the FROM (foundation) parent of the primary JOIN."""
+    base_ref = extract_join_base_table(sql, dialect=dialect)
+    if not base_ref:
+        return None
+    return resolver.resolve(base_ref)
+
+
+def resolve_join_key_pairs(
+    pairs: list[UnresolvedJoinKeyPair],
+    resolver: TableResolver,
+) -> list[dict[str, str]]:
+    """Resolve unresolved join pairs to dbt unique_ids; drop unresolved sides."""
+    resolved: list[dict[str, str]] = []
+    for pair in pairs:
+        left_uid = resolver.resolve(pair.left_table)
+        right_uid = resolver.resolve(pair.right_table)
+        if not left_uid or not right_uid:
+            continue
+        entry: dict[str, str] = {
+            "left_model": left_uid,
+            "left_column": pair.left_column,
+            "right_model": right_uid,
+            "right_column": pair.right_column,
+        }
+        if pair.join_type:
+            entry["join_type"] = pair.join_type
+        resolved.append(entry)
+    return resolved
 
 
 def serialize_shared_state(
@@ -367,7 +472,7 @@ def analyze_column_lineage(
     cache_path: Path | None = None,
     subset: set[str] | None = None,
     max_workers: int | None = None,
-) -> dict[str, dict[str, list[dict[str, str]]]]:
+) -> ColumnLineageResult:
     """Analyze column-level lineage for all models.
 
     Uses compiled_sql when available, falls back to raw_sql with Jinja
@@ -393,7 +498,7 @@ def analyze_column_lineage(
             Defaults to min(8, cpu_count). Set to 1 for sequential.
 
     Returns:
-        Dict of {model_unique_id: {column_name: [dependency_dicts]}}.
+        ColumnLineageResult with lineage and join_keys maps keyed by model uid.
     """
     resolver = TableResolver(
         models=models,
@@ -410,6 +515,8 @@ def analyze_column_lineage(
     cache_hits = 0
 
     column_lineage: dict[str, dict[str, list[dict[str, str]]]] = {}
+    join_keys: dict[str, list[dict[str, str]]] = {}
+    join_bases: dict[str, str] = {}
     parse_failures = 0
     total_models = 0
     failure_details: list[dict[str, str]] = []
@@ -430,6 +537,11 @@ def analyze_column_lineage(
                 cached_entry = cache.get(uid)
                 if cached_entry and cached_entry.get("lineage"):
                     column_lineage[uid] = cached_entry["lineage"]
+                if cached_entry and cached_entry.get("join_keys"):
+                    join_keys[uid] = list(cached_entry["join_keys"])
+                cached_base = cached_entry.get("join_base") if cached_entry else None
+                if isinstance(cached_base, str) and cached_base:
+                    join_bases[uid] = cached_base
 
     # Determine which models to analyze
     uids_to_analyze = (
@@ -480,6 +592,8 @@ def analyze_column_lineage(
                     result,
                     all_models,
                     column_lineage,
+                    join_keys,
+                    join_bases,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -509,6 +623,8 @@ def analyze_column_lineage(
                     result,
                     all_models,
                     column_lineage,
+                    join_keys,
+                    join_bases,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -542,13 +658,19 @@ def analyze_column_lineage(
     if failure_details:
         _write_failure_report(failure_details, cache_path)
 
-    return column_lineage
+    return ColumnLineageResult(
+        lineage=column_lineage,
+        join_keys=join_keys,
+        join_bases=join_bases,
+    )
 
 
 def _merge_result(
     result: _ModelLineageResult,
     all_models: dict[str, dict[str, Any]],
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],
+    join_keys: dict[str, list[dict[str, str]]],
+    join_bases: dict[str, str],
     cache: dict[str, Any],
     failure_details: list[dict[str, str]],
     analyzed_count: int,
@@ -565,6 +687,10 @@ def _merge_result(
     if result.cached:
         if result.lineage:
             column_lineage[result.uid] = result.lineage
+        if result.join_keys:
+            join_keys[result.uid] = result.join_keys
+        if result.join_base:
+            join_bases[result.uid] = result.join_base
         return
 
     model_name = all_models[result.uid].get("name", result.uid.split(".")[-1])
@@ -579,6 +705,10 @@ def _merge_result(
         cache[result.uid] = result.cache_entry
     if result.lineage:
         column_lineage[result.uid] = result.lineage
+    if result.join_keys:
+        join_keys[result.uid] = result.join_keys
+    if result.join_base:
+        join_bases[result.uid] = result.join_base
     if result.failure:
         failure_details.append(result.failure)
 
@@ -758,10 +888,14 @@ def _load_cache(
     if not isinstance(raw, dict):
         return {}
 
-    # Invalidate if version or dialect changed
+    # Invalidate if version, dialect, or cache format changed
     meta = raw.get(_CACHE_VERSION_KEY, {})
-    if meta.get("docglow_version") != __version__ or meta.get("dialect") != dialect:
-        logger.debug("Column lineage cache invalidated (version/dialect change)")
+    if (
+        meta.get("docglow_version") != __version__
+        or meta.get("dialect") != dialect
+        or meta.get("cache_format") != _CACHE_FORMAT_VERSION
+    ):
+        logger.debug("Column lineage cache invalidated (version/dialect/format change)")
         return {}
 
     # Remove meta key and migrate legacy "direct" → "passthrough"
@@ -804,6 +938,7 @@ def _save_cache(
         _CACHE_VERSION_KEY: {
             "docglow_version": __version__,
             "dialect": dialect,
+            "cache_format": _CACHE_FORMAT_VERSION,
         },
         **cache,
     }

@@ -35,6 +35,12 @@ export interface DagNodeData {
   autoExpanded?: boolean
   /** Map of column names that should be highlighted in the column trace */
   highlightedColumns?: Set<string>
+  /** Ambient join-key highlights: column → relationship color */
+  joinKeyColors?: Map<string, string>
+  /** FROM (foundation) parent for the focused model's JOIN block */
+  isJoinBase?: boolean
+  /** Compact JOIN type on a non-base parent (LEFT / INNER / …) */
+  joinTypeBadge?: string
   /** Whether this node participates in a column trace (for amber border on collapsed nodes) */
   inColumnTrace?: boolean
   /** Node is in the lineage chain but has no column lineage data */
@@ -54,6 +60,9 @@ function DagNodeComponent({ data, id }: NodeProps) {
     columns,
     hasColumnLineage,
     highlightedColumns,
+    joinKeyColors,
+    isJoinBase,
+    joinTypeBadge,
     inColumnTrace,
     noColumnData,
   } = data as DagNodeData
@@ -134,9 +143,52 @@ function DagNodeComponent({ data, id }: NodeProps) {
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
               }}
             >
-              {name}
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+              {isJoinBase && (
+                <span
+                  title="FROM parent — other parents join into this model"
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 600,
+                    letterSpacing: '0.02em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-muted, #64748b)',
+                    background: 'var(--bg-muted, #f1f5f9)',
+                    border: '1px solid var(--border, #e2e8f0)',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    lineHeight: '14px',
+                    flexShrink: 0,
+                  }}
+                >
+                  Base
+                </span>
+              )}
+              {!isJoinBase && joinTypeBadge && (
+                <span
+                  title={`${joinTypeBadge} JOIN into the focused model's FROM parent`}
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 600,
+                    letterSpacing: '0.02em',
+                    textTransform: 'uppercase',
+                    color: 'var(--text-muted, #64748b)',
+                    background: 'var(--bg-muted, #f1f5f9)',
+                    border: '1px solid var(--border, #e2e8f0)',
+                    borderRadius: 3,
+                    padding: '0 4px',
+                    lineHeight: '14px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {joinTypeBadge}
+                </span>
+              )}
             </div>
             <div
               style={{
@@ -201,11 +253,16 @@ function DagNodeComponent({ data, id }: NodeProps) {
           >
             {allColumns.map((col) => {
               const isSelected = isThisSelected && selectedColumnName === col
-              const isHighlighted = highlightedColumns?.has(col)
+              const joinColor = joinKeyColors?.get(col)
+              const isTraceHighlighted = highlightedColumns?.has(col)
+              const isHighlighted = isTraceHighlighted || !!joinColor
+              const highlightColor = isSelected || isTraceHighlighted
+                ? AMBER
+                : (joinColor ?? AMBER)
               const colBg = isSelected
                 ? `${AMBER}30`
                 : isHighlighted
-                  ? `${AMBER}15`
+                  ? `${highlightColor}18`
                   : 'transparent'
 
               return (
@@ -216,7 +273,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
                     height: COLUMN_ROW_HEIGHT,
                     padding: '0 8px 0 12px',
                     fontSize: 10,
-                    color: isSelected || isHighlighted ? AMBER : 'var(--text, #0f172a)',
+                    color: isSelected || isHighlighted ? highlightColor : 'var(--text, #0f172a)',
                     fontWeight: isSelected ? 600 : 400,
                     background: colBg,
                     display: 'flex',

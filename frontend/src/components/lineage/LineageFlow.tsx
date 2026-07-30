@@ -11,15 +11,24 @@ import {
   type Edge,
   type NodeTypes,
   type NodeMouseHandler,
+  type EdgeMouseHandler,
   type NodeChange,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import { useNavigate } from 'react-router-dom'
-import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData } from '../../types'
+import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData, JoinKeysData } from '../../types'
 import { getUnionChain } from '../../utils/graphTraversal'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 import { buildReverseIndex, getColumnTraceResult } from '../../utils/columnLineageGraph'
+import {
+  connectedEndpointJoinKeyHighlights,
+  formatJoinPredicate,
+  getJoinKeysForEdge,
+  joinKeyHighlightSets,
+  joinedParentBadgesForFocus,
+  type EdgeJoinKey,
+} from '../../utils/joinKeys'
 import { DagNode } from './DagNode'
 import { FolderNode } from './FolderNode'
 
@@ -28,6 +37,7 @@ const NODE_HEIGHT = 44
 const FOLDER_NODE_WIDTH = 220
 const FOLDER_NODE_HEIGHT = 60
 const HIGHLIGHT_DEPTH_CAP = 4
+const JOIN_EDGE_AMBER = '#f59e0b'
 
 const RESOURCE_COLORS: Record<string, string> = {
   model: '#2563eb',
@@ -356,6 +366,10 @@ export interface LineageFlowProps {
   onNavigateAway?: () => void
   /** Column-level lineage data for column highlighting */
   columnLineageData?: ColumnLineageData
+  /** Join ON/USING key pairs keyed by the model that owns the SQL */
+  joinKeysData?: JoinKeysData
+  /** FROM (foundation) parent keyed by the model that owns the JOIN SQL */
+  joinBasesData?: Record<string, string>
   /** Map of model ID → list of column names (for DagNode expansion) */
   modelColumns?: Record<string, string[]>
 }
@@ -372,11 +386,14 @@ function LineageFlowInner({
   layerConfig,
   onNavigateAway,
   columnLineageData,
+  joinKeysData,
+  joinBasesData,
   modelColumns,
 }: LineageFlowProps) {
   const navigate = useNavigate()
   const { fitView, getNodes } = useReactFlow()
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
 
   // Column highlight state
   const selectedColumn = useColumnHighlightStore(s => s.selectedColumn)
@@ -385,6 +402,7 @@ function LineageFlowInner({
   const manuallyCollapsedIds = useColumnHighlightStore(s => s.manuallyCollapsedIds)
   const clearColumnSelection = useColumnHighlightStore(s => s.clearSelection)
   const resetExpandState = useColumnHighlightStore(s => s.resetExpandState)
+  const expandAll = useColumnHighlightStore(s => s.expandAll)
 
   // Make bulk expand/collapse state ephemeral per LineageFlow mount: when the
   // user navigates between pages and back, expand state from prior views does
@@ -418,6 +436,52 @@ function LineageFlowInner({
       reverseIndex,
     )
   }, [selectedColumn, columnLineageData, reverseIndex])
+
+  // Selected table edge → join-key predicates + column highlights
+  const selectedEdgeJoin = useMemo(() => {
+    if (!selectedEdgeId || selectedEdgeId.startsWith('col__')) return null
+    const sep = selectedEdgeId.indexOf('__')
+    if (sep < 0) return null
+    const sourceId = selectedEdgeId.slice(0, sep)
+    const targetId = selectedEdgeId.slice(sep + 2)
+    const edge = edges.find(e => e.source === sourceId && e.target === targetId)
+    const pairs = getJoinKeysForEdge(sourceId, targetId, edge, joinKeysData)
+    if (pairs.length === 0) return null
+    return {
+      sourceId,
+      targetId,
+      pairs,
+      highlights: joinKeyHighlightSets(pairs, sourceId, targetId),
+    }
+  }, [selectedEdgeId, edges, joinKeysData])
+
+  // Columns mode: highlight join-key columns on connected endpoints in the
+  // current subgraph (both sides of each pair must be visible).
+  const connectedJoinHighlights = useMemo(() => {
+    if (selectedEdgeJoin) return null
+    if (effectiveExpandedIds.size === 0) return null
+    const visible = new Set(nodes.map(n => n.id))
+    const map = connectedEndpointJoinKeyHighlights(joinKeysData, visible)
+    return map.size > 0 ? map : null
+  }, [selectedEdgeJoin, nodes, effectiveExpandedIds, joinKeysData])
+
+  // Base (FROM) parents for currently focused/pinned models that have JOINs.
+  const joinBaseNodeIds = useMemo(() => {
+    const ids = new Set<string>()
+    if (!joinBasesData || !pinnedIds || pinnedIds.size === 0) return ids
+    for (const focusId of pinnedIds) {
+      const base = joinBasesData[focusId]
+      if (base) ids.add(base)
+    }
+    return ids
+  }, [joinBasesData, pinnedIds])
+
+  // LEFT / INNER / … badges on non-base parents joined into the focused model(s).
+  const joinTypeBadges = useMemo(() => {
+    if (!pinnedIds || pinnedIds.size === 0) return new Map<string, string>()
+    return joinedParentBadgesForFocus(joinKeysData, joinBasesData, pinnedIds)
+  }, [joinKeysData, joinBasesData, pinnedIds])
+
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isDraggingRef = useRef(false)
   const [dragOverrides, setDragOverrides] = useState<Record<string, { x: number; y: number }>>({})
@@ -586,11 +650,20 @@ function LineageFlowInner({
       const hasColumnLineage =
         columnLineageData != null &&
         (columnLineageData[ln.id] != null || upstreamColumnLineageIds.has(ln.id))
-      const nodeHighlightedCols = columnTrace?.highlightedColumns.get(ln.id)
-      const inColumnTrace = nodeHighlightedCols != null && nodeHighlightedCols.size > 0
+      const traceCols = columnTrace?.highlightedColumns.get(ln.id)
+      const selectedJoinCols = selectedEdgeJoin?.highlights.get(ln.id)
+      const ambientJoinColors = connectedJoinHighlights?.get(ln.id)
+      let nodeHighlightedCols = traceCols
+      if (selectedJoinCols && selectedJoinCols.size > 0) {
+        nodeHighlightedCols = new Set([...(traceCols ?? []), ...selectedJoinCols])
+      }
+      const hasAmbientJoinColors = ambientJoinColors != null && ambientJoinColors.size > 0
+      const inColumnTrace =
+        (nodeHighlightedCols != null && nodeHighlightedCols.size > 0) || hasAmbientJoinColors
 
       // When column trace is active, dim nodes not involved
       const dimmedByColumnTrace = columnTrace != null && !inColumnTrace
+        && !(selectedEdgeJoin && (ln.id === selectedEdgeJoin.sourceId || ln.id === selectedEdgeJoin.targetId))
 
       return {
         id: ln.id,
@@ -610,6 +683,9 @@ function LineageFlowInner({
           hasColumnLineage,
           autoExpanded: autoExpandNodeIds.has(ln.id),
           highlightedColumns: nodeHighlightedCols,
+          joinKeyColors: hasAmbientJoinColors ? ambientJoinColors : undefined,
+          isJoinBase: joinBaseNodeIds.has(ln.id),
+          joinTypeBadge: joinBaseNodeIds.has(ln.id) ? undefined : joinTypeBadges.get(ln.id),
           inColumnTrace: inColumnTrace && !effectiveExpandedIds.has(ln.id),
           noColumnData: false, // Updated in applyHighlightPass below
         },
@@ -621,7 +697,7 @@ function LineageFlowInner({
     })
 
     return [...bandNodes, ...dataNodes]
-  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds])
+  }, [layout.nodes, folderData, expandedFolders, layerBands, modelColumns, columnLineageData, upstreamColumnLineageIds, columnTrace, effectiveExpandedIds, autoExpandNodeIds, selectedEdgeJoin, connectedJoinHighlights, joinBaseNodeIds, joinTypeBadges])
 
   // Reset drag overrides when the layout recomputes (depth/filter changes)
   const layoutRef = useRef(layout)
@@ -719,19 +795,25 @@ function LineageFlowInner({
 
   // Build React Flow edges — base structure without highlight styling
   const rfEdgesBase = useMemo((): Edge[] => {
-    const modelEdges: Edge[] = layout.edges.map((e) => ({
-      id: `${e.source}__${e.target}`,
-      source: e.source,
-      target: e.target,
-      type: 'smoothstep',
-      animated: false,
-      style: {
-        stroke: 'var(--text-muted, #94a3b8)',
-        strokeWidth: 1.5,
-        opacity: 0.5,
-      },
-      markerEnd: MARKER_DEFAULT,
-    }))
+    const modelEdges: Edge[] = layout.edges.map((e) => {
+      const pairs = getJoinKeysForEdge(e.source, e.target, e, joinKeysData)
+      const hasJoinKeys = pairs.length > 0
+      return {
+        id: `${e.source}__${e.target}`,
+        source: e.source,
+        target: e.target,
+        type: 'smoothstep',
+        animated: false,
+        className: hasJoinKeys ? 'join-key-edge' : undefined,
+        style: {
+          stroke: 'var(--text-muted, #94a3b8)',
+          strokeWidth: 1.5,
+          opacity: 0.5,
+        },
+        markerEnd: MARKER_DEFAULT,
+        data: { hasJoinKeys },
+      }
+    })
 
     // Column-level edges
     if (!columnTrace) return modelEdges
@@ -781,17 +863,36 @@ function LineageFlowInner({
     })
 
     return [...modelEdges, ...columnEdges]
-  }, [layout.edges, MARKER_DEFAULT, MARKER_COLUMN, columnTrace, effectiveExpandedIds])
+  }, [layout.edges, MARKER_DEFAULT, MARKER_COLUMN, columnTrace, effectiveExpandedIds, joinKeysData])
 
   // Lightweight pass: apply highlight styling to edges without recreating the base array
   const rfEdges = useMemo((): Edge[] => {
-    if (!highlightedSet && !columnTrace) return rfEdgesBase
-
     const isColumnTraceActive = columnTrace != null
+    const hasJoinSelection = selectedEdgeJoin != null
+
+    if (!highlightedSet && !isColumnTraceActive && !hasJoinSelection) return rfEdgesBase
 
     return rfEdgesBase.map(edge => {
       // Skip column edges — they're already styled
       if (edge.id.startsWith('col__')) return edge
+
+      const isJoinSelected = selectedEdgeId === edge.id
+      if (isJoinSelected) {
+        return {
+          ...edge,
+          style: {
+            stroke: JOIN_EDGE_AMBER,
+            strokeWidth: 2.5,
+            opacity: 1,
+          },
+          markerEnd: {
+            type: MarkerType.ArrowClosed as const,
+            color: JOIN_EDGE_AMBER,
+            width: 16,
+            height: 12,
+          },
+        }
+      }
 
       const isHighlighted = highlightedSet
         ? highlightedSet.has(edge.source) && highlightedSet.has(edge.target)
@@ -802,12 +903,18 @@ function LineageFlowInner({
         style: {
           stroke: isHighlighted ? '#2563eb' : 'var(--text-muted, #94a3b8)',
           strokeWidth: isHighlighted ? 2 : 1.5,
-          opacity: isColumnTraceActive ? 0.08 : !highlightedSet ? 0.5 : isHighlighted ? 0.8 : 0.15,
+          opacity: isColumnTraceActive || hasJoinSelection
+            ? 0.08
+            : !highlightedSet
+              ? 0.5
+              : isHighlighted
+                ? 0.8
+                : 0.15,
         },
         markerEnd: isHighlighted ? MARKER_HIGHLIGHTED : MARKER_DEFAULT,
       }
     })
-  }, [rfEdgesBase, highlightedSet, columnTrace, MARKER_HIGHLIGHTED, MARKER_DEFAULT])
+  }, [rfEdgesBase, highlightedSet, columnTrace, selectedEdgeId, selectedEdgeJoin, MARKER_HIGHLIGHTED, MARKER_DEFAULT])
 
   // Fit view when data changes
   useEffect(() => {
@@ -855,6 +962,7 @@ function LineageFlowInner({
       clickTimerRef.current = setTimeout(() => {
         clickTimerRef.current = null
         // Single click: open side panel
+        setSelectedEdgeId(null)
         setSelectedNodeId(prev => prev === node.id ? null : node.id)
         if (onNodeClick) onNodeClick(node.id)
       }, 250)
@@ -864,14 +972,43 @@ function LineageFlowInner({
   // Close panel when clicking canvas background
   const handlePaneClick = useCallback(() => {
     setSelectedNodeId(null)
+    setSelectedEdgeId(null)
     clearColumnSelection()
   }, [clearColumnSelection])
+
+  const handleEdgeClick: EdgeMouseHandler = useCallback((event, edge) => {
+    event.stopPropagation()
+    if (edge.id.startsWith('col__')) return
+    const hasKeys = Boolean((edge.data as { hasJoinKeys?: boolean } | undefined)?.hasJoinKeys)
+    if (!hasKeys) {
+      // Still allow selecting for consistency, but only highlight if keys exist
+      setSelectedEdgeId(prev => (prev === edge.id ? null : edge.id))
+      setSelectedNodeId(null)
+      clearColumnSelection()
+      return
+    }
+    setSelectedEdgeId(prev => {
+      const next = prev === edge.id ? null : edge.id
+      if (next) {
+        expandAll([edge.source, edge.target], 50)
+      }
+      return next
+    })
+    setSelectedNodeId(null)
+    clearColumnSelection()
+  }, [clearColumnSelection, expandAll])
 
   // Lookup for selected node detail panel
   const selectedNodeData = useMemo(() => {
     if (!selectedNodeId) return null
     return nodes.find(n => n.id === selectedNodeId) ?? null
   }, [selectedNodeId, nodes])
+
+  const selectedEdgePairs: EdgeJoinKey[] = selectedEdgeJoin?.pairs ?? []
+  const nameOf = useCallback(
+    (modelId: string) => nodes.find(n => n.id === modelId)?.name ?? modelId.split('.').pop() ?? modelId,
+    [nodes],
+  )
 
   if (nodes.length === 0) {
     return <div className="text-[var(--text-muted)] text-sm">No lineage data available.</div>
@@ -886,11 +1023,12 @@ function LineageFlowInner({
       onNodeDragStart={handleNodeDragStart}
       onNodeDragStop={handleNodeDragStop}
       onNodeClick={handleNodeClick}
+      onEdgeClick={handleEdgeClick}
       onPaneClick={handlePaneClick}
       nodesDraggable={true}
       nodesConnectable={false}
       nodesFocusable={false}
-      edgesFocusable={false}
+      edgesFocusable={true}
       edgesReconnectable={false}
       elementsSelectable={false}
       selectNodesOnDrag={false}
@@ -994,6 +1132,67 @@ function LineageFlowInner({
           >
             View details →
           </button>
+        </div>
+      )}
+      {/* Join-key edge detail side panel */}
+      {!selectedNodeData && selectedEdgeJoin && selectedEdgePairs.length > 0 && (
+        <div
+          className="react-flow__panel"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            width: 300,
+            height: '100%',
+            background: 'var(--bg, #fff)',
+            borderLeft: '1px solid var(--border, #e2e8f0)',
+            zIndex: 10,
+            overflow: 'auto',
+            padding: 16,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
+              Join keys
+            </div>
+            <button
+              onClick={() => setSelectedEdgeId(null)}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: 2,
+                color: 'var(--text-muted, #64748b)', flexShrink: 0, marginLeft: 8,
+              }}
+            >
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginBottom: 12 }}>
+            {nameOf(selectedEdgeJoin.sourceId)} → {nameOf(selectedEdgeJoin.targetId)}
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {selectedEdgePairs.map((pair, i) => (
+              <div
+                key={`${pair.source_column}-${pair.target_column}-${i}`}
+                style={{
+                  fontSize: 12,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  color: 'var(--text, #0f172a)',
+                  background: 'var(--bg-surface, #f1f5f9)',
+                  borderRadius: 6,
+                  padding: '8px 10px',
+                  wordBreak: 'break-word',
+                }}
+              >
+                {formatJoinPredicate(pair, nameOf)}
+                {pair.join_type && (
+                  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted, #64748b)', fontFamily: 'inherit' }}>
+                    {pair.join_type} join
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </ReactFlow>

@@ -42,6 +42,11 @@ export interface LineageNode {
 export interface LineageEdge {
   readonly source: string;
   readonly target: string;
+  /** Present when the consuming model's SQL joins these two endpoints on columns. */
+  readonly join_keys?: ReadonlyArray<{
+    readonly source_column: string;
+    readonly target_column: string;
+  }>;
 }
 
 export interface SearchEntry {

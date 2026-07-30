@@ -9,6 +9,7 @@ Covers DOC-226 / GH #93. The full path under test:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 from docglow.artifacts.manifest import ManifestColumnInfo, ManifestSource
@@ -163,4 +164,4 @@ class TestManifestOnlySourceColumnLineage:
             manifest_sources={SOURCE_UID: _RelSource()},
         )
         # No assertion that columns exist — only that the analyzer completes cleanly.
-        assert isinstance(result, dict)
+        assert isinstance(result, Mapping) or hasattr(result, "lineage")

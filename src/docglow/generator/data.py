@@ -160,6 +160,7 @@ class LineageNode:
 class LineageEdge:
     source: str
     target: str
+    join_keys: tuple[dict[str, str], ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -274,10 +275,18 @@ def _build_column_lineage(
     seeds: dict[str, Any],
     snapshots: dict[str, Any],
     max_workers: int | None = None,
-) -> dict[str, Any] | None:
-    """Build column-level lineage if enabled."""
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, list[dict[str, str]]] | None,
+    dict[str, str] | None,
+]:
+    """Build column-level lineage, join keys, and join bases if enabled.
+
+    Returns:
+        ``(column_lineage, join_keys, join_bases)`` — all ``None`` when disabled.
+    """
     if not enabled:
-        return None
+        return None, None, None
 
     from pathlib import Path as _Path
 
@@ -299,7 +308,7 @@ def _build_column_lineage(
             max_depth=depth,
         )
 
-    column_lineage = analyze_column_lineage(
+    result = analyze_column_lineage(
         models=models,
         sources=sources,
         seeds=seeds,
@@ -316,11 +325,74 @@ def _build_column_lineage(
         max_workers=max_workers,
     )
 
+    column_lineage = result.lineage
+    join_keys = result.join_keys
+    join_bases = result.join_bases
+
     # Backfill columns for models that have lineage but no catalog/manifest columns.
     if column_lineage:
         _backfill_columns_from_lineage(column_lineage, models, seeds, snapshots)
 
-    return column_lineage
+    return column_lineage, join_keys or None, join_bases or None
+
+
+def enrich_lineage_edges_with_join_keys(
+    lineage: dict[str, Any],
+    join_keys: dict[str, list[dict[str, str]]] | None,
+) -> None:
+    """Attach join_keys onto lineage edges when both endpoints match a pair.
+
+    Mutates ``lineage["edges"]`` in place. Sibling-only pairs (no matching
+    depends_on edge) remain available via the top-level ``join_keys`` map.
+    """
+    if not join_keys or not lineage.get("edges"):
+        return
+
+    # Index pairs by frozenset of the two model ids for O(1) edge lookup.
+    by_endpoints: dict[frozenset[str], list[dict[str, str]]] = {}
+    for pairs in join_keys.values():
+        for pair in pairs:
+            left = pair.get("left_model")
+            right = pair.get("right_model")
+            if not left or not right:
+                continue
+            key = frozenset({left, right})
+            by_endpoints.setdefault(key, []).append(pair)
+
+    if not by_endpoints:
+        return
+
+    enriched: list[dict[str, Any]] = []
+    for edge in lineage["edges"]:
+        source = edge.get("source")
+        target = edge.get("target")
+        if not source or not target:
+            enriched.append(edge)
+            continue
+        pairs = by_endpoints.get(frozenset({source, target}))
+        if not pairs:
+            enriched.append(edge)
+            continue
+        edge_keys: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        for pair in pairs:
+            if pair["left_model"] == source and pair["right_model"] == target:
+                sc, tc = pair["left_column"], pair["right_column"]
+            elif pair["right_model"] == source and pair["left_model"] == target:
+                sc, tc = pair["right_column"], pair["left_column"]
+            else:
+                continue
+            marker = (sc, tc)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            edge_keys.append({"source_column": sc, "target_column": tc})
+        if edge_keys:
+            enriched.append({**edge, "join_keys": edge_keys})
+        else:
+            enriched.append(edge)
+
+    lineage["edges"] = enriched
 
 
 def _backfill_columns_from_lineage(

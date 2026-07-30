@@ -94,6 +94,17 @@ export interface ColumnEdge {
   readonly transformation: TransformationType;
 }
 
+/** Join ON/USING key pair (local until shared-types dist is rebuilt/published). */
+export interface JoinKeyPair {
+  readonly left_model: string;
+  readonly left_column: string;
+  readonly right_model: string;
+  readonly right_column: string;
+  readonly join_type?: string;
+}
+
+export type JoinKeysData = Record<string, JoinKeyPair[]>;
+
 // SearchEntry extended with fields added after @docglow/shared-types v0.1.0.
 // These augmentations will be removed once shared-types is republished.
 export type { SearchEntry } from "@docglow/shared-types";
@@ -107,6 +118,22 @@ declare module "@docglow/shared-types" {
   // UI config added in 0.7.3; will be removed from here once shared-types is republished.
   interface DocglowData {
     readonly ui?: UiConfig;
+    readonly join_keys?: Record<string, {
+      readonly left_model: string;
+      readonly left_column: string;
+      readonly right_model: string;
+      readonly right_column: string;
+      readonly join_type?: string;
+    }[]>;
+    /** model uid → FROM (foundation) parent uid for that model's JOINs */
+    readonly join_bases?: Record<string, string>;
+  }
+
+  interface LineageEdge {
+    readonly join_keys?: ReadonlyArray<{
+      readonly source_column: string;
+      readonly target_column: string;
+    }>;
   }
 }
 

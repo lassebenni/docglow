@@ -22,6 +22,30 @@ export type ColumnLineageData = Record<
   Record<string, ColumnLineageDependency[]>
 >;
 
+/** Join ON/USING key pair resolved to dbt unique_ids (keyed under join_keys[model]). */
+export interface JoinKeyPair {
+  readonly left_model: string;
+  readonly left_column: string;
+  readonly right_model: string;
+  readonly right_column: string;
+  readonly join_type?: string;
+}
+
+export type JoinKeysData = Record<string, JoinKeyPair[]>;
+
+/**
+ * Map of model unique_id → the FROM (foundation) parent unique_id of that
+ * model's primary JOIN block. Omitted when column lineage is skipped or the
+ * model has no JOINs.
+ */
+export type JoinBasesData = Record<string, string>;
+
+/** Join keys attached to a table-level lineage edge (source → target). */
+export interface LineageEdgeJoinKey {
+  readonly source_column: string;
+  readonly target_column: string;
+}
+
 export interface ColumnEdge {
   readonly sourceModel: string;
   readonly sourceColumn: string;
