@@ -9,6 +9,7 @@ import type {
   JoinBasesData,
   JoinIndirectData,
   JoinKeysData,
+  SqlGraphsData,
 } from "./artifacts.js";
 import type { ErdRelationship } from "./erd.js";
 import type { HealthData } from "./health.js";
@@ -81,6 +82,11 @@ export interface DocglowData {
    * are JOINed — neither the FROM base nor a direct JOIN endpoint.
    */
   readonly join_indirect?: JoinIndirectData;
+  /**
+   * Intra-model SQL/CTE graphs for CTEs lineage mode, keyed by model unique_id.
+   * Omitted when column lineage is skipped.
+   */
+  readonly sql_graphs?: SqlGraphsData;
   readonly health: HealthData;
   /**
    * ERD relationships extracted from dbt `relationships` tests and

@@ -4,7 +4,10 @@ import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 export const DEFAULT_EXPAND_ALL_CAP = 50
 export const OVER_CAP_DETAIL_TEXT = 'Narrow the graph with filters or pinning to see more.'
 
-export type ColumnViewMode = 'table' | 'columns'
+export type LineageViewMode = 'table' | 'columns' | 'ctes'
+
+/** @deprecated Prefer LineageViewMode */
+export type ColumnViewMode = LineageViewMode
 
 /**
  * Pure helpers — exported for direct unit testing.
@@ -19,8 +22,18 @@ export function tableModeTooltip(): string {
   return 'Collapse to table-level lineage'
 }
 
+export function ctesModeTooltip(hasSqlGraph: boolean): string {
+  return hasSqlGraph
+    ? 'Show CTE / SQL graph for this model'
+    : 'No CTE / SQL graph for this model'
+}
+
 export function shouldDisableColumnMode(candidateCount: number): boolean {
   return candidateCount === 0
+}
+
+export function shouldDisableCtesMode(hasSqlGraph: boolean): boolean {
+  return !hasSqlGraph
 }
 
 export function formatOverCapHeadline(expanded: number, total: number): string {
@@ -30,21 +43,38 @@ export function formatOverCapHeadline(expanded: number, total: number): string {
 interface ColumnExpandControlsProps {
   candidateIds: string[]
   cap?: number
+  /** When true, CTEs mode is available (focus model has a sql_graph). */
+  hasSqlGraph?: boolean
+  mode?: LineageViewMode
+  onModeChange?: (mode: LineageViewMode) => void
 }
 
 export function ColumnExpandControls({
   candidateIds,
   cap = DEFAULT_EXPAND_ALL_CAP,
+  hasSqlGraph = false,
+  mode: controlledMode,
+  onModeChange,
 }: ColumnExpandControlsProps) {
   const expandAll = useColumnHighlightStore(s => s.expandAll)
   const collapseAll = useColumnHighlightStore(s => s.collapseAll)
 
-  const [mode, setMode] = useState<ColumnViewMode>('table')
+  const [uncontrolledMode, setUncontrolledMode] = useState<LineageViewMode>('table')
+  const mode = controlledMode ?? uncontrolledMode
+  const setMode = useCallback(
+    (next: LineageViewMode) => {
+      if (controlledMode === undefined) setUncontrolledMode(next)
+      onModeChange?.(next)
+    },
+    [controlledMode, onModeChange],
+  )
+
   const [overCap, setOverCap] = useState<{ expanded: number; total: number } | null>(null)
   const modeRef = useRef(mode)
   modeRef.current = mode
 
-  const disabled = shouldDisableColumnMode(candidateIds.length)
+  const columnsDisabled = shouldDisableColumnMode(candidateIds.length)
+  const ctesDisabled = shouldDisableCtesMode(hasSqlGraph)
 
   const applyColumnsMode = useCallback(() => {
     const result = expandAll(candidateIds, cap)
@@ -72,8 +102,9 @@ export function ColumnExpandControls({
   }, [candidateKey])
 
   const handleSelect = useCallback(
-    (next: ColumnViewMode) => {
-      if (next === 'columns' && disabled) return
+    (next: LineageViewMode) => {
+      if (next === 'columns' && columnsDisabled) return
+      if (next === 'ctes' && ctesDisabled) return
       setMode(next)
       if (next === 'columns') {
         applyColumnsMode()
@@ -81,7 +112,7 @@ export function ColumnExpandControls({
         applyTableMode()
       }
     },
-    [disabled, applyColumnsMode, applyTableMode],
+    [columnsDisabled, ctesDisabled, setMode, applyColumnsMode, applyTableMode],
   )
 
   const dismissToast = useCallback(() => {
@@ -119,11 +150,22 @@ export function ColumnExpandControls({
           aria-label="Column-level lineage"
           aria-pressed={mode === 'columns'}
           title={columnsModeTooltip(candidateIds.length)}
-          disabled={disabled}
+          disabled={columnsDisabled}
           onClick={() => handleSelect('columns')}
-          className={buttonClasses(mode === 'columns', disabled)}
+          className={buttonClasses(mode === 'columns', columnsDisabled)}
         >
           Columns
+        </button>
+        <button
+          type="button"
+          aria-label="CTE SQL graph"
+          aria-pressed={mode === 'ctes'}
+          title={ctesModeTooltip(hasSqlGraph)}
+          disabled={ctesDisabled}
+          onClick={() => handleSelect('ctes')}
+          className={buttonClasses(mode === 'ctes', ctesDisabled)}
+        >
+          CTEs
         </button>
       </div>
       {overCap && (

@@ -105,6 +105,51 @@ export interface JoinKeyPair {
 
 export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
+export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output'
+
+export interface SqlGraphJoinKey {
+  readonly left_column: string
+  readonly right_column: string
+}
+
+export interface SqlGraphNode {
+  readonly id: string
+  readonly kind: SqlGraphNodeKind
+  readonly label: string
+  readonly model_id?: string
+  readonly cte_name?: string
+  readonly join_type?: string
+  readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>
+  readonly transforms?: ReadonlyArray<'aggregate' | 'filter' | 'window' | 'other'>
+  readonly columns?: ReadonlyArray<string>
+}
+
+export interface SqlGraphEdge {
+  readonly source: string
+  readonly target: string
+  readonly columns?: ReadonlyArray<string>
+  readonly label?: string
+}
+
+export interface SqlGraphColumnDep {
+  readonly source_node: string
+  readonly source_column: string
+  readonly transformation: 'passthrough' | 'rename' | 'aggregated' | 'derived'
+}
+
+export type SqlGraphColumnLineage = Record<
+  string,
+  Record<string, ReadonlyArray<SqlGraphColumnDep>>
+>
+
+export interface SqlGraph {
+  readonly nodes: ReadonlyArray<SqlGraphNode>
+  readonly edges: ReadonlyArray<SqlGraphEdge>
+  readonly column_lineage?: SqlGraphColumnLineage
+}
+
+export type SqlGraphsData = Record<string, SqlGraph>
+
 // SearchEntry extended with fields added after @docglow/shared-types v0.1.0.
 // These augmentations will be removed once shared-types is republished.
 export type { SearchEntry } from "@docglow/shared-types";
@@ -132,6 +177,8 @@ declare module "@docglow/shared-types" {
       readonly model: string;
       readonly kind: string;
     }>>;
+    /** Intra-model SQL/CTE graphs for CTEs lineage mode */
+    readonly sql_graphs?: Record<string, SqlGraph>;
   }
 
   interface LineageEdge {

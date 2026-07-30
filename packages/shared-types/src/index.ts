@@ -11,6 +11,14 @@ export type {
   JoinIndirectData,
   JoinIndirectParent,
   LineageEdgeJoinKey,
+  SqlGraph,
+  SqlGraphColumnDep,
+  SqlGraphColumnLineage,
+  SqlGraphEdge,
+  SqlGraphJoinKey,
+  SqlGraphNode,
+  SqlGraphNodeKind,
+  SqlGraphsData,
 } from "./artifacts.js";
 
 // Docglow model/source/exposure/metric types
