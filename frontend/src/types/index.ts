@@ -145,7 +145,9 @@ export interface SqlGraphEdge {
 export interface SqlGraphColumnDep {
   readonly source_node: string
   readonly source_column: string
-  readonly transformation: 'passthrough' | 'rename' | 'aggregated' | 'derived'
+  readonly transformation: 'passthrough' | 'rename' | 'aggregated' | 'derived' | 'constant'
+  /** Defining SQL for derived/aggregated/constant columns. */
+  readonly expression?: string
 }
 
 export type SqlGraphColumnLineage = Record<
@@ -169,34 +171,6 @@ declare module "@docglow/shared-types" {
     readonly id: string;
     readonly column_name?: string;
     readonly model_name?: string;
-  }
-
-  // UI config added in 0.7.3; will be removed from here once shared-types is republished.
-  interface DocglowData {
-    readonly ui?: UiConfig;
-    readonly join_keys?: Record<string, {
-      readonly left_model: string;
-      readonly left_column: string;
-      readonly right_model: string;
-      readonly right_column: string;
-      readonly join_type?: string;
-    }[]>;
-    /** model uid → FROM (foundation) parent uid for that model's JOINs */
-    readonly join_bases?: Record<string, string>;
-    /** parents reached only via joined aggregate/intermediate CTEs */
-    readonly join_indirect?: Record<string, ReadonlyArray<{
-      readonly model: string;
-      readonly kind: string;
-    }>>;
-    /** Intra-model SQL/CTE graphs for CTEs lineage mode */
-    readonly sql_graphs?: Record<string, SqlGraph>;
-  }
-
-  interface LineageEdge {
-    readonly join_keys?: ReadonlyArray<{
-      readonly source_column: string;
-      readonly target_column: string;
-    }>;
   }
 }
 

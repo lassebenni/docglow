@@ -85,7 +85,9 @@ export interface SqlGraphEdge {
 export interface SqlGraphColumnDep {
   readonly source_node: string;
   readonly source_column: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived";
+  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant";
+  /** Defining SQL for derived/aggregated/constant columns. */
+  readonly expression?: string;
 }
 
 /** node_id → column → upstream deps within the same SqlGraph. */

@@ -17,15 +17,20 @@ import dagre from 'dagre'
 import type {
   SqlGraph,
   SqlGraphColumnDep,
-  SqlGraphColumnLineage,
   SqlGraphNode,
 } from '../../types'
 import { JOIN_KEY_PALETTE } from '../../utils/joinKeys'
 import {
-  colKey,
+  columnExpression,
+  strongestTransformation,
+  transformationGlyph,
+  transformationLabel,
+} from '../../utils/columnTransforms'
+import {
   collectColumnPath,
   type ColumnPathStep,
 } from '../../utils/sqlGraphColumns'
+import type { TransformationType } from '../../types'
 
 const NODE_W = 188
 const HEADER_H = 40
@@ -116,6 +121,7 @@ type SqlNodeData = SqlGraphNode & {
   accent: string
   highlightedCols?: Set<string>
   selectedCol?: string | null
+  columnKinds?: Map<string, TransformationType>
   onColumnClick?: (nodeId: string, column: string) => void
 }
 
@@ -203,6 +209,8 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
             {visibleCols.map(col => {
               const active = d.highlightedCols?.has(col)
               const selected = d.selectedCol === col
+              const kind = d.columnKinds?.get(col)
+              const glyph = transformationGlyph(kind)
               return (
                 <button
                   key={col}
@@ -211,9 +219,11 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     e.stopPropagation()
                     d.onColumnClick?.(id, col)
                   }}
-                  title={col}
+                  title={kind ? `${col} · ${transformationLabel(kind)}` : col}
                   style={{
-                    display: 'block',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
                     width: '100%',
                     textAlign: 'left',
                     border: 'none',
@@ -234,7 +244,10 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     borderLeft: selected || active ? `2px solid ${PATH_COLOR}` : '2px solid transparent',
                   }}
                 >
-                  {col}
+                  {glyph && (
+                    <span style={{ flexShrink: 0, color: '#b45309', fontWeight: 700 }}>{glyph}</span>
+                  )}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col}</span>
                 </button>
               )
             })}
@@ -259,19 +272,27 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
 
 const nodeTypes: NodeTypes = { sql: SqlGraphNodeView }
 
-function xformLabel(t: SqlGraphColumnDep['transformation']): string {
-  switch (t) {
-    case 'passthrough':
-      return 'pass'
-    case 'rename':
-      return 'rename'
-    case 'aggregated':
-      return 'agg'
-    case 'derived':
-      return 'calc'
-    default:
-      return t
+function toLineageDeps(deps: readonly SqlGraphColumnDep[] | undefined) {
+  return (deps ?? []).map(d => ({
+    source_model: d.source_node || undefined,
+    source_column: d.source_column || undefined,
+    transformation: d.transformation as TransformationType,
+    expression: d.expression,
+  }))
+}
+
+function columnKindsForNode(
+  lineage: SqlGraph['column_lineage'],
+  nodeId: string,
+): Map<string, TransformationType> | undefined {
+  const cols = lineage?.[nodeId]
+  if (!cols) return undefined
+  const map = new Map<string, TransformationType>()
+  for (const [col, deps] of Object.entries(cols)) {
+    const kind = strongestTransformation(toLineageDeps(deps))
+    if (kind) map.set(col, kind)
   }
+  return map.size > 0 ? map : undefined
 }
 
 interface CteFlowProps {
@@ -286,6 +307,27 @@ export function CteFlow({ graph }: CteFlowProps) {
     if (!selected) return null
     return collectColumnPath(graph.column_lineage, selected.nodeId, selected.column)
   }, [graph.column_lineage, selected])
+
+  const selectedFormula = useMemo(() => {
+    if (!selected || !graph.column_lineage) return null
+    const deps = graph.column_lineage[selected.nodeId]?.[selected.column]
+    const direct = columnExpression(toLineageDeps(deps))
+    if (direct) return direct
+    // Prefer defining expression anywhere on the traced path
+    return path?.steps.map(s => s.expression).find(Boolean) ?? null
+  }, [selected, graph.column_lineage, path])
+
+  const selectedKind = useMemo(() => {
+    if (!selected || !graph.column_lineage) return null
+    const deps = graph.column_lineage[selected.nodeId]?.[selected.column]
+    const direct = strongestTransformation(toLineageDeps(deps))
+    const pathKinds = (path?.steps ?? [])
+      .map(s => s.transformation as TransformationType | undefined)
+      .filter((t): t is TransformationType => Boolean(t))
+    return strongestTransformation(
+      [...(direct ? [{ transformation: direct }] : []), ...pathKinds.map(transformation => ({ transformation }))],
+    )
+  }, [selected, graph.column_lineage, path])
 
   const highlighted = path?.keys ?? new Set<string>()
   const pathEdges = path?.edgeKeys ?? new Set<string>()
@@ -312,11 +354,12 @@ export function CteFlow({ graph }: CteFlowProps) {
             ...n.data,
             highlightedCols: colsOnNode,
             selectedCol: selCol,
+            columnKinds: columnKindsForNode(graph.column_lineage, n.id),
             onColumnClick,
           },
         }
       }),
-    [layout.nodes, highlighted, selected, onColumnClick],
+    [layout.nodes, highlighted, selected, onColumnClick, graph.column_lineage],
   )
 
   const edges = useMemo(
@@ -325,6 +368,8 @@ export function CteFlow({ graph }: CteFlowProps) {
         const onPath = pathEdges.has(`${e.source}\0${e.target}`)
         return {
           ...e,
+          // Join keys live on join nodes — strip any leftover edge labels.
+          label: e.source.startsWith('join:') ? undefined : e.label,
           style: {
             stroke: onPath ? PATH_COLOR : '#94a3b8',
             strokeWidth: onPath ? 2.5 : 1.5,
@@ -422,12 +467,38 @@ export function CteFlow({ graph }: CteFlowProps) {
               fontSize: 12,
               fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
               color: 'var(--text, #0f172a)',
-              marginBottom: 14,
+              marginBottom: 10,
               wordBreak: 'break-word',
             }}
           >
             {labelOf(selected.nodeId)}.<span style={{ color: PATH_COLOR }}>{selected.column}</span>
           </div>
+          {selectedKind && (
+            <div style={{ fontSize: 12, marginBottom: 10, color: 'var(--text, #0f172a)' }}>
+              <span style={{ color: 'var(--text-muted, #64748b)' }}>Kind </span>
+              {transformationGlyph(selectedKind)} {transformationLabel(selectedKind)}
+            </div>
+          )}
+          {selectedFormula && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>Formula</div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'var(--bg-surface, #f1f5f9)',
+                  fontSize: 11,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  color: 'var(--text, #0f172a)',
+                }}
+              >
+                {selectedFormula}
+              </pre>
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {path.steps.map((step, i) => (
               <PathStepRow key={`${step.nodeId}-${step.column}-${i}`} step={step} labelOf={labelOf} />
@@ -446,6 +517,7 @@ function PathStepRow({
   step: ColumnPathStep
   labelOf: (id: string) => string
 }) {
+  const glyph = transformationGlyph(step.transformation as TransformationType | undefined)
   return (
     <div
       style={{
@@ -457,7 +529,7 @@ function PathStepRow({
     >
       <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
         {labelOf(step.nodeId)}
-        {step.transformation && (
+        {step.transformation && step.transformation !== 'passthrough' && (
           <span
             style={{
               marginLeft: 6,
@@ -470,7 +542,8 @@ function PathStepRow({
               padding: '0 4px',
             }}
           >
-            {xformLabel(step.transformation)}
+            {glyph ? `${glyph} ` : ''}
+            {transformationLabel(step.transformation as TransformationType)}
           </span>
         )}
       </div>
@@ -486,7 +559,3 @@ function PathStepRow({
     </div>
   )
 }
-
-// Re-export for tests
-export { colKey }
-export type { SqlGraphColumnLineage }

@@ -89,18 +89,24 @@ class TestBuildSqlGraph:
         assert ("parent:model.proj.stg_supplies", "cte:supplies") in edge_set
         assert ("cte:supplies", "cte:order_supplies_summary") in edge_set
 
-        # Join on product_id into order_supplies_summary
-        join_edges = [
-            e
-            for e in graph["edges"]
-            if e.get("label") == "product_id=product_id"
-            and e["source"].startswith("join:")
-        ]
+        # Join keys live on join nodes — not duplicated as edge labels
+        join_nodes = [n for n in graph["nodes"] if n["kind"] == "join"]
         assert any(
-            e["target"] == "cte:joined"
-            and ("cte:order_supplies_summary", e["source"])
-            in {(x["source"], x["target"]) for x in graph["edges"]}
-            for e in join_edges
+            any(
+                k.get("left_column") == "product_id" and k.get("right_column") == "product_id"
+                for k in (n.get("join_keys") or [])
+            )
+            for n in join_nodes
+        )
+        assert all(
+            not e.get("label") for e in graph["edges"] if str(e["source"]).startswith("join:")
+        )
+        assert any(
+            e["target"] == "cte:joined" and e["source"].startswith("join:") for e in graph["edges"]
+        )
+        assert any(
+            e["source"] == "cte:order_supplies_summary" and e["target"].startswith("join:")
+            for e in graph["edges"]
         )
 
         assert ("cte:joined", "output:model.proj.order_items") in edge_set
@@ -138,6 +144,8 @@ class TestBuildSqlGraph:
             d["source_node"] == "cte:supplies"
             and d["source_column"] == "supply_cost"
             and d["transformation"] == "aggregated"
+            and d.get("expression")
+            and "supply_cost" in d["expression"].lower()
             for d in agg_deps
         )
         joined_deps = cl["cte:joined"]["supply_cost"]
@@ -160,3 +168,42 @@ class TestBuildSqlGraph:
         deps = cl["cte:order_items"]["order_id"]
         assert deps[0]["source_node"] == "parent:model.proj.stg_order_items"
         assert deps[0]["transformation"] == "passthrough"
+
+    def test_derived_expression_captured(self) -> None:
+        sql = """
+        with
+        source as (select * from analytics.stg_products),
+        renamed as (
+            select
+                sku as product_id,
+                coalesce(type = 'jaffle', false) as is_food_item
+            from source
+        )
+        select * from renamed
+        """
+        schema = {
+            "analytics.stg_products": {
+                "sku": "varchar",
+                "type": "varchar",
+            }
+        }
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.stg_products",
+            model_name="stg_products",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_products": {"name": "stg_products", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema=schema,
+            output_columns=["product_id", "is_food_item"],
+        )
+        assert graph is not None
+        deps = graph["column_lineage"]["cte:renamed"]["is_food_item"]
+        assert deps[0]["transformation"] == "derived"
+        assert deps[0].get("expression")
+        assert "jaffle" in deps[0]["expression"].lower()
+        assert "coalesce" in deps[0]["expression"].lower()
+

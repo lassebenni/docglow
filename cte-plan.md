@@ -33,12 +33,11 @@ Passthrough CTEs (`select * from ref`) still appear as CTE nodes, linked from th
 
 No per-column click path in v1. CTE/parent nodes may list output column names when cheap.
 
-### v2 — Field drill-down (in progress)
+### v2 — Field drill-down (done)
 
 Click a column on a parent/cte/output node → highlight path + side panel
-(`passthrough` / `rename` / `aggregated` / `derived`) through CTE steps.
-
-Payload: `SqlGraph.column_lineage` — `node_id → column → [{ source_node, source_column, transformation }]`.
+(`passthrough` / `rename` / `aggregated` / `derived` / `constant`) through CTE steps,
+with defining SQL `expression` and ambient transform glyphs.
 
 ### v3 — Expand CTE internals
 

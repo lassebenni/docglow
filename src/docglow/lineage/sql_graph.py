@@ -13,6 +13,7 @@ from docglow.lineage.join_keys import (
     _select_is_aggregate,
     _table_ref,
 )
+from docglow.lineage.column_parser import _expression_sql
 from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
@@ -208,9 +209,6 @@ def build_sql_graph(
             join_keys = _join_keys_from_join(join, exp)
 
             join_id = f"join:{idx}:{jtype}"
-            key_label = ", ".join(
-                f"{k['left_column']}={k['right_column']}" for k in join_keys
-            ) or jtype
             add_node(
                 {
                     "id": join_id,
@@ -225,7 +223,8 @@ def build_sql_graph(
             if right_id:
                 add_edge(right_id, join_id)
             if join_target_id:
-                add_edge(join_id, join_target_id, label=key_label or None)
+                # Keys live on the join node — avoid duplicating as edge labels.
+                add_edge(join_id, join_target_id)
             left_id = join_id
 
     # --- Output node -----------------------------------------------------
@@ -345,23 +344,26 @@ def _build_column_lineage(
         source_node: str,
         source_col: str,
         transformation: str,
+        expression: str | None = None,
     ) -> None:
         if target_node not in column_lineage:
             column_lineage[target_node] = {}
         deps = column_lineage[target_node].setdefault(target_col, [])
-        marker = f"{source_node}\0{source_col}\0{transformation}"
+        marker = f"{source_node}\0{source_col}\0{transformation}\0{expression or ''}"
         if any(
-            f"{d['source_node']}\0{d['source_column']}\0{d['transformation']}" == marker
+            f"{d.get('source_node')}\0{d.get('source_column')}\0{d.get('transformation')}\0{d.get('expression') or ''}"
+            == marker
             for d in deps
         ):
             return
-        deps.append(
-            {
-                "source_node": source_node,
-                "source_column": source_col,
-                "transformation": transformation,
-            }
-        )
+        entry: dict[str, str] = {
+            "source_node": source_node,
+            "source_column": source_col,
+            "transformation": transformation,
+        }
+        if expression and transformation in ("derived", "aggregated", "constant"):
+            entry["expression"] = expression
+        deps.append(entry)
 
     def resolve_rel(alias_or_ref: str | None) -> str | None:
         if not alias_or_ref:
@@ -412,14 +414,31 @@ def _build_column_lineage(
                 out_cols.append(out_name)
                 src_rel = proj.get("table")
                 src_col = proj.get("source_col")
+                expr_sql = proj.get("expression")
                 src_id = resolve_rel(src_rel) if src_rel else None
                 if src_id is None:
                     from_ = select.args.get("from_")
                     from_raw = _table_ref(from_.this, exp) if from_ else None
                     src_id = resolve_rel(from_raw) if from_raw else None
-                if src_id and src_col:
+                if proj.get("constant"):
+                    add_dep(
+                        cte_id,
+                        out_name,
+                        src_id or "",
+                        src_col or "",
+                        "constant",
+                        expression=expr_sql,
+                    )
+                elif src_id and src_col:
                     xform = "aggregated" if is_agg or proj.get("aggregated") else "derived"
-                    add_dep(cte_id, out_name, src_id, src_col, xform)
+                    add_dep(
+                        cte_id,
+                        out_name,
+                        src_id,
+                        src_col,
+                        xform,
+                        expression=expr_sql,
+                    )
 
         set_columns(cte_id, out_cols)
 
@@ -480,7 +499,6 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                     }
                 )
             else:
-                # expression — try find a source column for lineage
                 cols = list(inner.find_all(exp.Column)) if hasattr(inner, "find_all") else []
                 src = cols[0] if cols else None
                 aggregated = inner.find(exp.AggFunc) is not None
@@ -491,6 +509,8 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                         "table": src.table if src else None,
                         "source_col": src.name if src else None,
                         "aggregated": aggregated,
+                        "constant": not cols,
+                        "expression": _expression_sql(expression),
                     }
                 )
             continue
@@ -517,6 +537,8 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                 "table": src.table if src else None,
                 "source_col": src.name if src else None,
                 "aggregated": aggregated,
+                "constant": not cols,
+                "expression": _expression_sql(expression),
             }
         )
     return out

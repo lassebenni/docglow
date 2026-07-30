@@ -8,6 +8,7 @@ export interface ColumnPathStep {
   nodeId: string
   column: string
   transformation?: SqlGraphColumnDep['transformation']
+  expression?: string
 }
 
 export interface ColumnPathResult {
@@ -48,6 +49,7 @@ export function collectColumnPath(
     const deps = graphLineage[nid]?.[col]
     if (!deps?.length) return
     for (const dep of deps) {
+      if (!dep.source_node) continue
       keys.add(colKey(dep.source_node, dep.source_column))
       edgeKeys.add(`${dep.source_node}\0${nid}`)
       links.push({
@@ -55,7 +57,12 @@ export function collectColumnPath(
           nodeId: dep.source_node,
           column: dep.source_column,
         },
-        to: { nodeId: nid, column: col, transformation: dep.transformation },
+        to: {
+          nodeId: nid,
+          column: col,
+          transformation: dep.transformation,
+          expression: dep.expression,
+        },
         via: dep,
       })
       walkUp(dep.source_node, dep.source_column)
@@ -81,7 +88,12 @@ export function collectColumnPath(
           edgeKeys.add(`${dep.source_node}\0${tid}`)
           links.push({
             from: { nodeId: dep.source_node, column: dep.source_column },
-            to: { nodeId: tid, column: tcol, transformation: dep.transformation },
+            to: {
+              nodeId: tid,
+              column: tcol,
+              transformation: dep.transformation,
+              expression: dep.expression,
+            },
             via: dep,
           })
           grew = true
@@ -111,12 +123,19 @@ function orderPathSteps(
   const roots = [...keys].filter(k => !hasIncoming.has(k))
 
   // BFS from roots along links until we pass focus; keep first path that hits focus
-  const children = new Map<string, { next: string; xform: SqlGraphColumnDep['transformation'] }[]>()
+  const children = new Map<
+    string,
+    { next: string; xform: SqlGraphColumnDep['transformation']; expression?: string }[]
+  >()
   for (const l of links) {
     const fromK = colKey(l.from.nodeId, l.from.column)
     const toK = colKey(l.to.nodeId, l.to.column)
     const list = children.get(fromK) ?? []
-    list.push({ next: toK, xform: l.via.transformation })
+    list.push({
+      next: toK,
+      xform: l.via.transformation,
+      expression: l.via.expression,
+    })
     children.set(fromK, list)
   }
 
@@ -137,16 +156,21 @@ function orderPathSteps(
       }
       return
     }
-    for (const { next, xform } of kids) {
+    for (const { next, xform, expression } of kids) {
       const p = parseKey(next)
       dfs(
         next,
-        [...path, { nodeId: p.nodeId, column: p.column, transformation: xform }],
+        [
+          ...path,
+          {
+            nodeId: p.nodeId,
+            column: p.column,
+            transformation: xform,
+            expression,
+          },
+        ],
         hitFocus || next === focusK,
       )
-    }
-    if (kids.length === 0 && hitFocus && (!best || path.length > best.length)) {
-      best = path
     }
   }
 
