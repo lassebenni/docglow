@@ -49,16 +49,17 @@ const lineage: SqlGraphColumnLineage = {
 }
 
 describe('collectColumnPath', () => {
-  it('traces supply_cost from joined upstream through aggregate', () => {
+  it('traces supply_cost upstream through aggregate (not downstream)', () => {
     const path = collectColumnPath(lineage, 'cte:joined', 'supply_cost')
     expect(path.keys.has(colKey('parent:stg_supplies', 'supply_cost'))).toBe(true)
     expect(path.keys.has(colKey('cte:order_supplies_summary', 'supply_cost'))).toBe(true)
-    expect(path.keys.has(colKey('output:order_items', 'supply_cost'))).toBe(true)
+    expect(path.keys.has(colKey('cte:joined', 'supply_cost'))).toBe(true)
+    expect(path.keys.has(colKey('output:order_items', 'supply_cost'))).toBe(false)
     expect(path.edgeKeys.has('cte:supplies\0cte:order_supplies_summary')).toBe(true)
 
     const labels = path.steps.map(s => `${s.nodeId}:${s.column}`)
     expect(labels[0]).toBe('parent:stg_supplies:supply_cost')
-    expect(labels.at(-1)).toMatch(/supply_cost$/)
+    expect(labels.at(-1)).toBe('cte:joined:supply_cost')
     expect(path.steps.some(s => s.transformation === 'aggregated')).toBe(true)
   })
 
@@ -68,7 +69,7 @@ describe('collectColumnPath', () => {
     expect(path.steps).toEqual([{ nodeId: 'cte:x', column: 'a' }])
   })
 
-  it('highlights every column used in a multi-input expression', () => {
+  it('highlights upstream expression inputs but not same-node siblings or downstream', () => {
     const winLineage: SqlGraphColumnLineage = {
       'cte:base': {
         customer_id: [{ source_node: 'parent:stg', source_column: 'customer_id', transformation: 'passthrough' }],
@@ -92,14 +93,21 @@ describe('collectColumnPath', () => {
           },
         ],
       },
+      'output:m': {
+        n: [{ source_node: 'cte:numbered', source_column: 'n', transformation: 'passthrough' }],
+        customer_id: [{ source_node: 'cte:numbered', source_column: 'customer_id', transformation: 'passthrough' }],
+      },
     }
     const path = collectColumnPath(winLineage, 'cte:numbered', 'n')
+    expect(path.keys.has(colKey('cte:numbered', 'n'))).toBe(true)
     expect(path.keys.has(colKey('cte:base', 'customer_id'))).toBe(true)
     expect(path.keys.has(colKey('cte:base', 'ordered_at'))).toBe(true)
     expect(path.keys.has(colKey('parent:stg', 'customer_id'))).toBe(true)
     expect(path.keys.has(colKey('parent:stg', 'ordered_at'))).toBe(true)
-    // same-node passthrough copies of expression inputs
-    expect(path.keys.has(colKey('cte:numbered', 'customer_id'))).toBe(true)
-    expect(path.keys.has(colKey('cte:numbered', 'ordered_at'))).toBe(true)
+    // same-node siblings + downstream stay dark
+    expect(path.keys.has(colKey('cte:numbered', 'customer_id'))).toBe(false)
+    expect(path.keys.has(colKey('cte:numbered', 'ordered_at'))).toBe(false)
+    expect(path.keys.has(colKey('output:m', 'n'))).toBe(false)
+    expect(path.keys.has(colKey('output:m', 'customer_id'))).toBe(false)
   })
 })

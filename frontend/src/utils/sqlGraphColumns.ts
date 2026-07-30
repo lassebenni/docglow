@@ -12,7 +12,7 @@ export interface ColumnPathStep {
 }
 
 export interface ColumnPathResult {
-  /** Upstream root → selected → downstream (when present) ordered steps */
+  /** Upstream roots → selected column (ordered for the panel) */
   steps: ColumnPathStep[]
   keys: Set<string>
   /** Structure edges that carry the path: `${source}\0${target}` */
@@ -20,8 +20,9 @@ export interface ColumnPathResult {
 }
 
 /**
- * Trace a column through sql_graph.column_lineage upstream to roots and
- * downstream to consumers. Returns highlight keys + ordered path for the panel.
+ * Trace a column through sql_graph.column_lineage **upstream only**
+ * (selected field + every column it depends on, recursively).
+ * Downstream consumers and same-node sibling passthroughs are not highlighted.
  */
 export function collectColumnPath(
   lineage: SqlGraphColumnLineage | undefined,
@@ -71,39 +72,6 @@ export function collectColumnPath(
 
   walkUp(nodeId, column)
 
-  // Walk downstream: any column that depends on keys we already have
-  const seenDown = new Set(keys)
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const [tid, cols] of Object.entries(graphLineage)) {
-      for (const [tcol, deps] of Object.entries(cols)) {
-        const tk = colKey(tid, tcol)
-        if (seenDown.has(tk)) continue
-        for (const dep of deps) {
-          const sk = colKey(dep.source_node, dep.source_column)
-          if (!seenDown.has(sk)) continue
-          seenDown.add(tk)
-          keys.add(tk)
-          edgeKeys.add(`${dep.source_node}\0${tid}`)
-          links.push({
-            from: { nodeId: dep.source_node, column: dep.source_column },
-            to: {
-              nodeId: tid,
-              column: tcol,
-              transformation: dep.transformation,
-              expression: dep.expression,
-            },
-            via: dep,
-          })
-          grew = true
-        }
-      }
-    }
-  }
-
-  // Build ordered path: roots → … → selected (and optionally continue downstream
-  // along one chain that includes the selected column).
   const steps = orderPathSteps(nodeId, column, links, keys)
   return { steps, keys, edgeKeys }
 }
