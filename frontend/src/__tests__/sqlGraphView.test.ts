@@ -51,6 +51,36 @@ describe('collapsePassthroughCtes', () => {
     expect(edges.has('parent:stg->cte:calc')).toBe(true)
     expect(edges.has('parent:stg->cte:pass')).toBe(false)
   })
+
+  it('bridges parent through collapsed same-name passthrough CTE', () => {
+    const g: SqlGraph = {
+      nodes: [
+        { id: 'parent:model.order_items', kind: 'parent', label: 'order_items', columns: ['order_id'] },
+        {
+          id: 'cte:order_items',
+          kind: 'cte',
+          label: 'order_items',
+          passthrough: true,
+          columns: ['order_id'],
+        },
+        {
+          id: 'cte:order_items_summary',
+          kind: 'cte',
+          label: 'order_items_summary',
+          transforms: ['aggregate'],
+          columns: ['order_id'],
+        },
+      ],
+      edges: [
+        { source: 'parent:model.order_items', target: 'cte:order_items' },
+        { source: 'cte:order_items', target: 'cte:order_items_summary' },
+      ],
+    }
+    const collapsed = collapsePassthroughCtes(g)
+    expect(collapsed.nodes.find(n => n.id === 'cte:order_items')).toBeUndefined()
+    const edges = new Set(collapsed.edges.map(e => `${e.source}->${e.target}`))
+    expect(edges.has('parent:model.order_items->cte:order_items_summary')).toBe(true)
+  })
 })
 
 describe('findDefiningOps', () => {

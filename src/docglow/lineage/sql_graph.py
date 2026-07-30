@@ -122,9 +122,20 @@ def build_sql_graph(
     def relation_node_id(raw_ref: str | None) -> str | None:
         if not raw_ref:
             return None
-        key = raw_ref.lower()
+        key = raw_ref.lower().replace('"', "")
         short = key.rsplit(".", 1)[-1]
-        if key in cte_aliases or short in cte_aliases:
+        # Unqualified names that match a CTE alias are CTE refs
+        # (``from order_items`` inside another CTE).
+        # Qualified names that share a CTE short name are physical tables
+        # (``from "db"."schema"."order_items"`` inside CTE order_items itself).
+        is_qualified = "." in key
+        if short in cte_aliases or key in cte_aliases:
+            if not is_qualified:
+                alias = short if short in cte_aliases else key
+                return f"cte:{alias}"
+            # Prefer resolved parent model when the FQ name maps to a dbt node
+            if resolver.resolve(raw_ref) or resolver.resolve(key):
+                return ensure_parent(raw_ref)
             alias = short if short in cte_aliases else key
             return f"cte:{alias}"
         return ensure_parent(raw_ref)
@@ -180,7 +191,15 @@ def build_sql_graph(
             continue
         from_key = from_raw.lower()
         from_short = from_key.rsplit(".", 1)[-1]
-        if from_key in cte_aliases or from_short in cte_aliases:
+        # FROM matching this CTE's own name is the physical table (a CTE cannot
+        # select from itself). Matching only *other* CTE aliases avoids dropping
+        # the parent edge when CTE and model share a name (e.g. order_items).
+        is_other_cte = (
+            (from_key in cte_aliases or from_short in cte_aliases)
+            and from_short != alias_l
+            and from_key != alias_l
+        )
+        if is_other_cte:
             src = f"cte:{from_short if from_short in cte_aliases else from_key}"
             add_edge(src, cte_id)
         else:

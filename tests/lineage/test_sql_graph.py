@@ -376,3 +376,46 @@ class TestBuildSqlGraph:
         assert "count_food_items" in deps[0]["expression"].lower()
         assert deps[0]["source_column"] == "count_food_items"
 
+    def test_cte_same_name_as_model_keeps_parent_edge(self) -> None:
+        """CTE ``order_items`` selecting from model ``order_items`` must link to parent."""
+        sql = """
+        with
+        order_items as (select * from analytics.order_items),
+        order_items_summary as (
+            select order_id, sum(supply_cost) as order_cost
+            from order_items
+            group by 1
+        )
+        select * from order_items_summary
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.order_items": {
+                        "name": "order_items",
+                        "schema": "analytics",
+                    },
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.order_items": {
+                    "order_id": "varchar",
+                    "supply_cost": "float",
+                }
+            },
+            output_columns=["order_id", "order_cost"],
+        )
+        assert graph is not None
+        by_id = {n["id"]: n for n in graph["nodes"]}
+        assert "parent:model.proj.order_items" in by_id
+        assert "order_id" in (by_id["parent:model.proj.order_items"].get("columns") or [])
+        assert "order_id" in (by_id["cte:order_items"].get("columns") or [])
+        edge_set = {(e["source"], e["target"]) for e in graph["edges"]}
+        assert ("parent:model.proj.order_items", "cte:order_items") in edge_set
+        assert ("cte:order_items", "cte:order_items_summary") in edge_set
+
