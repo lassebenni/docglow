@@ -455,6 +455,7 @@ export function LineagePage() {
               columnLineageData={data.column_lineage}
               joinKeysData={data.join_keys}
               joinBasesData={data.join_bases}
+              joinIndirectData={data.join_indirect}
               modelColumns={modelColumnsMap}
             />
           )}

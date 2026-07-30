@@ -1,6 +1,7 @@
 import { memo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
+import { joinRoleBadgeTitle } from '../../utils/joinKeys'
 
 const RESOURCE_COLORS: Record<string, string> = {
   model: '#2563eb',
@@ -171,7 +172,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
               )}
               {!isJoinBase && joinTypeBadge && (
                 <span
-                  title={`${joinTypeBadge} JOIN into the focused model's FROM parent`}
+                  title={joinRoleBadgeTitle(joinTypeBadge)}
                   style={{
                     fontSize: 9,
                     fontWeight: 600,

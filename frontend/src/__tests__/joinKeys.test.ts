@@ -5,6 +5,7 @@ import {
   formatJoinPredicate,
   formatJoinTypeBadge,
   getJoinKeysForEdge,
+  indirectParentBadgesForFocus,
   joinKeyHighlightSets,
   joinedParentBadgesForFocus,
 } from '../utils/joinKeys'
@@ -230,5 +231,23 @@ describe('joinedParentBadgesForFocus', () => {
     expect(map.get('model.stg_orders')).toBe('LEFT')
     expect(map.get('model.stg_products')).toBe('LEFT')
     expect(map.has('model.stg_order_items')).toBe(false)
+  })
+})
+
+describe('indirectParentBadgesForFocus', () => {
+  it('badges aggregate CTE parents as AGG without overwriting LEFT', () => {
+    const indirect = {
+      'model.order_items': [{ model: 'model.stg_supplies', kind: 'agg' }],
+    }
+    const bases = { 'model.order_items': 'model.stg_order_items' }
+    const existing = new Map([['model.stg_orders', 'LEFT']])
+    const map = indirectParentBadgesForFocus(
+      indirect,
+      bases,
+      existing,
+      new Set(['model.order_items']),
+    )
+    expect(map.get('model.stg_supplies')).toBe('AGG')
+    expect(map.has('model.stg_orders')).toBe(false)
   })
 })

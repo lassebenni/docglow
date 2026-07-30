@@ -101,6 +101,33 @@ class TestExtractJoinPairs:
 
         assert extract_join_base_table("select * from analytics.stg_orders") is None
 
+    def test_indirect_agg_parent_via_summary_cte(self) -> None:
+        from docglow.lineage.join_keys import extract_indirect_join_parents
+
+        sql = """
+        with
+        order_items as (select * from analytics.stg_order_items),
+        orders as (select * from analytics.stg_orders),
+        supplies as (select * from analytics.stg_supplies),
+        order_supplies_summary as (
+            select product_id, sum(supply_cost) as supply_cost
+            from supplies
+            group by 1
+        ),
+        joined as (
+            select *
+            from order_items
+            left join orders on order_items.order_id = orders.order_id
+            left join order_supplies_summary
+                on order_items.product_id = order_supplies_summary.product_id
+        )
+        select * from joined
+        """
+        parents = extract_indirect_join_parents(sql)
+        assert len(parents) == 1
+        assert parents[0].table == "analytics.stg_supplies"
+        assert parents[0].kind == "agg"
+
     def test_join_key_column_names(self) -> None:
         sql = "select * from a join b on a.x = b.y and a.z = b.w"
         names = join_key_column_names(extract_join_pairs(sql))

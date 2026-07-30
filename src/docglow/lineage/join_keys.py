@@ -20,6 +20,14 @@ class UnresolvedJoinKeyPair:
     join_type: str | None = None
 
 
+@dataclass(frozen=True)
+class UnresolvedIndirectJoinParent:
+    """A parent table reached only through a non-passthrough joined CTE."""
+
+    table: str
+    kind: str  # "agg" | "cte"
+
+
 def extract_join_pairs(
     compiled_sql: str,
     dialect: str | None = None,
@@ -167,6 +175,125 @@ def extract_join_base_table(
         return None
 
     return _normalize_table_ref(_table_ref(best_from, exp), cte_sources)
+
+
+def extract_indirect_join_parents(
+    compiled_sql: str,
+    dialect: str | None = None,
+) -> list[UnresolvedIndirectJoinParent]:
+    """Return parents reached only via non-passthrough CTEs that are JOINed.
+
+    Example: ``stg_supplies`` feeds ``order_supplies_summary`` (aggregate CTE),
+    which is then ``LEFT JOIN``ed — so ``stg_supplies`` is neither the FROM base
+    nor a direct join endpoint.
+
+    Returns entries with ``kind`` ``agg`` (GROUP BY / aggregate) or ``cte``.
+    """
+    if not compiled_sql or not compiled_sql.strip():
+        return []
+
+    try:
+        import sqlglot
+        from sqlglot import exp
+    except ImportError:
+        return []
+
+    try:
+        parsed = sqlglot.parse(compiled_sql, dialect=dialect)
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to parse SQL for indirect join-parent extraction")
+        return []
+
+    if not parsed or parsed[0] is None:
+        return []
+
+    tree = parsed[0]
+    cte_sources = _build_cte_source_map(tree, exp)
+    complex_ctes = _build_complex_cte_map(tree, exp, cte_sources)
+
+    best_joins: list[Any] = []
+    best_join_count = 0
+    for select in tree.find_all(exp.Select):
+        joins = select.args.get("joins") or []
+        if not joins:
+            continue
+        join_count = len(joins)
+        if join_count >= best_join_count:
+            best_join_count = join_count
+            best_joins = list(joins)
+
+    if not best_joins:
+        return []
+
+    out: list[UnresolvedIndirectJoinParent] = []
+    seen: set[str] = set()
+    for join in best_joins:
+        joined_ref = _table_ref(join.this, exp)
+        if not joined_ref:
+            continue
+        key = joined_ref.lower()
+        short = key.rsplit(".", 1)[-1]
+        # Passthrough CTE aliases resolve to direct join endpoints — skip those.
+        if key in cte_sources or short in cte_sources:
+            continue
+        complex = complex_ctes.get(key) or complex_ctes.get(short)
+        if complex is None:
+            continue
+
+        for table_ref in complex["tables"]:
+            marker = table_ref.lower()
+            if marker in seen:
+                continue
+            seen.add(marker)
+            out.append(UnresolvedIndirectJoinParent(table=table_ref, kind=complex["kind"]))
+
+    return out
+
+
+def _build_complex_cte_map(
+    tree: Any,
+    exp: Any,
+    cte_sources: dict[str, str],
+) -> dict[str, dict[str, Any]]:
+    """Map non-passthrough CTE aliases → underlying tables + kind."""
+    complex_ctes: dict[str, dict[str, Any]] = {}
+
+    for cte in tree.find_all(exp.CTE):
+        alias = getattr(cte, "alias", None)
+        select = cte.this if isinstance(cte.this, exp.Select) else None
+        if not alias or select is None:
+            continue
+        if alias.lower() in cte_sources:
+            continue  # simple passthrough
+
+        from_ = select.args.get("from_")
+        if from_ is None:
+            continue
+
+        tables: list[str] = []
+        base_ref = _normalize_table_ref(_table_ref(from_.this, exp), cte_sources)
+        if base_ref:
+            tables.append(base_ref)
+        for join in select.args.get("joins") or []:
+            join_ref = _normalize_table_ref(_table_ref(join.this, exp), cte_sources)
+            if join_ref:
+                tables.append(join_ref)
+        if not tables:
+            continue
+
+        kind = "agg" if _select_is_aggregate(select, exp) else "cte"
+        complex_ctes[alias.lower()] = {"tables": tables, "kind": kind}
+
+    return complex_ctes
+
+
+def _select_is_aggregate(select: Any, exp: Any) -> bool:
+    if select.args.get("group") is not None:
+        return True
+    for expression in select.expressions or []:
+        if expression.find(exp.AggFunc) is not None:
+            return True
+    return False
 
 
 def _pair_from_eq(

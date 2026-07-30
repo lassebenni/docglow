@@ -22,7 +22,9 @@ from docglow.lineage.column_parser import (
     parse_column_lineage,
 )
 from docglow.lineage.join_keys import (
+    UnresolvedIndirectJoinParent,
     UnresolvedJoinKeyPair,
+    extract_indirect_join_parents,
     extract_join_base_table,
     extract_join_pairs,
 )
@@ -31,8 +33,8 @@ from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
 
-# Bumped when cached lineage semantics change (e.g. join-base extraction).
-_CACHE_FORMAT_VERSION = 4
+# Bumped when cached lineage semantics change (e.g. indirect join parents).
+_CACHE_FORMAT_VERSION = 5
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -56,6 +58,7 @@ class ColumnLineageResult(Mapping[str, dict[str, list[dict[str, str]]]]):
     lineage: dict[str, dict[str, list[dict[str, str]]]]
     join_keys: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     join_bases: dict[str, str] = field(default_factory=dict)
+    join_indirect: dict[str, list[dict[str, str]]] = field(default_factory=dict)
 
     def __getitem__(self, key: str) -> dict[str, list[dict[str, str]]]:
         return self.lineage[key]
@@ -75,6 +78,7 @@ class _ModelLineageResult:
     lineage: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     join_keys: list[dict[str, str]] = field(default_factory=list)
     join_base: str | None = None
+    join_indirect: list[dict[str, str]] = field(default_factory=list)
     cache_entry: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, str] | None = None
     cached: bool = False
@@ -194,11 +198,13 @@ def _analyze_single_model(
         cached_lineage = cached_entry.get("lineage")
         cached_joins = cached_entry.get("join_keys") or []
         cached_base = cached_entry.get("join_base")
+        cached_indirect = cached_entry.get("join_indirect") or []
         return _ModelLineageResult(
             uid=uid,
             lineage=cached_lineage or {},
             join_keys=list(cached_joins) if isinstance(cached_joins, list) else [],
             join_base=cached_base if isinstance(cached_base, str) else None,
+            join_indirect=(list(cached_indirect) if isinstance(cached_indirect, list) else []),
             cached=True,
         )
 
@@ -220,6 +226,7 @@ def _analyze_single_model(
                 "lineage": {},
                 "join_keys": [],
                 "join_base": None,
+                "join_indirect": [],
             },
             failure={
                 "model": uid,
@@ -230,6 +237,7 @@ def _analyze_single_model(
 
     resolved_joins = _resolve_join_keys(sql, dialect, resolver)
     join_base = _resolve_join_base(sql, dialect, resolver)
+    join_indirect = _resolve_indirect_join_parents(sql, dialect, resolver)
 
     if not raw_lineage:
         failure = None
@@ -243,11 +251,13 @@ def _analyze_single_model(
             uid=uid,
             join_keys=resolved_joins,
             join_base=join_base,
+            join_indirect=join_indirect,
             cache_entry={
                 "sql_hash": sql_hash,
                 "lineage": {},
                 "join_keys": resolved_joins,
                 "join_base": join_base,
+                "join_indirect": join_indirect,
             },
             failure=failure,
         )
@@ -258,6 +268,7 @@ def _analyze_single_model(
         "lineage": model_lineage,
         "join_keys": resolved_joins,
         "join_base": join_base,
+        "join_indirect": join_indirect,
     }
 
     # Track partially traced models
@@ -278,6 +289,7 @@ def _analyze_single_model(
         lineage=model_lineage,
         join_keys=resolved_joins,
         join_base=join_base,
+        join_indirect=join_indirect,
         cache_entry=cache_entry_out,
         failure=failure,
     )
@@ -305,6 +317,16 @@ def _resolve_join_base(
     return resolver.resolve(base_ref)
 
 
+def _resolve_indirect_join_parents(
+    sql: str,
+    dialect: str | None,
+    resolver: TableResolver,
+) -> list[dict[str, str]]:
+    """Extract and resolve parents reached only via joined aggregate/CTE blocks."""
+    unresolved = extract_indirect_join_parents(sql, dialect=dialect)
+    return resolve_indirect_join_parents(unresolved, resolver)
+
+
 def resolve_join_key_pairs(
     pairs: list[UnresolvedJoinKeyPair],
     resolver: TableResolver,
@@ -325,6 +347,22 @@ def resolve_join_key_pairs(
         if pair.join_type:
             entry["join_type"] = pair.join_type
         resolved.append(entry)
+    return resolved
+
+
+def resolve_indirect_join_parents(
+    parents: list[UnresolvedIndirectJoinParent],
+    resolver: TableResolver,
+) -> list[dict[str, str]]:
+    """Resolve indirect join parents to dbt unique_ids."""
+    resolved: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for parent in parents:
+        uid = resolver.resolve(parent.table)
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        resolved.append({"model": uid, "kind": parent.kind})
     return resolved
 
 
@@ -517,6 +555,7 @@ def analyze_column_lineage(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]] = {}
     join_keys: dict[str, list[dict[str, str]]] = {}
     join_bases: dict[str, str] = {}
+    join_indirect: dict[str, list[dict[str, str]]] = {}
     parse_failures = 0
     total_models = 0
     failure_details: list[dict[str, str]] = []
@@ -542,6 +581,9 @@ def analyze_column_lineage(
                 cached_base = cached_entry.get("join_base") if cached_entry else None
                 if isinstance(cached_base, str) and cached_base:
                     join_bases[uid] = cached_base
+                cached_indirect = cached_entry.get("join_indirect") if cached_entry else None
+                if isinstance(cached_indirect, list) and cached_indirect:
+                    join_indirect[uid] = list(cached_indirect)
 
     # Determine which models to analyze
     uids_to_analyze = (
@@ -594,6 +636,7 @@ def analyze_column_lineage(
                     column_lineage,
                     join_keys,
                     join_bases,
+                    join_indirect,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -625,6 +668,7 @@ def analyze_column_lineage(
                     column_lineage,
                     join_keys,
                     join_bases,
+                    join_indirect,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -662,6 +706,7 @@ def analyze_column_lineage(
         lineage=column_lineage,
         join_keys=join_keys,
         join_bases=join_bases,
+        join_indirect=join_indirect,
     )
 
 
@@ -671,6 +716,7 @@ def _merge_result(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],
     join_keys: dict[str, list[dict[str, str]]],
     join_bases: dict[str, str],
+    join_indirect: dict[str, list[dict[str, str]]],
     cache: dict[str, Any],
     failure_details: list[dict[str, str]],
     analyzed_count: int,
@@ -691,6 +737,8 @@ def _merge_result(
             join_keys[result.uid] = result.join_keys
         if result.join_base:
             join_bases[result.uid] = result.join_base
+        if result.join_indirect:
+            join_indirect[result.uid] = result.join_indirect
         return
 
     model_name = all_models[result.uid].get("name", result.uid.split(".")[-1])
@@ -709,6 +757,8 @@ def _merge_result(
         join_keys[result.uid] = result.join_keys
     if result.join_base:
         join_bases[result.uid] = result.join_base
+    if result.join_indirect:
+        join_indirect[result.uid] = result.join_indirect
     if result.failure:
         failure_details.append(result.failure)
 

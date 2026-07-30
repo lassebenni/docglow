@@ -8,6 +8,8 @@ export type {
   JoinKeyPair,
   JoinKeysData,
   JoinBasesData,
+  JoinIndirectData,
+  JoinIndirectParent,
   LineageEdgeJoinKey,
 } from "./artifacts.js";
 

@@ -3,7 +3,13 @@
  * This is the root shape consumed by the frontend React SPA.
  */
 
-import type { ArtifactVersions, ColumnLineageData, JoinBasesData, JoinKeysData } from "./artifacts.js";
+import type {
+  ArtifactVersions,
+  ColumnLineageData,
+  JoinBasesData,
+  JoinIndirectData,
+  JoinKeysData,
+} from "./artifacts.js";
 import type { ErdRelationship } from "./erd.js";
 import type { HealthData } from "./health.js";
 import type { LineageData, SearchEntry } from "./lineage.js";
@@ -70,6 +76,11 @@ export interface DocglowData {
    * skipped or the model has no JOINs.
    */
   readonly join_bases?: JoinBasesData;
+  /**
+   * Parents that contribute only via intermediate (often aggregate) CTEs that
+   * are JOINed — neither the FROM base nor a direct JOIN endpoint.
+   */
+  readonly join_indirect?: JoinIndirectData;
   readonly health: HealthData;
   /**
    * ERD relationships extracted from dbt `relationships` tests and

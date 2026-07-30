@@ -225,6 +225,52 @@ export function joinedParentBadgesForFocus(
   return map
 }
 
+export type JoinIndirectData = Record<string, ReadonlyArray<{ readonly model: string; readonly kind: string }>>
+
+/**
+ * Badge parents that contribute only via joined aggregate / intermediate CTEs.
+ * Does not overwrite Base or direct JOIN-type badges.
+ */
+export function indirectParentBadgesForFocus(
+  joinIndirectByModel: JoinIndirectData | null | undefined,
+  joinBasesByModel: Record<string, string> | null | undefined,
+  existingBadges: ReadonlyMap<string, string>,
+  focusModelIds: ReadonlySet<string>,
+): Map<string, string> {
+  const map = new Map<string, string>()
+  if (!joinIndirectByModel || focusModelIds.size === 0) return map
+
+  for (const focusId of focusModelIds) {
+    const parents = joinIndirectByModel[focusId]
+    if (!parents) continue
+    const baseId = joinBasesByModel?.[focusId] ?? null
+    for (const parent of parents) {
+      if (!parent.model || parent.model === baseId) continue
+      if (existingBadges.has(parent.model) || map.has(parent.model)) continue
+      const kind = (parent.kind || 'cte').toLowerCase()
+      map.set(parent.model, kind === 'agg' ? 'AGG' : 'CTE')
+    }
+  }
+  return map
+}
+
+export function joinRoleBadgeTitle(badge: string): string {
+  switch (badge) {
+    case 'LEFT':
+    case 'RIGHT':
+    case 'FULL':
+    case 'INNER':
+    case 'CROSS':
+      return `${badge} JOIN into the focused model's FROM parent`
+    case 'AGG':
+      return 'Contributes via an aggregate CTE — not the FROM base and not a direct JOIN endpoint'
+    case 'CTE':
+      return 'Contributes via an intermediate CTE — not the FROM base and not a direct JOIN endpoint'
+    default:
+      return `Join role: ${badge}`
+  }
+}
+
 export function formatJoinPredicate(
   pair: EdgeJoinKey,
   nameOf: (modelId: string) => string,

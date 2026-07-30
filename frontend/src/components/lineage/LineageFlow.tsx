@@ -25,6 +25,7 @@ import {
   connectedEndpointJoinKeyHighlights,
   formatJoinPredicate,
   getJoinKeysForEdge,
+  indirectParentBadgesForFocus,
   joinKeyHighlightSets,
   joinedParentBadgesForFocus,
   type EdgeJoinKey,
@@ -370,6 +371,8 @@ export interface LineageFlowProps {
   joinKeysData?: JoinKeysData
   /** FROM (foundation) parent keyed by the model that owns the JOIN SQL */
   joinBasesData?: Record<string, string>
+  /** Parents reached only via joined aggregate/intermediate CTEs */
+  joinIndirectData?: Record<string, ReadonlyArray<{ readonly model: string; readonly kind: string }>>
   /** Map of model ID → list of column names (for DagNode expansion) */
   modelColumns?: Record<string, string[]>
 }
@@ -388,6 +391,7 @@ function LineageFlowInner({
   columnLineageData,
   joinKeysData,
   joinBasesData,
+  joinIndirectData,
   modelColumns,
 }: LineageFlowProps) {
   const navigate = useNavigate()
@@ -479,8 +483,17 @@ function LineageFlowInner({
   // LEFT / INNER / … badges on non-base parents joined into the focused model(s).
   const joinTypeBadges = useMemo(() => {
     if (!pinnedIds || pinnedIds.size === 0) return new Map<string, string>()
-    return joinedParentBadgesForFocus(joinKeysData, joinBasesData, pinnedIds)
-  }, [joinKeysData, joinBasesData, pinnedIds])
+    const direct = joinedParentBadgesForFocus(joinKeysData, joinBasesData, pinnedIds)
+    const indirect = indirectParentBadgesForFocus(
+      joinIndirectData,
+      joinBasesData,
+      direct,
+      pinnedIds,
+    )
+    const merged = new Map(direct)
+    for (const [id, badge] of indirect) merged.set(id, badge)
+    return merged
+  }, [joinKeysData, joinBasesData, joinIndirectData, pinnedIds])
 
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isDraggingRef = useRef(false)

@@ -40,6 +40,19 @@ export type JoinKeysData = Record<string, JoinKeyPair[]>;
  */
 export type JoinBasesData = Record<string, string>;
 
+/** Parent reached only via a non-passthrough CTE that is JOINed. */
+export interface JoinIndirectParent {
+  readonly model: string;
+  /** ``agg`` when the CTE aggregates; otherwise ``cte``. */
+  readonly kind: "agg" | "cte" | string;
+}
+
+/**
+ * Map of model unique_id → parents that contribute through intermediate CTEs
+ * rather than as the FROM base or a direct JOIN endpoint.
+ */
+export type JoinIndirectData = Record<string, JoinIndirectParent[]>;
+
 /** Join keys attached to a table-level lineage edge (source → target). */
 export interface LineageEdgeJoinKey {
   readonly source_column: string;

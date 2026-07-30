@@ -127,6 +127,11 @@ declare module "@docglow/shared-types" {
     }[]>;
     /** model uid → FROM (foundation) parent uid for that model's JOINs */
     readonly join_bases?: Record<string, string>;
+    /** parents reached only via joined aggregate/intermediate CTEs */
+    readonly join_indirect?: Record<string, ReadonlyArray<{
+      readonly model: string;
+      readonly kind: string;
+    }>>;
   }
 
   interface LineageEdge {
