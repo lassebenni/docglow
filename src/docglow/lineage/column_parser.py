@@ -30,12 +30,17 @@ _DIALECT_MAP: dict[str, str] = {
 
 @dataclass(frozen=True)
 class ColumnDependency:
-    """A single column-level dependency."""
+    """A single column-level dependency.
 
-    source_table: str  # Table name as parsed from SQL (e.g. "schema.table")
-    source_column: str  # Column name in the source table
-    transformation: str  # "passthrough" | "rename" | "aggregated" | "derived" | "unknown"
-    expression: str | None = None  # Defining SQL expr for derived/aggregated columns
+    For ``constant`` / ``untraced`` columns there is no upstream table; use empty
+    ``source_table`` / ``source_column`` and rely on ``transformation`` (+ optional
+    ``expression`` for literals).
+    """
+
+    source_table: str  # Table name as parsed from SQL (e.g. "schema.table"); "" if none
+    source_column: str  # Column name in the source table; "" if none
+    transformation: str  # passthrough|rename|aggregated|derived|constant|untraced|unknown
+    expression: str | None = None  # Defining SQL expr for derived/aggregated/constant
 
 
 def detect_dialect(adapter_type: str | None) -> str | None:
@@ -439,11 +444,43 @@ def _collect_dependencies(
                     source_table=source_table,
                     source_column=source_column,
                     transformation=dep_transformation,
-                    expression=expression if dep_transformation in ("derived", "aggregated") else None,
+                    expression=(
+                        expression
+                        if dep_transformation in ("derived", "aggregated", "constant")
+                        else None
+                    ),
                 )
             )
 
+    if not deps:
+        # Literal / NULL columns have no table leaves — still emit a constant entry
+        # so the UI can show a glyph + formula instead of treating them as missing.
+        const_expr = expression
+        if transformation != "constant":
+            const_expr = _constant_expression_sql(root_node)
+            if const_expr is not None:
+                transformation = "constant"
+        if transformation == "constant":
+            return [
+                ColumnDependency(
+                    source_table="",
+                    source_column="",
+                    transformation="constant",
+                    expression=const_expr or expression,
+                )
+            ]
+
     return deps
+
+
+def _constant_expression_sql(root_node: Any) -> str | None:
+    """If the lineage root is a constant/literal, return its SQL; else None."""
+    expr = getattr(root_node, "expression", None)
+    if expr is None:
+        return None
+    if _classify_transformation(expr) != "constant":
+        return None
+    return _expression_sql(expr)
 
 
 def _walk_with_parent(node: Any, parent: Any | None, result: list[tuple[Any, Any | None]]) -> None:
@@ -473,10 +510,12 @@ def _extract_column_from_node_name(name: str) -> str:
 
 _PRIORITY = {
     "unknown": 0,
+    "untraced": 0,
     "passthrough": 1,
     "rename": 2,
-    "derived": 3,
-    "aggregated": 4,
+    "constant": 3,
+    "derived": 4,
+    "aggregated": 5,
 }
 
 
@@ -485,7 +524,7 @@ def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
 
     Outer ``SELECT * FROM cte`` nodes often look like simple column aliases.
     Walk downstream expressions and keep the strongest classification, along
-    with the SQL for the first derived/aggregated defining expression.
+    with the SQL for the first derived/aggregated/constant defining expression.
 
     Leaf lineage nodes carry the source ``Table`` as ``expression`` — those are
     not transformations and must be ignored or everything looks ``derived``.
@@ -505,11 +544,11 @@ def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
         if priority > best_priority:
             best_priority = priority
             best_kind = kind
-            if kind in ("derived", "aggregated"):
+            if kind in ("derived", "aggregated", "constant"):
                 best_expression = _expression_sql(expression)
         elif (
             priority == best_priority
-            and kind in ("derived", "aggregated")
+            and kind in ("derived", "aggregated", "constant")
             and best_expression is None
         ):
             best_expression = _expression_sql(expression)
@@ -547,6 +586,7 @@ def _classify_transformation(expression: Any) -> str:
         "passthrough" — column passes through unchanged (SELECT a FROM ...)
         "aggregated" — column is inside an aggregate function (SUM, COUNT, etc.)
         "derived" — column is transformed in some other way (CASE, CONCAT, etc.)
+        "constant" — literal / NULL with no column reference
         "unknown" — expression is None (could not be parsed)
     """
     from sqlglot import exp
@@ -563,6 +603,10 @@ def _classify_transformation(expression: Any) -> str:
     if isinstance(inner, exp.Column):
         return "passthrough"
 
+    # Literals / NULL (including CAST of a constant)
+    if _is_constant_node(inner, exp):
+        return "constant"
+
     # Direct aggregate function
     agg_types = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max, exp.AnyValue)
     if isinstance(inner, agg_types):
@@ -575,6 +619,20 @@ def _classify_transformation(expression: Any) -> str:
                 return "aggregated"
 
     return "derived"
+
+
+def _is_constant_node(node: Any, exp: Any) -> bool:
+    """True when ``node`` is a SQL literal/NULL (optionally wrapped in Cast)."""
+    if node is None:
+        return False
+    if isinstance(node, (exp.Null, exp.Literal, exp.Boolean)):
+        return True
+    if isinstance(node, exp.Cast):
+        return _is_constant_node(node.this, exp)
+    # Paren / nested wrappers around a constant
+    if isinstance(node, exp.Paren):
+        return _is_constant_node(node.this, exp)
+    return False
 
 
 def build_schema_mapping(

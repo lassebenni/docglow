@@ -198,6 +198,7 @@ export function LineagePage() {
     for (const [, columns] of Object.entries(data.column_lineage)) {
       for (const deps of Object.values(columns)) {
         for (const dep of deps) {
+          if (!dep.source_model || !dep.source_column) continue
           if (dep.source_column.toLowerCase().includes(q)) {
             const srcName = allResources[dep.source_model]?.name ?? dep.source_model.split('.').pop() ?? dep.source_model
             const key = `${dep.source_model}::${dep.source_column}`

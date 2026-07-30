@@ -27,6 +27,7 @@ import {
   strongestTransformation,
   transformationGlyph,
   transformationLabel,
+  upstreamSourceDeps,
 } from '../../utils/columnTransforms'
 import {
   connectedEndpointJoinKeyHighlights,
@@ -1059,6 +1060,7 @@ function LineageFlowInner({
       kind: strongestTransformation(deps),
       expression: columnExpression(deps),
       deps,
+      upstreamDeps: upstreamSourceDeps(deps),
     }
   }, [selectedColumn, columnLineageData])
 
@@ -1236,11 +1238,11 @@ function LineageFlowInner({
               }
             />
 
-            {selectedColumnDetail.deps.length > 0 && (
+            {selectedColumnDetail.upstreamDeps.length > 0 && (
               <div>
                 <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6 }}>From</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {selectedColumnDetail.deps.map((dep) => (
+                  {selectedColumnDetail.upstreamDeps.map((dep) => (
                     <div
                       key={`${dep.source_model}:${dep.source_column}`}
                       style={{
@@ -1252,10 +1254,25 @@ function LineageFlowInner({
                         wordBreak: 'break-word',
                       }}
                     >
-                      {nameOf(dep.source_model)}.{dep.source_column}
+                      {nameOf(dep.source_model!)}.{dep.source_column}
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {selectedColumnDetail.kind === 'constant' && selectedColumnDetail.upstreamDeps.length === 0 && (
+              <div style={{ color: 'var(--text-muted, #64748b)', lineHeight: 1.45 }}>
+                No upstream — constant expression
+                {selectedColumnDetail.expression?.toUpperCase() === 'NULL'
+                  ? ' (compiled macro may not have expanded).'
+                  : '.'}
+              </div>
+            )}
+
+            {selectedColumnDetail.kind === 'untraced' && (
+              <div style={{ color: 'var(--text-muted, #64748b)', lineHeight: 1.45 }}>
+                Could not resolve upstream lineage for this column.
               </div>
             )}
 

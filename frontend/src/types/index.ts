@@ -83,10 +83,10 @@ export type TransformationType =
   | 'unknown';
 
 export interface ColumnLineageDependency {
-  readonly source_model: string;
-  readonly source_column: string;
+  readonly source_model?: string;
+  readonly source_column?: string;
   readonly transformation: TransformationType;
-  /** Defining SQL for derived/aggregated columns (alias stripped). */
+  /** Defining SQL for derived/aggregated/constant columns (alias stripped). */
   readonly expression?: string;
 }
 
