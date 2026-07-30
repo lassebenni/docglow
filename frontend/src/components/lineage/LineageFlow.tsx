@@ -26,20 +26,14 @@ import {
   columnKindMapForModel,
   strongestTransformation,
   transformationGlyph,
-  transformationLabel,
   upstreamSourceDeps,
 } from '../../utils/columnTransforms'
-import {
-  connectedEndpointJoinKeyHighlights,
-  formatJoinPredicate,
-  getJoinKeysForEdge,
-  indirectParentBadgesForFocus,
-  joinKeyHighlightSets,
-  joinedParentBadgesForFocus,
-  type EdgeJoinKey,
-} from '../../utils/joinKeys'
+import { getJoinKeysForEdge } from '../../utils/joinKeys'
+import { ColumnDetailPanel } from './ColumnDetailPanel'
 import { DagNode } from './DagNode'
 import { FolderNode } from './FolderNode'
+import { JoinKeysPanel, PanelRow } from './LineagePanels'
+import { useJoinHighlights } from './useJoinHighlights'
 
 const NODE_WIDTH = 180
 const NODE_HEIGHT = 44
@@ -454,59 +448,21 @@ function LineageFlowInner({
     if (selectedColumn) setSelectedEdgeId(null)
   }, [selectedColumn])
 
-  // Selected table edge → join-key predicates + column highlights
-  const selectedEdgeJoin = useMemo(() => {
-    if (!selectedEdgeId || selectedEdgeId.startsWith('col__')) return null
-    const sep = selectedEdgeId.indexOf('__')
-    if (sep < 0) return null
-    const sourceId = selectedEdgeId.slice(0, sep)
-    const targetId = selectedEdgeId.slice(sep + 2)
-    const edge = edges.find(e => e.source === sourceId && e.target === targetId)
-    const pairs = getJoinKeysForEdge(sourceId, targetId, edge, joinKeysData)
-    if (pairs.length === 0) return null
-    return {
-      sourceId,
-      targetId,
-      pairs,
-      highlights: joinKeyHighlightSets(pairs, sourceId, targetId),
-    }
-  }, [selectedEdgeId, edges, joinKeysData])
-
-  // Columns mode: highlight join-key columns on connected endpoints in the
-  // current subgraph (both sides of each pair must be visible).
-  const connectedJoinHighlights = useMemo(() => {
-    if (selectedEdgeJoin) return null
-    if (effectiveExpandedIds.size === 0) return null
-    const visible = new Set(nodes.map(n => n.id))
-    const map = connectedEndpointJoinKeyHighlights(joinKeysData, visible)
-    return map.size > 0 ? map : null
-  }, [selectedEdgeJoin, nodes, effectiveExpandedIds, joinKeysData])
-
-  // Base (FROM) parents for currently focused/pinned models that have JOINs.
-  const joinBaseNodeIds = useMemo(() => {
-    const ids = new Set<string>()
-    if (!joinBasesData || !pinnedIds || pinnedIds.size === 0) return ids
-    for (const focusId of pinnedIds) {
-      const base = joinBasesData[focusId]
-      if (base) ids.add(base)
-    }
-    return ids
-  }, [joinBasesData, pinnedIds])
-
-  // LEFT / INNER / … badges on non-base parents joined into the focused model(s).
-  const joinTypeBadges = useMemo(() => {
-    if (!pinnedIds || pinnedIds.size === 0) return new Map<string, string>()
-    const direct = joinedParentBadgesForFocus(joinKeysData, joinBasesData, pinnedIds)
-    const indirect = indirectParentBadgesForFocus(
-      joinIndirectData,
-      joinBasesData,
-      direct,
-      pinnedIds,
-    )
-    const merged = new Map(direct)
-    for (const [id, badge] of indirect) merged.set(id, badge)
-    return merged
-  }, [joinKeysData, joinBasesData, joinIndirectData, pinnedIds])
+  const {
+    selectedEdgeJoin,
+    connectedJoinHighlights,
+    joinBaseNodeIds,
+    joinTypeBadges,
+  } = useJoinHighlights({
+    selectedEdgeId,
+    edges,
+    nodes,
+    joinKeysData,
+    joinBasesData,
+    joinIndirectData,
+    pinnedIds,
+    effectiveExpandedIds,
+  })
 
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const isDraggingRef = useRef(false)
@@ -1045,7 +1001,7 @@ function LineageFlowInner({
     return nodes.find(n => n.id === selectedNodeId) ?? null
   }, [selectedNodeId, nodes])
 
-  const selectedEdgePairs: EdgeJoinKey[] = selectedEdgeJoin?.pairs ?? []
+  const selectedEdgePairs = selectedEdgeJoin?.pairs ?? []
   const nameOf = useCallback(
     (modelId: string) => nodes.find(n => n.id === modelId)?.name ?? modelId.split('.').pop() ?? modelId,
     [nodes],
@@ -1188,190 +1144,26 @@ function LineageFlowInner({
           </button>
         </div>
       )}
-      {/* Column transform detail side panel */}
       {!selectedNodeData && !selectedEdgeJoin && selectedColumnDetail && (
-        <div
-          className="react-flow__panel"
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: 300,
-            height: '100%',
-            background: 'var(--bg, #fff)',
-            borderLeft: '1px solid var(--border, #e2e8f0)',
-            zIndex: 10,
-            overflow: 'auto',
-            padding: 16,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
-              Column
-            </div>
-            <button
-              onClick={() => clearColumnSelection()}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', padding: 2,
-                color: 'var(--text-muted, #64748b)', flexShrink: 0, marginLeft: 8,
-              }}
-            >
-              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--text, #0f172a)', marginBottom: 4 }}>
-            {selectedColumnDetail.columnName}
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginBottom: 16 }}>
-            {nameOf(selectedColumnDetail.modelId)}
-          </div>
-
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
-            <PanelRow
-              label="Kind"
-              value={
-                selectedColumnDetail.kind
-                  ? `${transformationGlyph(selectedColumnDetail.kind) ?? ''} ${transformationLabel(selectedColumnDetail.kind)}`.trim()
-                  : '—'
-              }
-            />
-
-            {selectedColumnDetail.upstreamDeps.length > 0 && (
-              <div>
-                <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6 }}>From</div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {selectedColumnDetail.upstreamDeps.map((dep) => (
-                    <div
-                      key={`${dep.source_model}:${dep.source_column}`}
-                      style={{
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        color: 'var(--text, #0f172a)',
-                        background: 'var(--bg-surface, #f1f5f9)',
-                        borderRadius: 6,
-                        padding: '6px 8px',
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {nameOf(dep.source_model!)}.{dep.source_column}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {selectedColumnDetail.kind === 'constant' && selectedColumnDetail.upstreamDeps.length === 0 && (
-              <div style={{ color: 'var(--text-muted, #64748b)', lineHeight: 1.45 }}>
-                No upstream — constant expression
-                {selectedColumnDetail.expression?.toUpperCase() === 'NULL'
-                  ? ' (compiled macro may not have expanded).'
-                  : '.'}
-              </div>
-            )}
-
-            {selectedColumnDetail.kind === 'untraced' && (
-              <div style={{ color: 'var(--text-muted, #64748b)', lineHeight: 1.45 }}>
-                Could not resolve upstream lineage for this column.
-              </div>
-            )}
-
-            {selectedColumnDetail.expression && (
-              <div>
-                <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6 }}>Formula</div>
-                <pre
-                  style={{
-                    margin: 0,
-                    fontSize: 11,
-                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                    color: 'var(--text, #0f172a)',
-                    background: 'var(--bg-surface, #f1f5f9)',
-                    borderRadius: 6,
-                    padding: '8px 10px',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {selectedColumnDetail.expression}
-                </pre>
-              </div>
-            )}
-          </div>
-        </div>
+        <ColumnDetailPanel
+          detail={selectedColumnDetail}
+          nameOf={nameOf}
+          onClose={() => clearColumnSelection()}
+        />
       )}
-      {/* Join-key edge detail side panel */}
       {!selectedNodeData && selectedEdgeJoin && selectedEdgePairs.length > 0 && (
-        <div
-          className="react-flow__panel"
-          style={{
-            position: 'absolute',
-            top: 0,
-            right: 0,
-            width: 300,
-            height: '100%',
-            background: 'var(--bg, #fff)',
-            borderLeft: '1px solid var(--border, #e2e8f0)',
-            zIndex: 10,
-            overflow: 'auto',
-            padding: 16,
-          }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
-              Join keys
-            </div>
-            <button
-              onClick={() => setSelectedEdgeId(null)}
-              style={{
-                background: 'none', border: 'none', cursor: 'pointer', padding: 2,
-                color: 'var(--text-muted, #64748b)', flexShrink: 0, marginLeft: 8,
-              }}
-            >
-              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                <path d="M18 6 6 18M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginBottom: 12 }}>
-            {nameOf(selectedEdgeJoin.sourceId)} → {nameOf(selectedEdgeJoin.targetId)}
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {selectedEdgePairs.map((pair, i) => (
-              <div
-                key={`${pair.source_column}-${pair.target_column}-${i}`}
-                style={{
-                  fontSize: 12,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  color: 'var(--text, #0f172a)',
-                  background: 'var(--bg-surface, #f1f5f9)',
-                  borderRadius: 6,
-                  padding: '8px 10px',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {formatJoinPredicate(pair, nameOf)}
-                {pair.join_type && (
-                  <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-muted, #64748b)', fontFamily: 'inherit' }}>
-                    {pair.join_type} join
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        <JoinKeysPanel
+          sourceId={selectedEdgeJoin.sourceId}
+          targetId={selectedEdgeJoin.targetId}
+          pairs={selectedEdgePairs}
+          nameOf={nameOf}
+          onClose={() => setSelectedEdgeId(null)}
+        />
       )}
     </ReactFlow>
   )
 }
 
-function PanelRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <span style={{ color: 'var(--text-muted, #64748b)' }}>{label}</span>
-      <span style={{ color: 'var(--text, #0f172a)', fontWeight: 500, textAlign: 'right', wordBreak: 'break-word' }}>{value}</span>
-    </div>
-  )
-}
 
 export function LineageFlow(props: LineageFlowProps) {
   return (

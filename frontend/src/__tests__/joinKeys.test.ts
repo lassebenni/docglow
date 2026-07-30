@@ -11,17 +11,6 @@ import {
 } from '../utils/joinKeys'
 
 describe('getJoinKeysForEdge', () => {
-  it('returns edge-embedded join keys oriented source → target', () => {
-    const edge: LineageEdge = {
-      source: 'model.a',
-      target: 'model.b',
-      join_keys: [{ source_column: 'id', target_column: 'a_id' }],
-    }
-    expect(getJoinKeysForEdge('model.a', 'model.b', edge, null)).toEqual([
-      { source_column: 'id', target_column: 'a_id' },
-    ])
-  })
-
   it('orients pairs from join_keys map to match edge direction', () => {
     const joinKeys: JoinKeysData = {
       'model.b': [
@@ -39,6 +28,15 @@ describe('getJoinKeysForEdge', () => {
     expect(pairs[0].source_column).toBe('id')
     expect(pairs[0].target_column).toBe('user_id')
     expect(pairs[0].join_type).toBe('left')
+  })
+
+  it('ignores edge-embedded keys — map is canonical', () => {
+    const edge: LineageEdge = {
+      source: 'model.a',
+      target: 'model.b',
+      join_keys: [{ source_column: 'id', target_column: 'a_id' }],
+    }
+    expect(getJoinKeysForEdge('model.a', 'model.b', edge, null)).toEqual([])
   })
 
   it('returns empty when no matching pairs', () => {

@@ -283,7 +283,18 @@ def stage_compute_health(ctx: PipelineContext) -> None:
     """Compute project health scores."""
     from docglow.analyzer.health import compute_health, health_to_dict
 
-    report = compute_health(ctx.models, ctx.sources, ctx.seeds, ctx.snapshots)
+    if ctx.exclude_packages:
+        models = {uid: m for uid, m in ctx.models.items() if not m.get("is_package")}
+        seeds = {uid: s for uid, s in ctx.seeds.items() if not s.get("is_package")}
+        snapshots = {uid: s for uid, s in ctx.snapshots.items() if not s.get("is_package")}
+    else:
+        models = ctx.models
+        seeds = ctx.seeds
+        snapshots = ctx.snapshots
+
+    models = {uid: m for uid, m in models.items() if m.get("materialization") != "ephemeral"}
+
+    report = compute_health(models, ctx.sources, seeds, snapshots)
     ctx.health = health_to_dict(report)
 
 
@@ -332,10 +343,7 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     if not ctx.column_lineage_enabled:
         return
 
-    from docglow.generator.data import (
-        _build_column_lineage,
-        enrich_lineage_edges_with_join_keys,
-    )
+    from docglow.generator.data import _build_column_lineage
 
     column_lineage, join_keys, join_bases, join_indirect, sql_graphs = _build_column_lineage(
         ctx.column_lineage_enabled,
@@ -354,7 +362,8 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     ctx.join_bases = join_bases
     ctx.join_indirect = join_indirect
     ctx.sql_graphs = sql_graphs
-    enrich_lineage_edges_with_join_keys(ctx.lineage, join_keys)
+    # Join keys live only on the top-level join_keys map (canonical). Edge
+    # embedding was removed to avoid dual half-shaped payloads.
 
 
 def stage_strip_sql(ctx: PipelineContext) -> None:
@@ -482,12 +491,21 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
     key in the chat panel UI, which stores it in localStorage. This
     prevents accidental key exposure in deployed static sites.
     """
+    if ctx.exclude_packages:
+        models = {uid: m for uid, m in ctx.models.items() if not m.get("is_package")}
+        seeds = {uid: s for uid, s in ctx.seeds.items() if not s.get("is_package")}
+        snapshots = {uid: s for uid, s in ctx.snapshots.items() if not s.get("is_package")}
+    else:
+        models = ctx.models
+        seeds = ctx.seeds
+        snapshots = ctx.snapshots
+
     result: dict[str, Any] = {
         "metadata": ctx.metadata,
-        "models": ctx.models,
+        "models": models,
         "sources": ctx.sources,
-        "seeds": ctx.seeds,
-        "snapshots": ctx.snapshots,
+        "seeds": seeds,
+        "snapshots": snapshots,
         "exposures": ctx.exposures,
         "metrics": ctx.metrics,
         "manifest_child_map": {

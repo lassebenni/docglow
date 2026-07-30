@@ -13,46 +13,36 @@ export interface EdgeJoinKey {
 
 /**
  * Collect join-key pairs that apply to a table edge between sourceId → targetId.
- * Unions edge-embedded keys with pairs from join_keys maps whose endpoints match.
+ *
+ * Canonical source: top-level ``join_keys`` map only (no edge-embedded half-shape).
  */
 export function getJoinKeysForEdge(
   sourceId: string,
   targetId: string,
-  edge: LineageEdge | undefined,
+  _edge: LineageEdge | undefined,
   joinKeysByModel: JoinKeysData | null | undefined,
 ): EdgeJoinKey[] {
   const seen = new Set<string>()
   const out: EdgeJoinKey[] = []
 
-  const push = (key: EdgeJoinKey) => {
-    const marker = `${key.source_column}\0${key.target_column}`
-    if (seen.has(marker)) return
-    seen.add(marker)
-    out.push(key)
-  }
+  if (!joinKeysByModel) return out
 
-  if (edge?.join_keys) {
-    for (const jk of edge.join_keys) {
-      push({
-        source_column: jk.source_column,
-        target_column: jk.target_column,
-      })
-    }
-  }
-
-  if (joinKeysByModel) {
-    for (const pairs of Object.values(joinKeysByModel)) {
-      for (const pair of pairs) {
-        const oriented = orientPair(pair, sourceId, targetId)
-        if (oriented) push(oriented)
-      }
+  for (const pairs of Object.values(joinKeysByModel)) {
+    for (const pair of pairs) {
+      const oriented = orientPair(pair, sourceId, targetId)
+      if (!oriented) continue
+      const marker = `${oriented.source_column}\0${oriented.target_column}`
+      if (seen.has(marker)) continue
+      seen.add(marker)
+      out.push(oriented)
     }
   }
 
   return out
 }
 
-function orientPair(
+/** Orient a JoinKeyPair onto an edge direction (source → target). */
+export function orientPair(
   pair: JoinKeyPair,
   sourceId: string,
   targetId: string,

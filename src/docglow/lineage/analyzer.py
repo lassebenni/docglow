@@ -22,11 +22,8 @@ from docglow.lineage.column_parser import (
     parse_column_lineage,
 )
 from docglow.lineage.join_keys import (
-    UnresolvedIndirectJoinParent,
-    UnresolvedJoinKeyPair,
-    extract_indirect_join_parents,
-    extract_join_base_table,
-    extract_join_pairs,
+    analyze_joins,
+    resolve_join_analysis,
 )
 from docglow.lineage.macro_expander import expand_macros
 from docglow.lineage.sql_graph import build_sql_graph
@@ -241,9 +238,10 @@ def _analyze_single_model(
             },
         )
 
-    resolved_joins = _resolve_join_keys(sql, dialect, resolver)
-    join_base = _resolve_join_base(sql, dialect, resolver)
-    join_indirect = _resolve_indirect_join_parents(sql, dialect, resolver)
+    join_analysis = resolve_join_analysis(analyze_joins(sql, dialect=dialect), resolver)
+    resolved_joins = [p.to_dict() for p in join_analysis.pairs]
+    join_base = join_analysis.base_model
+    join_indirect = [p.to_dict() for p in join_analysis.indirect]
     sql_graph = build_sql_graph(
         sql,
         model_uid=uid,
@@ -325,77 +323,6 @@ def _analyze_single_model(
         cache_entry=cache_entry_out,
         failure=failure,
     )
-
-
-def _resolve_join_keys(
-    sql: str,
-    dialect: str | None,
-    resolver: TableResolver,
-) -> list[dict[str, str]]:
-    """Extract and resolve join-key pairs for a single model's SQL."""
-    unresolved = extract_join_pairs(sql, dialect=dialect)
-    return resolve_join_key_pairs(unresolved, resolver)
-
-
-def _resolve_join_base(
-    sql: str,
-    dialect: str | None,
-    resolver: TableResolver,
-) -> str | None:
-    """Extract and resolve the FROM (foundation) parent of the primary JOIN."""
-    base_ref = extract_join_base_table(sql, dialect=dialect)
-    if not base_ref:
-        return None
-    return resolver.resolve(base_ref)
-
-
-def _resolve_indirect_join_parents(
-    sql: str,
-    dialect: str | None,
-    resolver: TableResolver,
-) -> list[dict[str, str]]:
-    """Extract and resolve parents reached only via joined aggregate/CTE blocks."""
-    unresolved = extract_indirect_join_parents(sql, dialect=dialect)
-    return resolve_indirect_join_parents(unresolved, resolver)
-
-
-def resolve_join_key_pairs(
-    pairs: list[UnresolvedJoinKeyPair],
-    resolver: TableResolver,
-) -> list[dict[str, str]]:
-    """Resolve unresolved join pairs to dbt unique_ids; drop unresolved sides."""
-    resolved: list[dict[str, str]] = []
-    for pair in pairs:
-        left_uid = resolver.resolve(pair.left_table)
-        right_uid = resolver.resolve(pair.right_table)
-        if not left_uid or not right_uid:
-            continue
-        entry: dict[str, str] = {
-            "left_model": left_uid,
-            "left_column": pair.left_column,
-            "right_model": right_uid,
-            "right_column": pair.right_column,
-        }
-        if pair.join_type:
-            entry["join_type"] = pair.join_type
-        resolved.append(entry)
-    return resolved
-
-
-def resolve_indirect_join_parents(
-    parents: list[UnresolvedIndirectJoinParent],
-    resolver: TableResolver,
-) -> list[dict[str, str]]:
-    """Resolve indirect join parents to dbt unique_ids."""
-    resolved: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for parent in parents:
-        uid = resolver.resolve(parent.table)
-        if not uid or uid in seen:
-            continue
-        seen.add(uid)
-        resolved.append({"model": uid, "kind": parent.kind})
-    return resolved
 
 
 def serialize_shared_state(

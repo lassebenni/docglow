@@ -5,10 +5,36 @@
 
 // -- Column lineage ----------------------------------------------------------
 
+/** Column transformation vocabulary (analysis + display). */
+export type TransformationType =
+  | "passthrough"
+  | "rename"
+  | "aggregated"
+  | "derived"
+  | "constant"
+  | "untraced"
+  | "unknown"
+  | "direct";
+
+/**
+ * Strongest-kind order for display / merge (low → high).
+ * Keep in sync with ``_PRIORITY`` in ``docglow.lineage.column_parser``.
+ */
+export const TRANSFORMATION_STRENGTH: readonly TransformationType[] = [
+  "unknown",
+  "untraced",
+  "direct",
+  "passthrough",
+  "rename",
+  "constant",
+  "derived",
+  "aggregated",
+] as const;
+
 export interface ColumnLineageDependency {
   readonly source_model?: string;
   readonly source_column?: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
+  readonly transformation: TransformationType;
   /** Defining SQL for derived/aggregated/constant columns (alias stripped). */
   readonly expression?: string;
 }
@@ -16,7 +42,7 @@ export interface ColumnLineageDependency {
 export interface ColumnDownstreamDependency {
   readonly target_model: string;
   readonly target_column: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
+  readonly transformation: TransformationType;
 }
 
 export type ColumnLineageData = Record<
@@ -137,7 +163,10 @@ export interface SqlGraph {
 /** Intra-model SQL/CTE graphs keyed by the model unique_id. */
 export type SqlGraphsData = Record<string, SqlGraph>;
 
-/** Join keys attached to a table-level lineage edge (source → target). */
+/**
+ * @deprecated Join keys are canonical on DocglowData.join_keys only.
+ * Kept optional on edges for older generated sites.
+ */
 export interface LineageEdgeJoinKey {
   readonly source_column: string;
   readonly target_column: string;
@@ -148,7 +177,7 @@ export interface ColumnEdge {
   readonly sourceColumn: string;
   readonly targetModel: string;
   readonly targetColumn: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
+  readonly transformation: TransformationType;
   readonly expression?: string;
 }
 

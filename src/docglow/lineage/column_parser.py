@@ -508,6 +508,7 @@ def _extract_column_from_node_name(name: str) -> str:
     return name
 
 
+# Keep ordered in sync with TRANSFORMATION_STRENGTH in @docglow/shared-types.
 _PRIORITY = {
     "unknown": 0,
     "untraced": 0,

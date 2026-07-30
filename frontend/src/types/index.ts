@@ -70,17 +70,8 @@ export type {
 } from "@docglow/shared-types";
 
 export { gradeFromScore, HEALTH_GRADE_THRESHOLDS, PLAN_LIMITS } from "@docglow/shared-types";
-
-// Types extended with new transformation types (pending @docglow/shared-types v0.2.0)
-export type TransformationType =
-  | 'direct'
-  | 'derived'
-  | 'aggregated'
-  | 'passthrough'
-  | 'rename'
-  | 'constant'
-  | 'untraced'
-  | 'unknown';
+import type { TransformationType } from "@docglow/shared-types";
+export type { TransformationType };
 
 export interface ColumnLineageDependency {
   readonly source_model?: string;
