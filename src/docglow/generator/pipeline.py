@@ -65,6 +65,7 @@ class PipelineContext:
     join_keys: dict[str, list[dict[str, str]]] | None = None
     join_bases: dict[str, str] | None = None
     join_indirect: dict[str, list[dict[str, str]]] | None = None
+    sql_graphs: dict[str, dict[str, Any]] | None = None
     ai_context: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
     # DOC-214: Each entry conforms to docglow.generator.data.ErdRelationship.
@@ -344,7 +345,7 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
 
     from docglow.generator.data import _build_column_lineage
 
-    column_lineage, join_keys, join_bases, join_indirect = _build_column_lineage(
+    column_lineage, join_keys, join_bases, join_indirect, sql_graphs = _build_column_lineage(
         ctx.column_lineage_enabled,
         ctx.column_lineage_select,
         ctx.column_lineage_depth,
@@ -360,6 +361,7 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     ctx.join_keys = join_keys
     ctx.join_bases = join_bases
     ctx.join_indirect = join_indirect
+    ctx.sql_graphs = sql_graphs
     # Join keys live only on the top-level join_keys map (canonical). Edge
     # embedding was removed to avoid dual half-shaped payloads.
 
@@ -519,6 +521,7 @@ def context_to_dict(ctx: PipelineContext) -> dict[str, Any]:
         "join_keys": ctx.join_keys,
         "join_bases": ctx.join_bases,
         "join_indirect": ctx.join_indirect,
+        "sql_graphs": ctx.sql_graphs,
         "ui": {
             "lineage_badge": {
                 "abbreviation": ctx.ui_config.lineage_badge.abbreviation,

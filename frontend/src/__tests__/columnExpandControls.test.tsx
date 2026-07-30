@@ -3,8 +3,10 @@ import {
   DEFAULT_EXPAND_ALL_CAP,
   OVER_CAP_DETAIL_TEXT,
   columnsModeTooltip,
+  ctesModeTooltip,
   formatOverCapHeadline,
   shouldDisableColumnMode,
+  shouldDisableCtesMode,
   tableModeTooltip,
 } from '../components/lineage/ColumnExpandControls'
 
@@ -37,6 +39,23 @@ describe('columnsModeTooltip', () => {
 describe('tableModeTooltip', () => {
   it('explains table-level collapse', () => {
     expect(tableModeTooltip()).toBe('Collapse to table-level lineage')
+  })
+})
+
+describe('ctesModeTooltip', () => {
+  it('explains CTE mode when a graph exists', () => {
+    expect(ctesModeTooltip(true)).toBe('Show CTE / SQL graph for this model')
+  })
+
+  it('explains missing graph', () => {
+    expect(ctesModeTooltip(false)).toBe('No CTE / SQL graph for this model')
+  })
+})
+
+describe('shouldDisableCtesMode', () => {
+  it('disables when no sql graph', () => {
+    expect(shouldDisableCtesMode(false)).toBe(true)
+    expect(shouldDisableCtesMode(true)).toBe(false)
   })
 })
 

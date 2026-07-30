@@ -280,15 +280,16 @@ def _build_column_lineage(
     dict[str, list[dict[str, str]]] | None,
     dict[str, str] | None,
     dict[str, list[dict[str, str]]] | None,
+    dict[str, dict[str, Any]] | None,
 ]:
-    """Build column-level lineage, join keys, bases, and indirect parents.
+    """Build column-level lineage, join keys, bases, indirect parents, sql graphs.
 
     Returns:
-        ``(column_lineage, join_keys, join_bases, join_indirect)`` — all
-        ``None`` when disabled.
+        ``(column_lineage, join_keys, join_bases, join_indirect, sql_graphs)`` —
+        all ``None`` when disabled.
     """
     if not enabled:
-        return None, None, None, None
+        return None, None, None, None, None
 
     from pathlib import Path as _Path
 
@@ -331,6 +332,7 @@ def _build_column_lineage(
     join_keys = result.join_keys
     join_bases = result.join_bases
     join_indirect = result.join_indirect
+    sql_graphs = result.sql_graphs
 
     # Backfill columns for models that have lineage but no catalog/manifest columns.
     if column_lineage:
@@ -341,6 +343,7 @@ def _build_column_lineage(
         join_keys or None,
         join_bases or None,
         join_indirect or None,
+        sql_graphs or None,
     )
 
 
@@ -353,6 +356,7 @@ def enrich_lineage_edges_with_join_keys(
     Kept for call-site compatibility during the transition; does not mutate edges.
     """
     return
+
 
 def _backfill_columns_from_lineage(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],

@@ -81,6 +81,81 @@ export interface JoinIndirectParent {
  */
 export type JoinIndirectData = Record<string, JoinIndirectParent[]>;
 
+export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output" | "op";
+
+export type SqlGraphOpKind = "filter";
+
+/** Per-column aggregation tag on aggregate CTE nodes (v4+). */
+export type SqlGraphAggFn = "sum" | "count" | "avg" | "min" | "max" | "group" | "none";
+
+export interface SqlGraphJoinKey {
+  readonly left_column: string;
+  readonly right_column: string;
+}
+
+/** Internal CTE operation for on-demand expand (v3+). */
+export interface SqlGraphOp {
+  readonly id: string;
+  readonly kind: SqlGraphOpKind;
+  readonly label: string;
+  readonly expression?: string;
+  readonly columns?: ReadonlyArray<string>;
+}
+
+export interface SqlGraphNode {
+  readonly id: string;
+  readonly kind: SqlGraphNodeKind;
+  readonly label: string;
+  readonly model_id?: string;
+  readonly cte_name?: string;
+  readonly join_type?: string;
+  readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>;
+  readonly transforms?: ReadonlyArray<"aggregate" | "filter" | "window" | "other">;
+  readonly columns?: ReadonlyArray<string>;
+  /** v3+: WHERE / HAVING filter ops collapsed until CTE is expanded */
+  readonly ops?: ReadonlyArray<SqlGraphOp>;
+  /** Pure ``SELECT * FROM x`` CTE — collapsible in the UI */
+  readonly passthrough?: boolean;
+  /** v4+: per-column SUM/CNT/GRP tags on aggregate CTEs */
+  readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>;
+  /** v4+: full SELECT text for aggregate CTE side panel */
+  readonly select_sql?: string;
+  /** When kind=op, optional defining SQL (mirrored from SqlGraphOp) */
+  readonly expression?: string;
+  readonly op_kind?: SqlGraphOpKind;
+}
+
+export interface SqlGraphEdge {
+  readonly source: string;
+  readonly target: string;
+  readonly columns?: ReadonlyArray<string>;
+  readonly label?: string;
+}
+
+/** Per-column dependency inside an intra-model SQL graph (CTEs mode v2). */
+export interface SqlGraphColumnDep {
+  readonly source_node: string;
+  readonly source_column: string;
+  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant";
+  /** Defining SQL for derived/aggregated/constant columns. */
+  readonly expression?: string;
+}
+
+/** node_id → column → upstream deps within the same SqlGraph. */
+export type SqlGraphColumnLineage = Record<
+  string,
+  Record<string, ReadonlyArray<SqlGraphColumnDep>>
+>;
+
+export interface SqlGraph {
+  readonly nodes: ReadonlyArray<SqlGraphNode>;
+  readonly edges: ReadonlyArray<SqlGraphEdge>;
+  readonly column_lineage?: SqlGraphColumnLineage;
+}
+
+/** Intra-model SQL/CTE graphs keyed by the model unique_id. */
+export type SqlGraphsData = Record<string, SqlGraph>;
+
 /**
  * @deprecated Join keys are canonical on DocglowData.join_keys only.
  * Kept optional on edges for older generated sites.

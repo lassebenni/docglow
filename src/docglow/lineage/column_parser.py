@@ -6,6 +6,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from docglow.lineage.sql_ast import expression_sql as _expression_sql
+
 logger = logging.getLogger(__name__)
 
 # Adapter type -> SQLGlot dialect mapping
@@ -562,22 +564,6 @@ def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
 
     walk(root_node)
     return best_kind, best_expression
-
-
-def _expression_sql(expression: Any) -> str | None:
-    """Return a compact SQL string for a defining expression (alias stripped)."""
-    if expression is None:
-        return None
-    try:
-        from sqlglot import exp
-    except ImportError:
-        return None
-
-    inner = expression.this if isinstance(expression, exp.Alias) else expression
-    try:
-        return inner.sql()
-    except Exception:  # noqa: BLE001
-        return str(inner) if inner is not None else None
 
 
 def _classify_transformation(expression: Any) -> str:

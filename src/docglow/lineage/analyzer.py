@@ -26,12 +26,13 @@ from docglow.lineage.join_keys import (
     resolve_join_analysis,
 )
 from docglow.lineage.macro_expander import expand_macros
+from docglow.lineage.sql_graph import build_sql_graph
 from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
 
-# Bumped when cached lineage semantics change (join analysis / transform kinds).
-_CACHE_FORMAT_VERSION = 8
+# Bumped when cached lineage semantics change (e.g. sql_graph richer ops + passthrough).
+_CACHE_FORMAT_VERSION = 13
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -56,6 +57,7 @@ class ColumnLineageResult(Mapping[str, dict[str, list[dict[str, str]]]]):
     join_keys: dict[str, list[dict[str, str]]] = field(default_factory=dict)
     join_bases: dict[str, str] = field(default_factory=dict)
     join_indirect: dict[str, list[dict[str, str]]] = field(default_factory=dict)
+    sql_graphs: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def __getitem__(self, key: str) -> dict[str, list[dict[str, str]]]:
         return self.lineage[key]
@@ -76,6 +78,7 @@ class _ModelLineageResult:
     join_keys: list[dict[str, str]] = field(default_factory=list)
     join_base: str | None = None
     join_indirect: list[dict[str, str]] = field(default_factory=list)
+    sql_graph: dict[str, Any] | None = None
     cache_entry: dict[str, Any] = field(default_factory=dict)
     failure: dict[str, str] | None = None
     cached: bool = False
@@ -196,12 +199,14 @@ def _analyze_single_model(
         cached_joins = cached_entry.get("join_keys") or []
         cached_base = cached_entry.get("join_base")
         cached_indirect = cached_entry.get("join_indirect") or []
+        cached_graph = cached_entry.get("sql_graph")
         return _ModelLineageResult(
             uid=uid,
             lineage=cached_lineage or {},
             join_keys=list(cached_joins) if isinstance(cached_joins, list) else [],
             join_base=cached_base if isinstance(cached_base, str) else None,
             join_indirect=(list(cached_indirect) if isinstance(cached_indirect, list) else []),
+            sql_graph=cached_graph if isinstance(cached_graph, dict) else None,
             cached=True,
         )
 
@@ -224,6 +229,7 @@ def _analyze_single_model(
                 "join_keys": [],
                 "join_base": None,
                 "join_indirect": [],
+                "sql_graph": None,
             },
             failure={
                 "model": uid,
@@ -236,6 +242,15 @@ def _analyze_single_model(
     resolved_joins = [p.to_dict() for p in join_analysis.pairs]
     join_base = join_analysis.base_model
     join_indirect = [p.to_dict() for p in join_analysis.indirect]
+    sql_graph = build_sql_graph(
+        sql,
+        model_uid=uid,
+        model_name=data.get("name", uid.rsplit(".", 1)[-1]),
+        resolver=resolver,
+        dialect=dialect,
+        schema=schema,
+        output_columns=known_columns or None,
+    )
 
     if not raw_lineage:
         failure = None
@@ -253,12 +268,14 @@ def _analyze_single_model(
             join_keys=resolved_joins,
             join_base=join_base,
             join_indirect=join_indirect,
+            sql_graph=sql_graph,
             cache_entry={
                 "sql_hash": sql_hash,
                 "lineage": model_lineage,
                 "join_keys": resolved_joins,
                 "join_base": join_base,
                 "join_indirect": join_indirect,
+                "sql_graph": sql_graph,
             },
             failure=failure,
         )
@@ -277,6 +294,7 @@ def _analyze_single_model(
         "join_keys": resolved_joins,
         "join_base": join_base,
         "join_indirect": join_indirect,
+        "sql_graph": sql_graph,
     }
 
     # Track partially traced models (untraced still counts as a soft failure for the log)
@@ -301,6 +319,7 @@ def _analyze_single_model(
         join_keys=resolved_joins,
         join_base=join_base,
         join_indirect=join_indirect,
+        sql_graph=sql_graph,
         cache_entry=cache_entry_out,
         failure=failure,
     )
@@ -496,6 +515,7 @@ def analyze_column_lineage(
     join_keys: dict[str, list[dict[str, str]]] = {}
     join_bases: dict[str, str] = {}
     join_indirect: dict[str, list[dict[str, str]]] = {}
+    sql_graphs: dict[str, dict[str, Any]] = {}
     parse_failures = 0
     total_models = 0
     failure_details: list[dict[str, str]] = []
@@ -524,6 +544,9 @@ def analyze_column_lineage(
                 cached_indirect = cached_entry.get("join_indirect") if cached_entry else None
                 if isinstance(cached_indirect, list) and cached_indirect:
                     join_indirect[uid] = list(cached_indirect)
+                cached_graph = cached_entry.get("sql_graph") if cached_entry else None
+                if isinstance(cached_graph, dict) and cached_graph:
+                    sql_graphs[uid] = cached_graph
 
     # Determine which models to analyze
     uids_to_analyze = (
@@ -577,6 +600,7 @@ def analyze_column_lineage(
                     join_keys,
                     join_bases,
                     join_indirect,
+                    sql_graphs,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -609,6 +633,7 @@ def analyze_column_lineage(
                     join_keys,
                     join_bases,
                     join_indirect,
+                    sql_graphs,
                     cache,
                     failure_details,
                     analyzed_count,
@@ -647,6 +672,7 @@ def analyze_column_lineage(
         join_keys=join_keys,
         join_bases=join_bases,
         join_indirect=join_indirect,
+        sql_graphs=sql_graphs,
     )
 
 
@@ -657,6 +683,7 @@ def _merge_result(
     join_keys: dict[str, list[dict[str, str]]],
     join_bases: dict[str, str],
     join_indirect: dict[str, list[dict[str, str]]],
+    sql_graphs: dict[str, dict[str, Any]],
     cache: dict[str, Any],
     failure_details: list[dict[str, str]],
     analyzed_count: int,
@@ -679,6 +706,8 @@ def _merge_result(
             join_bases[result.uid] = result.join_base
         if result.join_indirect:
             join_indirect[result.uid] = result.join_indirect
+        if result.sql_graph:
+            sql_graphs[result.uid] = result.sql_graph
         return
 
     model_name = all_models[result.uid].get("name", result.uid.split(".")[-1])
@@ -699,6 +728,8 @@ def _merge_result(
         join_bases[result.uid] = result.join_base
     if result.join_indirect:
         join_indirect[result.uid] = result.join_indirect
+    if result.sql_graph:
+        sql_graphs[result.uid] = result.sql_graph
     if result.failure:
         failure_details.append(result.failure)
 

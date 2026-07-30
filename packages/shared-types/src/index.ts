@@ -11,6 +11,17 @@ export type {
   JoinIndirectData,
   JoinIndirectParent,
   LineageEdgeJoinKey,
+  SqlGraph,
+  SqlGraphAggFn,
+  SqlGraphColumnDep,
+  SqlGraphColumnLineage,
+  SqlGraphEdge,
+  SqlGraphJoinKey,
+  SqlGraphNode,
+  SqlGraphNodeKind,
+  SqlGraphOp,
+  SqlGraphOpKind,
+  SqlGraphsData,
   TransformationType,
 } from "./artifacts.js";
 export { TRANSFORMATION_STRENGTH } from "./artifacts.js";

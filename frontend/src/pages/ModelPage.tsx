@@ -8,10 +8,14 @@ import { SampleDataTable } from '../components/models/SampleDataTable'
 import { SqlViewer } from '../components/models/SqlViewer'
 import { TestBadge } from '../components/tests/TestBadge'
 import { LineageFlow } from '../components/lineage/LineageFlow'
+import { CteFlow } from '../components/lineage/CteFlow'
 import { StatisticsTab } from '../components/models/StatisticsTab'
 import { QuestionsTab } from '../components/models/QuestionsTab'
 import { TestsTab } from '../components/tests/TestsTab'
-import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
+import {
+  ColumnExpandControls,
+  type LineageViewMode,
+} from '../components/lineage/ColumnExpandControls'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
 import type { FilterState } from '../components/ui/FilterDropdown'
@@ -230,6 +234,7 @@ export function ModelPage() {
   }, [layoutMode])
   const [showParentSiblings, setShowParentSiblings] = useState(false)
   const [lineageFullscreen, setLineageFullscreen] = useState(false)
+  const [lineageViewMode, setLineageViewMode] = useState<LineageViewMode>('table')
   const [typeFilter, toggleType, setTypeMode, clearTypes] = useFilterState()
   const { selected: globalTagSelected, mode: globalTagMode, toggle: toggleTag, setMode: setTagMode, clear: clearTags } = useTagFilterStore()
   const tagFilter: FilterState = useMemo(() => ({ mode: globalTagMode, selected: new Set(globalTagSelected) }), [globalTagSelected, globalTagMode])
@@ -609,7 +614,12 @@ export function ModelPage() {
             </div>
 
             <div className="h-4 w-px bg-[var(--border)]" />
-            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
+            <ColumnExpandControls
+              candidateIds={columnLineageCandidateIds}
+              hasSqlGraph={Boolean(decodedId && data?.sql_graphs?.[decodedId])}
+              mode={lineageViewMode}
+              onModeChange={setLineageViewMode}
+            />
 
             <div className="h-4 w-px bg-[var(--border)]" />
 
@@ -722,22 +732,30 @@ export function ModelPage() {
 
           {/* Graph area */}
           <div className={lineageFullscreen ? 'flex-1 relative min-h-0' : 'relative'} style={lineageFullscreen ? undefined : { height: 'calc(100vh - 380px)', minHeight: 400 }}>
-            <LineageFlow
-              nodes={
-                layoutMode === 'dag'
-                  ? filteredSubgraph.nodes.map(n => ({ ...n, layer: undefined }))
-                  : filteredSubgraph.nodes
-              }
-              edges={filteredSubgraph.edges}
-              pinnedIds={new Set([decodedId])}
-              layerConfig={layoutMode === 'dag' ? [] : data?.lineage.layer_config}
-              onNavigateAway={() => setLineageFullscreen(false)}
-              columnLineageData={data?.column_lineage}
-              joinKeysData={data?.join_keys}
-              joinBasesData={data?.join_bases}
-              joinIndirectData={data?.join_indirect}
-              modelColumns={modelColumnsMap}
-            />
+            {lineageViewMode === 'ctes' && decodedId && data?.sql_graphs?.[decodedId] ? (
+              <CteFlow graph={data.sql_graphs[decodedId]} />
+            ) : lineageViewMode === 'ctes' ? (
+              <div className="flex items-center justify-center h-full text-sm text-[var(--text-muted)]">
+                No CTE / SQL graph for this model.
+              </div>
+            ) : (
+              <LineageFlow
+                nodes={
+                  layoutMode === 'dag'
+                    ? filteredSubgraph.nodes.map(n => ({ ...n, layer: undefined }))
+                    : filteredSubgraph.nodes
+                }
+                edges={filteredSubgraph.edges}
+                pinnedIds={new Set([decodedId])}
+                layerConfig={layoutMode === 'dag' ? [] : data?.lineage.layer_config}
+                onNavigateAway={() => setLineageFullscreen(false)}
+                columnLineageData={data?.column_lineage}
+                joinKeysData={data?.join_keys}
+                joinBasesData={data?.join_bases}
+                joinIndirectData={data?.join_indirect}
+                modelColumns={modelColumnsMap}
+              />
+            )}
           </div>
         </div>
       )}
