@@ -277,6 +277,10 @@ class TestBuildSqlGraph:
 
         flagged = by_id["cte:flagged"]
         assert any(o["kind"] == "filter" for o in flagged.get("ops") or [])
+        where_op = next(o for o in flagged["ops"] if o["label"] == "where")
+        assert "status" in [c.lower() for c in (where_op.get("columns") or [])]
+        assert where_op.get("expression")
+        assert "status" in where_op["expression"].lower()
         assert not any(o["kind"] == "case" for o in flagged.get("ops") or [])
         assert "filter" in (flagged.get("transforms") or [])
         is_done = graph["column_lineage"]["cte:flagged"]["is_done"]

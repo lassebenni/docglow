@@ -155,7 +155,7 @@ def build_sql_graph(
         if _select_has_window(select, exp):
             transforms.append("window")
 
-        # Only WHERE/HAVING as expandable ops — column formulas live on the panel
+        # WHERE/HAVING → filter ops metadata (FILT badge / panel), not graph nodes
         ops = _extract_cte_ops(select, exp, cte_id=cte_id)
         for op in ops:
             if op["kind"] == "filter" and "filter" not in transforms:
@@ -416,11 +416,29 @@ def _select_has_window(select: Any, exp: Any) -> bool:
     return False
 
 
-def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
-    """Extract CTE-internal ops for on-demand expand.
+def _predicate_columns(predicate: Any, exp: Any) -> list[str]:
+    """Unique column names referenced in a WHERE/HAVING predicate (order preserved)."""
+    if predicate is None or not hasattr(predicate, "find_all"):
+        return []
+    seen: set[str] = set()
+    cols: list[str] = []
+    for col in predicate.find_all(exp.Column):
+        name = col.name
+        if not name or name == "*":
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cols.append(name)
+    return cols
 
-    Only WHERE / HAVING become graph op nodes. Window / CASE / derived / agg
-    formulas are shown on the column panel via ``expression`` + lineage deps.
+
+def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
+    """Extract WHERE / HAVING as filter metadata on the CTE (panel + FILT badge).
+
+    Not expanded as graph op nodes — same ambient pattern as window / aggregate.
+    ``columns`` lists predicate inputs for highlight + column-panel ``Filtered by``.
     """
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
@@ -446,12 +464,22 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
     where = select.args.get("where")
     if where is not None:
         where_expr = where.this if getattr(where, "this", None) is not None else where
-        add("filter", "where", expression_sql(where_expr))
+        add(
+            "filter",
+            "where",
+            expression_sql(where_expr),
+            _predicate_columns(where_expr, exp),
+        )
 
     having = select.args.get("having")
     if having is not None:
         having_expr = having.this if getattr(having, "this", None) is not None else having
-        add("filter", "having", expression_sql(having_expr))
+        add(
+            "filter",
+            "having",
+            expression_sql(having_expr),
+            _predicate_columns(having_expr, exp),
+        )
 
     return ops
 

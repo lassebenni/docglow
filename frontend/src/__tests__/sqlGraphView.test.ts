@@ -3,6 +3,8 @@ import type { SqlGraph } from '../types'
 import {
   aggFnGlyph,
   collapsePassthroughCtes,
+  cteFilterOps,
+  filterOpColumns,
   highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../utils/sqlGraphView'
@@ -22,9 +24,10 @@ const sample: SqlGraph = {
           kind: 'filter',
           label: 'where',
           expression: 'x > 0',
-          columns: ['flag'],
+          columns: ['x'],
         },
       ],
+      transforms: ['filter'],
     },
     {
       id: 'join:0:left',
@@ -113,5 +116,13 @@ GROUP BY 1`
     const hit = lines.filter(l => l.highlight)
     expect(hit).toHaveLength(1)
     expect(hit[0]?.text.toLowerCase()).toContain('count_food_items')
+  })
+})
+
+describe('cte filter helpers', () => {
+  it('lists filter ops and columns', () => {
+    const calc = sample.nodes.find(n => n.id === 'cte:calc')!
+    expect(cteFilterOps(calc)).toHaveLength(1)
+    expect([...filterOpColumns(calc.ops)]).toEqual(['x'])
   })
 })

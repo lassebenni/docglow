@@ -1,4 +1,4 @@
-import type { SqlGraph, SqlGraphAggFn, SqlGraphNode } from '../types'
+import type { SqlGraph, SqlGraphAggFn, SqlGraphNode, SqlGraphOp } from '../types'
 
 /** Collapse pure passthrough CTEs by rewiring neighbors A→passthrough→B into A→B. */
 export function collapsePassthroughCtes(graph: SqlGraph): SqlGraph {
@@ -132,4 +132,20 @@ export function highlightSelectSqlLines(
 
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Filter ops on a CTE node (WHERE / HAVING). */
+export function cteFilterOps(node: SqlGraphNode | null | undefined): SqlGraphOp[] {
+  if (!node?.ops?.length) return []
+  return node.ops.filter(o => o.kind === 'filter')
+}
+
+/** Column names referenced across filter ops. */
+export function filterOpColumns(ops: ReadonlyArray<SqlGraphOp> | undefined): Set<string> {
+  const out = new Set<string>()
+  for (const op of ops ?? []) {
+    if (op.kind !== 'filter') continue
+    for (const c of op.columns ?? []) out.add(c)
+  }
+  return out
 }

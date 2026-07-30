@@ -760,6 +760,7 @@ export function ModelPage() {
                 joinBasesData={data?.join_bases}
                 joinIndirectData={data?.join_indirect}
                 modelColumns={modelColumnsMap}
+                autoExpandColumns={lineageViewMode === 'columns'}
               />
             )}
           </div>
