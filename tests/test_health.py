@@ -6,7 +6,7 @@ from docglow.analyzer.complexity import analyze_complexity
 from docglow.analyzer.coverage import compute_coverage
 from docglow.analyzer.health import compute_health, health_to_dict
 from docglow.analyzer.naming import check_naming
-from docglow.config import ComplexityThresholds, NamingRules, UiConfig
+from docglow.config import ComplexityThresholds, HealthConfig, NamingRules, UiConfig
 
 
 def _make_model(
@@ -364,6 +364,65 @@ class TestHealthScore:
         }
         report = compute_health({}, sources, {}, {})
         assert 50 < report.score.freshness < 100
+
+    def test_freshness_included_flag_distinguishes_zero_from_excluded(self) -> None:
+        """A freshness of 0.0 is ambiguous on its own — it means both "nothing
+        is monitored, so the dimension was dropped" and "everything monitored is
+        stale". Consumers need the flag to tell those apart."""
+        excluded = compute_health({}, {}, {}, {})
+        assert excluded.score.freshness == 0.0
+        assert excluded.score.freshness_included is False
+
+        all_stale = compute_health({}, {"s1": _make_source(freshness_status="error")}, {}, {})
+        assert all_stale.score.freshness == 0.0
+        assert all_stale.score.freshness_included is True
+
+    def test_effective_config_serialized(self) -> None:
+        """Anything explaining a score has to render the project's own rules, so
+        the payload carries them rather than leaving consumers to assume defaults."""
+        report = compute_health({}, {}, {}, {})
+        config = health_to_dict(report)["config"]
+
+        assert config["complexity_thresholds"] == {
+            "high_sql_lines": 200,
+            "high_join_count": 8,
+            "high_cte_count": 10,
+            "high_subquery_count": 5,
+        }
+        assert {"layer": "staging", "patterns": ["^stg_"]} in config["naming_rules"]
+        assert config["weights"]["documentation"] == 0.25
+
+    def test_custom_config_reaches_the_payload(self) -> None:
+        custom = HealthConfig(
+            complexity=ComplexityThresholds(high_sql_lines=50, high_join_count=3),
+            naming_rules=NamingRules(rules=(("bronze", (r"^br_",)),)),
+        )
+        config = health_to_dict(compute_health({}, {}, {}, {}, custom))["config"]
+
+        assert config["complexity_thresholds"]["high_sql_lines"] == 50
+        assert config["complexity_thresholds"]["high_join_count"] == 3
+        assert config["naming_rules"] == [{"layer": "bronze", "patterns": ["^br_"]}]
+
+    def test_naming_reports_models_it_never_checked(self) -> None:
+        """A model whose folder matches no configured layer is skipped without
+        incrementing total_checked, so the score can come from a fraction of the
+        project. total_models makes that visible."""
+        models = {
+            "m1": _make_model(uid="m1", name="stg_a", folder="models/staging"),
+            "m2": _make_model(uid="m2", name="whatever", folder="models/app_db_staging"),
+            "m3": _make_model(uid="m3", name="other", folder="models/reporting"),
+        }
+        naming = health_to_dict(compute_health(models, {}, {}, {}))["naming"]
+
+        assert naming["total_checked"] == 1
+        assert naming["total_models"] == 3
+
+    def test_freshness_included_serialized(self) -> None:
+        report = compute_health({}, {}, {}, {})
+        assert health_to_dict(report)["score"]["freshness_included"] is False
+
+        monitored = compute_health({}, {"s1": _make_source(freshness_status="pass")}, {}, {})
+        assert health_to_dict(monitored)["score"]["freshness_included"] is True
 
 
 class TestHealthPackageExclusion:

@@ -29,6 +29,7 @@ import {
   upstreamSourceDeps,
 } from '../../utils/columnTransforms'
 import { getJoinKeysForEdge } from '../../utils/joinKeys'
+import { buildResourcePath } from '../../utils/resourceRoutes'
 import { ColumnDetailPanel } from './ColumnDetailPanel'
 import { DagNode } from './DagNode'
 import { FolderNode } from './FolderNode'
@@ -952,8 +953,7 @@ function LineageFlowInner({
 
       // Navigate to detail page
       onNavigateAway?.()
-      const type = node.id.startsWith('source.') ? 'source' : 'model'
-      navigate(`/${type}/${encodeURIComponent(node.id)}`)
+      navigate(buildResourcePath(node.id))
     } else {
       // Start single-click timer
       clickTimerRef.current = setTimeout(() => {
@@ -1130,8 +1130,7 @@ function LineageFlowInner({
           <button
             onClick={() => {
               onNavigateAway?.()
-              const type = selectedNodeData.resource_type === 'source' ? 'source' : 'model'
-              navigate(`/${type}/${encodeURIComponent(selectedNodeData.id)}`)
+              navigate(buildResourcePath(selectedNodeData.id))
             }}
             style={{
               marginTop: 16, width: '100%', padding: '6px 0', fontSize: 12, fontWeight: 600,

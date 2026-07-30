@@ -2,7 +2,9 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { formatPercent } from '../utils/formatting'
-import type { CoverageMetric } from '../types'
+import { freshnessIncluded } from '../utils/healthBreakdown'
+import { explanationFor } from '../utils/healthExplanations'
+import type { CoverageMetric, HealthData } from '../types'
 
 type Tab = 'overview' | 'documentation' | 'testing' | 'complexity' | 'naming' | 'orphans'
 
@@ -38,6 +40,20 @@ function ScoreBar({ label, score }: { label: string; score: number }) {
   )
 }
 
+/**
+ * A dimension that was left out of the weighted score. Rendering it as a zeroed
+ * bar implies the project scored nothing on it, when in fact it did not count.
+ */
+function ExcludedBar({ label, reason }: { label: string; reason: string }) {
+  return (
+    <div className="flex items-center gap-3">
+      <span className="text-sm w-36 shrink-0 text-[var(--text-muted)]">{label}</span>
+      <div className="flex-1 text-xs text-[var(--text-muted)] italic">{reason}</div>
+      <span className="text-sm font-medium w-10 text-right text-[var(--text-muted)]">—</span>
+    </div>
+  )
+}
+
 function CoverageBar({ metric, label }: { metric: CoverageMetric; label: string }) {
   return (
     <div className="flex items-center gap-3">
@@ -51,6 +67,38 @@ function CoverageBar({ metric, label }: { metric: CoverageMetric; label: string 
       <span className="text-xs w-20 text-right text-[var(--text-muted)]">
         {metric.covered}/{metric.total} ({formatPercent(metric.rate)})
       </span>
+    </div>
+  )
+}
+
+/**
+ * What the tab's dimension measures and the rules in effect. Rendered above the
+ * findings so a clean result still tells the reader what was actually checked —
+ * "No high-complexity models found" on its own says nothing about the bar.
+ */
+function WhatThisMeasures({ tab, health }: { tab: Tab; health: HealthData }) {
+  const explanation = explanationFor(tab, health)
+  if (!explanation) return null
+
+  return (
+    <div className="mb-5 p-3 rounded-lg bg-[var(--bg-surface)] border border-[var(--border)]">
+      <h3 className="text-xs font-medium text-[var(--text-muted)] uppercase tracking-wide mb-1.5">
+        What this measures
+      </h3>
+      <p className="text-sm text-[var(--text-muted)]">{explanation.summary}</p>
+      {explanation.rules && (
+        <ul className="mt-2 space-y-1">
+          {explanation.rules.map(rule => (
+            <li key={rule} className="text-sm text-[var(--text-muted)] flex gap-2">
+              <span aria-hidden="true">·</span>
+              <span>{rule}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {explanation.scope && (
+        <p className="mt-2 text-xs text-[var(--text-muted)]">{explanation.scope}</p>
+      )}
     </div>
   )
 }
@@ -92,7 +140,9 @@ export function HealthPage() {
           <div className="flex-1 space-y-1.5">
             <ScoreBar label="Documentation" score={score.documentation} />
             <ScoreBar label="Testing" score={score.testing} />
-            <ScoreBar label="Freshness" score={score.freshness} />
+            {freshnessIncluded(health)
+              ? <ScoreBar label="Freshness" score={score.freshness} />
+              : <ExcludedBar label="Freshness" reason="No monitored sources — excluded from score" />}
             <ScoreBar label="Complexity" score={score.complexity} />
             <ScoreBar label="Naming" score={score.naming} />
             <ScoreBar label="Orphan Detection" score={score.orphans} />
@@ -117,6 +167,8 @@ export function HealthPage() {
 
       {/* Tab Content */}
       {tab === 'overview' && (
+        <>
+        <WhatThisMeasures tab={tab} health={health} />
         <div className="grid grid-cols-2 gap-4">
           <StatCard title="Models Documented" metric={coverage.models_documented} />
           <StatCard title="Columns Documented" metric={coverage.columns_documented} />
@@ -135,10 +187,12 @@ export function HealthPage() {
             </div>
           </div>
         </div>
+        </>
       )}
 
       {tab === 'documentation' && (
         <div className="space-y-6">
+          <WhatThisMeasures tab={tab} health={health} />
           <div className="space-y-2">
             <h3 className="font-medium">Coverage by Folder</h3>
             {Object.entries(coverage.by_folder)
@@ -165,6 +219,7 @@ export function HealthPage() {
 
       {tab === 'testing' && (
         <div className="space-y-6">
+          <WhatThisMeasures tab={tab} health={health} />
           <div className="space-y-2">
             <CoverageBar label="Models with tests" metric={coverage.models_tested} />
             <CoverageBar label="Columns with tests" metric={coverage.columns_tested} />
@@ -187,8 +242,11 @@ export function HealthPage() {
 
       {tab === 'complexity' && (
         <div>
+          <WhatThisMeasures tab={tab} health={health} />
           {health.complexity.models.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">No high-complexity models found.</p>
+            <p className="text-sm text-[var(--text-muted)]">
+              No models exceed any of these thresholds.
+            </p>
           ) : (
             <div className="border border-[var(--border)] rounded-lg overflow-hidden">
               <table className="w-full text-sm">
@@ -227,8 +285,11 @@ export function HealthPage() {
 
       {tab === 'naming' && (
         <div>
+          <WhatThisMeasures tab={tab} health={health} />
           {health.naming.violations.length === 0 ? (
-            <p className="text-sm text-[var(--text-muted)]">All models follow naming conventions.</p>
+            <p className="text-sm text-[var(--text-muted)]">
+              Every model that was checked follows its layer's naming convention.
+            </p>
           ) : (
             <div className="border border-[var(--border)] rounded-lg overflow-hidden">
               <table className="w-full text-sm">
@@ -261,13 +322,11 @@ export function HealthPage() {
 
       {tab === 'orphans' && (
         <div>
+          <WhatThisMeasures tab={tab} health={health} />
           {health.orphans.length === 0 ? (
             <p className="text-sm text-[var(--text-muted)]">No orphan models found.</p>
           ) : (
             <>
-              <p className="text-sm text-[var(--text-muted)] mb-3">
-                Models with no downstream consumers.
-              </p>
               <ModelTable
                 models={health.orphans.map(o => ({ ...o, downstream_count: 0 }))}
                 onNavigate={uid => navigate(`/model/${encodeURIComponent(uid)}`)}
