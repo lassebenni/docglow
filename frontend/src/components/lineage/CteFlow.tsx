@@ -20,6 +20,7 @@ import type {
   SqlGraphColumnDep,
   SqlGraphNode,
   SqlGraphOp,
+  SqlGraphOpKind,
 } from '../../types'
 import { JOIN_KEY_PALETTE } from '../../utils/joinKeys'
 import {
@@ -51,7 +52,11 @@ const JOIN_W = 140
 const JOIN_H = 44
 const PATH_COLOR = '#d97706'
 const JOIN_HL_COLOR = '#2563eb'
-const FILT_COLOR = '#0d9488'
+const OP_ACCENT: Record<SqlGraphOpKind, string> = {
+  filter: '#0d9488',
+}
+const FILT_COLOR = OP_ACCENT.filter
+
 
 const KIND_ACCENT: Record<string, string> = {
   parent: '#16a34a',
@@ -158,7 +163,8 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
   const isAgg = d.transforms?.includes('aggregate')
   const isCte = d.kind === 'cte'
   const hasFilterOps = isCte && cteFilterOps(d).length > 0
-  const clickable = isJoin || hasFilterOps
+  // Join cards activate the join panel; filters only via the FILT badge (avoid nested buttons).
+  const clickable = isJoin
   const subtitle = isJoin
     ? (d.join_keys?.map(k => `${k.left_column}=${k.right_column}`).join(', ') || d.join_type || '')
     : isAgg
@@ -181,7 +187,6 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
   const handleActivate = (e: { stopPropagation: () => void; preventDefault?: () => void }) => {
     e.stopPropagation()
     if (isJoin) d.onJoinClick?.(id)
-    else if (hasFilterOps) d.onFilterClick?.(id, cteFilterOps(d))
   }
 
   return (

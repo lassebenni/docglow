@@ -13,6 +13,8 @@ from docglow.lineage.sql_ast import (
     normalize_table_ref,
     select_is_aggregate,
     table_ref,
+    unique_column_names,
+    unique_column_refs,
 )
 from docglow.lineage.table_resolver import TableResolver
 
@@ -416,24 +418,6 @@ def _select_has_window(select: Any, exp: Any) -> bool:
     return False
 
 
-def _predicate_columns(predicate: Any, exp: Any) -> list[str]:
-    """Unique column names referenced in a WHERE/HAVING predicate (order preserved)."""
-    if predicate is None or not hasattr(predicate, "find_all"):
-        return []
-    seen: set[str] = set()
-    cols: list[str] = []
-    for col in predicate.find_all(exp.Column):
-        name = col.name
-        if not name or name == "*":
-            continue
-        key = name.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        cols.append(name)
-    return cols
-
-
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
     """Extract WHERE / HAVING as filter metadata on the CTE (panel + FILT badge).
 
@@ -468,7 +452,7 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
             "filter",
             "where",
             expression_sql(where_expr),
-            _predicate_columns(where_expr, exp),
+            unique_column_names(where_expr, exp),
         )
 
     having = select.args.get("having")
@@ -478,7 +462,7 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
             "filter",
             "having",
             expression_sql(having_expr),
-            _predicate_columns(having_expr, exp),
+            unique_column_names(having_expr, exp),
         )
 
     return ops
@@ -683,21 +667,7 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     def expr_sources(inner: Any) -> list[dict[str, str | None]]:
-        if not hasattr(inner, "find_all"):
-            return []
-        seen: set[tuple[str | None, str]] = set()
-        sources: list[dict[str, str | None]] = []
-        for col in inner.find_all(exp.Column):
-            name = col.name
-            if not name or name == "*":
-                continue
-            table = col.table or None
-            key = (table.lower() if table else None, name.lower())
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append({"table": table, "column": name})
-        return sources
+        return unique_column_refs(inner, exp)
 
     for expression in select.expressions or []:
         # table.*
