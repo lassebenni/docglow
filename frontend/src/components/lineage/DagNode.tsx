@@ -2,6 +2,8 @@ import { memo, useCallback } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 import { joinRoleBadgeTitle } from '../../utils/joinKeys'
+import { transformationGlyph } from '../../utils/columnTransforms'
+import type { TransformationType } from '../../types'
 
 const RESOURCE_COLORS: Record<string, string> = {
   model: '#2563eb',
@@ -38,6 +40,8 @@ export interface DagNodeData {
   highlightedColumns?: Set<string>
   /** Ambient join-key highlights: column → relationship color */
   joinKeyColors?: Map<string, string>
+  /** Ambient transformation kinds for column glyphs */
+  columnKinds?: Map<string, TransformationType>
   /** FROM (foundation) parent for the focused model's JOIN block */
   isJoinBase?: boolean
   /** Compact JOIN type on a non-base parent (LEFT / INNER / …) */
@@ -62,6 +66,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
     hasColumnLineage,
     highlightedColumns,
     joinKeyColors,
+    columnKinds,
     isJoinBase,
     joinTypeBadge,
     inColumnTrace,
@@ -265,6 +270,8 @@ function DagNodeComponent({ data, id }: NodeProps) {
                 : isHighlighted
                   ? `${highlightColor}18`
                   : 'transparent'
+              const kind = columnKinds?.get(col)
+              const glyph = transformationGlyph(kind)
 
               return (
                 <div
@@ -279,6 +286,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
                     background: colBg,
                     display: 'flex',
                     alignItems: 'center',
+                    gap: 4,
                     cursor: 'pointer',
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
@@ -286,9 +294,25 @@ function DagNodeComponent({ data, id }: NodeProps) {
                     position: 'relative',
                     transition: 'background 0.1s ease',
                   }}
-                  title={col}
+                  title={kind ? `${col} · ${kind}` : col}
                 >
-                  {col}
+                  {glyph && (
+                    <span
+                      aria-hidden
+                      style={{
+                        flexShrink: 0,
+                        fontSize: 10,
+                        fontWeight: 600,
+                        color: 'var(--text-muted, #94a3b8)',
+                        width: 10,
+                        textAlign: 'center',
+                        opacity: 0.85,
+                      }}
+                    >
+                      {glyph}
+                    </span>
+                  )}
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col}</span>
                   {/* Per-column handles for edge connections */}
                   <Handle
                     type="target"

@@ -34,7 +34,7 @@ from docglow.lineage.table_resolver import TableResolver
 logger = logging.getLogger(__name__)
 
 # Bumped when cached lineage semantics change (e.g. indirect join parents).
-_CACHE_FORMAT_VERSION = 5
+_CACHE_FORMAT_VERSION = 6
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -899,13 +899,14 @@ def _resolve_dependencies(
                 # Unresolvable — could be a CTE or external table
                 continue
 
-            resolved_deps.append(
-                {
-                    "source_model": source_model,
-                    "source_column": dep.source_column,
-                    "transformation": dep.transformation,
-                }
-            )
+            entry: dict[str, str] = {
+                "source_model": source_model,
+                "source_column": dep.source_column,
+                "transformation": dep.transformation,
+            }
+            if dep.expression and dep.transformation in ("derived", "aggregated"):
+                entry["expression"] = dep.expression
+            resolved_deps.append(entry)
 
         if resolved_deps:
             resolved[col_name] = resolved_deps
