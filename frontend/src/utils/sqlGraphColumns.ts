@@ -12,7 +12,7 @@ export interface ColumnPathStep {
 }
 
 export interface ColumnPathResult {
-  /** Upstream roots → selected column (ordered for the panel) */
+  /** Upstream roots → selected → downstream (focus column only) */
   steps: ColumnPathStep[]
   keys: Set<string>
   /** Structure edges that carry the path: `${source}\0${target}` */
@@ -20,9 +20,11 @@ export interface ColumnPathResult {
 }
 
 /**
- * Trace a column through sql_graph.column_lineage **upstream only**
- * (selected field + every column it depends on, recursively).
- * Downstream consumers and same-node sibling passthroughs are not highlighted.
+ * Trace a column through sql_graph.column_lineage:
+ * - upstream: selected field + every column it depends on (expression inputs)
+ * - downstream: only consumers of the **selected** field (not of its upstream inputs)
+ *
+ * Same-node sibling passthroughs of expression inputs stay unhighlighted.
  */
 export function collectColumnPath(
   lineage: SqlGraphColumnLineage | undefined,
@@ -37,7 +39,6 @@ export function collectColumnPath(
   }
   const graphLineage = lineage
 
-  // Walk upstream (DFS), build parent map
   type Link = { from: ColumnPathStep; to: ColumnPathStep; via: SqlGraphColumnDep }
   const links: Link[] = []
   const seenUp = new Set<string>()
@@ -71,6 +72,37 @@ export function collectColumnPath(
   }
 
   walkUp(nodeId, column)
+
+  // Downstream of the focus column only (not of every upstream input key)
+  const seenDown = new Set([colKey(nodeId, column)])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const [tid, cols] of Object.entries(graphLineage)) {
+      for (const [tcol, deps] of Object.entries(cols)) {
+        const tk = colKey(tid, tcol)
+        if (seenDown.has(tk)) continue
+        for (const dep of deps) {
+          const sk = colKey(dep.source_node, dep.source_column)
+          if (!seenDown.has(sk)) continue
+          seenDown.add(tk)
+          keys.add(tk)
+          edgeKeys.add(`${dep.source_node}\0${tid}`)
+          links.push({
+            from: { nodeId: dep.source_node, column: dep.source_column },
+            to: {
+              nodeId: tid,
+              column: tcol,
+              transformation: dep.transformation,
+              expression: dep.expression,
+            },
+            via: dep,
+          })
+          grew = true
+        }
+      }
+    }
+  }
 
   const steps = orderPathSteps(nodeId, column, links, keys)
   return { steps, keys, edgeKeys }
@@ -151,4 +183,27 @@ function orderPathSteps(
 
   // Fallback: just list focus
   return [{ nodeId: focusNode, column: focusCol }]
+}
+
+/** Immediate downstream consumers of a column within column_lineage. */
+export function collectColumnDownstream(
+  lineage: SqlGraphColumnLineage | undefined,
+  nodeId: string,
+  column: string,
+): { nodeId: string; column: string; transformation?: SqlGraphColumnDep['transformation'] }[] {
+  if (!lineage) return []
+  const out: { nodeId: string; column: string; transformation?: SqlGraphColumnDep['transformation'] }[] = []
+  const seen = new Set<string>()
+  for (const [tid, cols] of Object.entries(lineage)) {
+    for (const [tcol, deps] of Object.entries(cols)) {
+      for (const dep of deps) {
+        if (dep.source_node !== nodeId || dep.source_column !== column) continue
+        const k = colKey(tid, tcol)
+        if (seen.has(k)) continue
+        seen.add(k)
+        out.push({ nodeId: tid, column: tcol, transformation: dep.transformation })
+      }
+    }
+  }
+  return out
 }

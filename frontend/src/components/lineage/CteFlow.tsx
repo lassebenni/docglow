@@ -30,6 +30,7 @@ import {
   transformationLabel,
 } from '../../utils/columnTransforms'
 import {
+  collectColumnDownstream,
   collectColumnPath,
 } from '../../utils/sqlGraphColumns'
 import {
@@ -563,6 +564,11 @@ export function CteFlow({ graph }: CteFlowProps) {
     return viewGraph.column_lineage[selected.nodeId]?.[selected.column] ?? []
   }, [selected, viewGraph.column_lineage])
 
+  const selectedDownstream = useMemo(() => {
+    if (!selected) return []
+    return collectColumnDownstream(viewGraph.column_lineage, selected.nodeId, selected.column)
+  }, [selected, viewGraph.column_lineage])
+
   const selectSqlLines = useMemo(() => {
     if (!selected || !selectedNode?.select_sql) return null
     return highlightSelectSqlLines(selectedNode.select_sql, selected.column)
@@ -977,7 +983,7 @@ export function CteFlow({ graph }: CteFlowProps) {
             </div>
           )}
           {selectedUpstream.length > 0 && (
-            <div>
+            <div style={{ marginBottom: selectedDownstream.length > 0 ? 14 : 0 }}>
               <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
                 Upstream
               </div>
@@ -1002,6 +1008,38 @@ export function CteFlow({ graph }: CteFlowProps) {
                       }}
                     >
                       {dep.source_column || '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {selectedDownstream.length > 0 && (
+            <div>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
+                Downstream
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {selectedDownstream.map((dep, i) => (
+                  <div
+                    key={`${dep.nodeId}-${dep.column}-${i}`}
+                    style={{
+                      fontSize: 12,
+                      background: 'var(--bg-surface, #f1f5f9)',
+                      borderRadius: 6,
+                      padding: '8px 10px',
+                    }}
+                  >
+                    <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
+                      {labelOf(dep.nodeId)}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: 'var(--text, #0f172a)',
+                      }}
+                    >
+                      {dep.column}
                     </div>
                   </div>
                 ))}
