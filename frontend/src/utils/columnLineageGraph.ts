@@ -24,6 +24,7 @@ export function buildReverseIndex(
   for (const [targetModel, columns] of Object.entries(columnLineage)) {
     for (const [targetColumn, deps] of Object.entries(columns)) {
       for (const dep of deps) {
+        if (!dep.source_model || !dep.source_column) continue
         const key = `${dep.source_model}::${dep.source_column.toLowerCase()}`
         const refs = index.get(key) ?? []
         refs.push({ modelId: targetModel, columnName: targetColumn })
@@ -57,6 +58,9 @@ export function traceColumnUpstream(
     if (!deps) continue
 
     for (const dep of deps) {
+      if (!dep.source_model || !dep.source_column) continue
+      if (dep.transformation === 'constant' || dep.transformation === 'untraced') continue
+
       const edgeKey = `${dep.source_model}::${dep.source_column}::${model}::${column}`
       if (visited.has(edgeKey)) continue
       visited.add(edgeKey)
@@ -104,7 +108,10 @@ export function traceColumnDownstream(
 
     for (const consumer of consumers) {
       const dep = columnLineage[consumer.modelId]?.[consumer.columnName]?.find(
-        d => d.source_model === model && d.source_column.toLowerCase() === column.toLowerCase()
+        d =>
+          d.source_model === model
+          && d.source_column != null
+          && d.source_column.toLowerCase() === column.toLowerCase(),
       )
       const edgeKey = `${model}::${column}::${consumer.modelId}::${consumer.columnName}`
       if (visited.has(edgeKey)) continue
@@ -208,7 +215,7 @@ export function buildDownstreamMap(
 
     for (const [targetColumn, deps] of Object.entries(columns)) {
       for (const dep of deps) {
-        if (dep.source_model !== modelId) continue
+        if (dep.source_model !== modelId || !dep.source_column) continue
 
         // Normalize to lowercase for case-insensitive matching
         // (Snowflake returns UPPERCASE, model columns are lowercase)

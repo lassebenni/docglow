@@ -2,11 +2,13 @@ import type { ColumnLineageDependency, ColumnLineageData, TransformationType } f
 
 const PRIORITY: Record<TransformationType, number> = {
   unknown: 0,
+  untraced: 0,
   direct: 1,
   passthrough: 2,
   rename: 3,
-  derived: 4,
-  aggregated: 5,
+  constant: 4,
+  derived: 5,
+  aggregated: 6,
 }
 
 /** Ambient glyph for a column's transformation kind. */
@@ -14,6 +16,8 @@ export function transformationGlyph(kind: TransformationType | null | undefined)
   if (!kind || kind === 'unknown' || kind === 'direct') return null
   if (kind === 'passthrough' || kind === 'rename') return '→'
   if (kind === 'aggregated') return 'Σ'
+  if (kind === 'constant') return '·'
+  if (kind === 'untraced') return '?'
   return 'ƒ'
 }
 
@@ -27,6 +31,10 @@ export function transformationLabel(kind: TransformationType | null | undefined)
       return 'Derived'
     case 'aggregated':
       return 'Aggregated'
+    case 'constant':
+      return 'Constant'
+    case 'untraced':
+      return 'Untraced'
     case 'direct':
       return 'Passthrough'
     default:
@@ -52,7 +60,7 @@ export function strongestTransformation(
   return best
 }
 
-/** First defining SQL expression among derived/aggregated deps. */
+/** First defining SQL expression among derived/aggregated/constant deps. */
 export function columnExpression(
   deps: readonly ColumnLineageDependency[] | null | undefined,
 ): string | null {
@@ -60,12 +68,24 @@ export function columnExpression(
   for (const dep of deps) {
     if (
       dep.expression
-      && (dep.transformation === 'derived' || dep.transformation === 'aggregated')
+      && (
+        dep.transformation === 'derived'
+        || dep.transformation === 'aggregated'
+        || dep.transformation === 'constant'
+      )
     ) {
       return dep.expression
     }
   }
   return null
+}
+
+/** Upstream deps that have a resolvable source model (excludes constant/untraced). */
+export function upstreamSourceDeps(
+  deps: readonly ColumnLineageDependency[] | null | undefined,
+): ColumnLineageDependency[] {
+  if (!deps) return []
+  return deps.filter(d => Boolean(d.source_model && d.source_column))
 }
 
 /** Per-column transformation kinds for a model (ambient glyphs). */

@@ -6,17 +6,17 @@
 // -- Column lineage ----------------------------------------------------------
 
 export interface ColumnLineageDependency {
-  readonly source_model: string;
-  readonly source_column: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "unknown" | "direct";
-  /** Defining SQL for derived/aggregated columns (alias stripped). */
+  readonly source_model?: string;
+  readonly source_column?: string;
+  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
+  /** Defining SQL for derived/aggregated/constant columns (alias stripped). */
   readonly expression?: string;
 }
 
 export interface ColumnDownstreamDependency {
   readonly target_model: string;
   readonly target_column: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "unknown" | "direct";
+  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
 }
 
 export type ColumnLineageData = Record<
@@ -66,7 +66,7 @@ export interface ColumnEdge {
   readonly sourceColumn: string;
   readonly targetModel: string;
   readonly targetColumn: string;
-  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "unknown" | "direct";
+  readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "constant" | "untraced" | "unknown" | "direct";
   readonly expression?: string;
 }
 

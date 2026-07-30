@@ -250,6 +250,24 @@ class TestParseColumnLineage:
         assert "is_active" in result
         assert all(d.transformation == "derived" for d in result["is_active"])
 
+    def test_null_literal_is_constant_with_expression(self) -> None:
+        """NULL AS col has no upstream leaves — emit constant + expression."""
+        sql = """
+        WITH renamed AS (
+            SELECT id AS order_id, NULL AS tax_paid FROM raw_orders
+        )
+        SELECT * FROM renamed
+        """
+        result = parse_column_lineage(
+            sql,
+            schema={"raw_orders": {"id": "INT"}},
+            known_columns=["order_id", "tax_paid"],
+        )
+        assert "tax_paid" in result
+        assert all(d.transformation == "constant" for d in result["tax_paid"])
+        assert any(d.expression and d.expression.upper() == "NULL" for d in result["tax_paid"])
+        assert all(not d.source_table for d in result["tax_paid"])
+
     def test_select_star_cte_classifies_inner_derived_expression(self) -> None:
         """Outer SELECT * must not mask CTE-defining coalesce as passthrough."""
         sql = """

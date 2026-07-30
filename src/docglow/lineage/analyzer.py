@@ -34,7 +34,7 @@ from docglow.lineage.table_resolver import TableResolver
 logger = logging.getLogger(__name__)
 
 # Bumped when cached lineage semantics change (e.g. indirect join parents).
-_CACHE_FORMAT_VERSION = 6
+_CACHE_FORMAT_VERSION = 7
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -241,7 +241,9 @@ def _analyze_single_model(
 
     if not raw_lineage:
         failure = None
+        model_lineage: dict[str, list[dict[str, str]]] = {}
         if known_columns:
+            model_lineage = {c: [{"transformation": "untraced"}] for c in known_columns}
             failure = {
                 "model": uid,
                 "name": data.get("name", ""),
@@ -249,12 +251,13 @@ def _analyze_single_model(
             }
         return _ModelLineageResult(
             uid=uid,
+            lineage=model_lineage,
             join_keys=resolved_joins,
             join_base=join_base,
             join_indirect=join_indirect,
             cache_entry={
                 "sql_hash": sql_hash,
-                "lineage": {},
+                "lineage": model_lineage,
                 "join_keys": resolved_joins,
                 "join_base": join_base,
                 "join_indirect": join_indirect,
@@ -263,6 +266,13 @@ def _analyze_single_model(
         )
 
     model_lineage = _resolve_dependencies(raw_lineage, resolver)
+
+    # Catalog columns with no parse result → explicit untraced markers (not silent gaps).
+    if known_columns:
+        for col in known_columns:
+            if col not in model_lineage:
+                model_lineage[col] = [{"transformation": "untraced"}]
+
     cache_entry_out = {
         "sql_hash": sql_hash,
         "lineage": model_lineage,
@@ -271,17 +281,20 @@ def _analyze_single_model(
         "join_indirect": join_indirect,
     }
 
-    # Track partially traced models
+    # Track partially traced models (untraced still counts as a soft failure for the log)
     failure = None
-    if known_columns and len(model_lineage) < len(known_columns):
-        traced = set(model_lineage.keys())
-        missed = [c for c in known_columns if c not in traced]
-        if missed:
+    if known_columns:
+        untraced = [
+            c
+            for c, deps in model_lineage.items()
+            if deps and all(d.get("transformation") == "untraced" for d in deps)
+        ]
+        if untraced:
             failure = {
                 "model": uid,
                 "name": data.get("name", ""),
-                "error": f"Partial: {len(missed)}/{len(known_columns)} columns not traced",
-                "columns": ", ".join(missed[:20]),
+                "error": f"Partial: {len(untraced)}/{len(known_columns)} columns not traced",
+                "columns": ", ".join(untraced[:20]),
             }
 
     return _ModelLineageResult(
@@ -894,12 +907,26 @@ def _resolve_dependencies(
     for col_name, deps in raw_lineage.items():
         resolved_deps: list[dict[str, str]] = []
         for dep in deps:
+            if dep.transformation == "constant":
+                entry: dict[str, str] = {"transformation": "constant"}
+                if dep.expression:
+                    entry["expression"] = dep.expression
+                resolved_deps.append(entry)
+                continue
+
+            if dep.transformation == "untraced":
+                resolved_deps.append({"transformation": "untraced"})
+                continue
+
+            if not dep.source_table:
+                continue
+
             source_model = resolver.resolve(dep.source_table)
             if source_model is None:
                 # Unresolvable — could be a CTE or external table
                 continue
 
-            entry: dict[str, str] = {
+            entry = {
                 "source_model": source_model,
                 "source_column": dep.source_column,
                 "transformation": dep.transformation,

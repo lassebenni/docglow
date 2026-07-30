@@ -72,13 +72,21 @@ export type {
 export { gradeFromScore, HEALTH_GRADE_THRESHOLDS, PLAN_LIMITS } from "@docglow/shared-types";
 
 // Types extended with new transformation types (pending @docglow/shared-types v0.2.0)
-export type TransformationType = 'direct' | 'derived' | 'aggregated' | 'passthrough' | 'rename' | 'unknown';
+export type TransformationType =
+  | 'direct'
+  | 'derived'
+  | 'aggregated'
+  | 'passthrough'
+  | 'rename'
+  | 'constant'
+  | 'untraced'
+  | 'unknown';
 
 export interface ColumnLineageDependency {
-  readonly source_model: string;
-  readonly source_column: string;
+  readonly source_model?: string;
+  readonly source_column?: string;
   readonly transformation: TransformationType;
-  /** Defining SQL for derived/aggregated columns (alias stripped). */
+  /** Defining SQL for derived/aggregated/constant columns (alias stripped). */
   readonly expression?: string;
 }
 
