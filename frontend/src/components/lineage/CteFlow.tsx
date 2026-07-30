@@ -16,6 +16,7 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import type {
   SqlGraph,
+  SqlGraphAggFn,
   SqlGraphColumnDep,
   SqlGraphNode,
   SqlGraphOp,
@@ -30,11 +31,13 @@ import {
 } from '../../utils/columnTransforms'
 import {
   collectColumnPath,
-  type ColumnPathStep,
 } from '../../utils/sqlGraphColumns'
 import {
+  aggFnGlyph,
+  aggFnLabel,
   collapsePassthroughCtes,
   findDefiningOps,
+  highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../../utils/sqlGraphView'
 import type { TransformationType } from '../../types'
@@ -195,6 +198,16 @@ type SqlNodeData = SqlGraphNode & {
   onToggleExpand?: (cteId: string) => void
   onOpClick?: (op: SqlGraphOp) => void
   onJoinClick?: (nodeId: string) => void
+}
+
+function columnTag(
+  col: string,
+  columnAgg: Readonly<Record<string, SqlGraphAggFn>> | undefined,
+  kind: TransformationType | undefined,
+): string | null {
+  const agg = columnAgg?.[col]
+  if (agg) return aggFnGlyph(agg)
+  return transformationGlyph(kind)
 }
 
 function SqlGraphNodeView({ id, data }: NodeProps) {
@@ -385,7 +398,12 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
               const selected = d.selectedCol === col
               const joinHl = d.joinHighlightCols?.has(col)
               const kind = d.columnKinds?.get(col)
-              const glyph = transformationGlyph(kind)
+              const agg = d.column_agg?.[col]
+              const glyph = columnTag(col, d.column_agg, kind)
+              const titleBits = [
+                col,
+                agg ? aggFnLabel(agg) : kind ? transformationLabel(kind) : null,
+              ].filter(Boolean)
               return (
                 <button
                   key={col}
@@ -394,7 +412,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     e.stopPropagation()
                     d.onColumnClick?.(id, col)
                   }}
-                  title={kind ? `${col} · ${transformationLabel(kind)}` : col}
+                  title={titleBits.join(' · ')}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -431,7 +449,17 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                   }}
                 >
                   {glyph && (
-                    <span style={{ flexShrink: 0, color: '#b45309', fontWeight: 700 }}>{glyph}</span>
+                    <span
+                      style={{
+                        flexShrink: 0,
+                        color: '#b45309',
+                        fontWeight: 700,
+                        fontSize: agg ? 8 : 10,
+                        letterSpacing: agg ? '0.02em' : undefined,
+                      }}
+                    >
+                      {glyph}
+                    </span>
                   )}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{col}</span>
                 </button>
@@ -517,8 +545,31 @@ export function CteFlow({ graph }: CteFlowProps) {
     return path?.steps.map(s => s.expression).find(Boolean) ?? null
   }, [selected, viewGraph.column_lineage, path])
 
+  const selectedNode = useMemo(
+    () =>
+      selected
+        ? (viewGraph.nodes.find(n => n.id === selected.nodeId)
+          ?? graph.nodes.find(n => n.id === selected.nodeId)
+          ?? null)
+        : null,
+    [selected, viewGraph.nodes, graph.nodes],
+  )
+
+  const selectedAggFn = selectedNode?.column_agg?.[selected?.column ?? ''] ?? null
+
+  const selectedUpstream = useMemo(() => {
+    if (!selected || !viewGraph.column_lineage) return []
+    return viewGraph.column_lineage[selected.nodeId]?.[selected.column] ?? []
+  }, [selected, viewGraph.column_lineage])
+
+  const selectSqlLines = useMemo(() => {
+    if (!selected || !selectedNode?.select_sql) return null
+    return highlightSelectSqlLines(selectedNode.select_sql, selected.column)
+  }, [selected, selectedNode])
+
   const selectedKind = useMemo(() => {
     if (!selected || !viewGraph.column_lineage) return null
+    if (selectedAggFn) return null
     const deps = viewGraph.column_lineage[selected.nodeId]?.[selected.column]
     const direct = strongestTransformation(toLineageDeps(deps))
     const pathKinds = (path?.steps ?? [])
@@ -527,7 +578,7 @@ export function CteFlow({ graph }: CteFlowProps) {
     return strongestTransformation(
       [...(direct ? [{ transformation: direct }] : []), ...pathKinds.map(transformation => ({ transformation }))],
     )
-  }, [selected, viewGraph.column_lineage, path])
+  }, [selected, viewGraph.column_lineage, path, selectedAggFn])
 
   const highlighted = path?.keys ?? new Set<string>()
   const pathEdges = path?.edgeKeys ?? new Set<string>()
@@ -544,8 +595,16 @@ export function CteFlow({ graph }: CteFlowProps) {
         setSelectedOp(null)
         return
       }
+      // Aggregate CTE fields use the column panel (full SELECT) — don't open CASE fragments
+      const clicked = graph.nodes.find(n => n.id === nodeId)
+      if (clicked?.transforms?.includes('aggregate') || clicked?.select_sql) {
+        setSelectedOp(null)
+        return
+      }
       const pathResult = collectColumnPath(graph.column_lineage, nodeId, column)
-      const defining = findDefiningOps(graph, column, pathResult.keys)
+      const defining = findDefiningOps(graph, column, pathResult.keys, {
+        pathExpandOnly: true,
+      })
       if (defining.length) {
         setExpanded(prev => {
           const next = new Set(prev)
@@ -809,14 +868,14 @@ export function CteFlow({ graph }: CteFlowProps) {
         </div>
       )}
 
-      {!selectedOp && selected && path && path.steps.length > 0 && (
+      {!selectedOp && selected && (
         <div
           className="react-flow__panel"
           style={{
             position: 'absolute',
             top: 0,
             right: 0,
-            width: 300,
+            width: 320,
             height: '100%',
             background: 'var(--bg, #fff)',
             borderLeft: '1px solid var(--border, #e2e8f0)',
@@ -834,7 +893,7 @@ export function CteFlow({ graph }: CteFlowProps) {
             }}
           >
             <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
-              Column path
+              Column
             </div>
             <button
               type="button"
@@ -865,13 +924,65 @@ export function CteFlow({ graph }: CteFlowProps) {
           >
             {labelOf(selected.nodeId)}.<span style={{ color: PATH_COLOR }}>{selected.column}</span>
           </div>
-          {selectedKind && (
+          {(selectedAggFn || selectedKind) && (
             <div style={{ fontSize: 12, marginBottom: 10, color: 'var(--text, #0f172a)' }}>
               <span style={{ color: 'var(--text-muted, #64748b)' }}>Kind </span>
-              {transformationGlyph(selectedKind)} {transformationLabel(selectedKind)}
+              {selectedAggFn
+                ? (
+                  <>
+                    <span style={{ fontWeight: 700, color: '#a16207' }}>{aggFnGlyph(selectedAggFn)}</span>
+                    {' '}
+                    {aggFnLabel(selectedAggFn)}
+                  </>
+                )
+                : (
+                  <>
+                    {transformationGlyph(selectedKind)} {transformationLabel(selectedKind)}
+                  </>
+                )}
             </div>
           )}
-          {selectedFormula && (
+          {selectSqlLines && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
+                CTE select
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  background: 'var(--bg-surface, #f1f5f9)',
+                  fontSize: 11,
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  whiteSpace: 'pre-wrap',
+                  wordBreak: 'break-word',
+                  color: 'var(--text, #0f172a)',
+                  lineHeight: 1.45,
+                }}
+              >
+                {selectSqlLines.map((line, i) => (
+                  <div
+                    key={i}
+                    style={
+                      line.highlight
+                        ? {
+                            background: `${PATH_COLOR}33`,
+                            borderLeft: `2px solid ${PATH_COLOR}`,
+                            marginLeft: -6,
+                            paddingLeft: 4,
+                            borderRadius: 2,
+                          }
+                        : undefined
+                    }
+                  >
+                    {line.text || ' '}
+                  </div>
+                ))}
+              </pre>
+            </div>
+          )}
+          {!selectSqlLines && selectedFormula && (
             <div style={{ marginBottom: 14 }}>
               <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>Formula</div>
               <pre
@@ -891,63 +1002,41 @@ export function CteFlow({ graph }: CteFlowProps) {
               </pre>
             </div>
           )}
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {path.steps.map((step, i) => (
-              <PathStepRow key={`${step.nodeId}-${step.column}-${i}`} step={step} labelOf={labelOf} />
-            ))}
-          </div>
+          {selectedUpstream.length > 0 && (
+            <div>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
+                Upstream
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {selectedUpstream.map((dep, i) => (
+                  <div
+                    key={`${dep.source_node}-${dep.source_column}-${i}`}
+                    style={{
+                      fontSize: 12,
+                      background: 'var(--bg-surface, #f1f5f9)',
+                      borderRadius: 6,
+                      padding: '8px 10px',
+                    }}
+                  >
+                    <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
+                      {dep.source_node ? labelOf(dep.source_node) : '—'}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: 'var(--text, #0f172a)',
+                      }}
+                    >
+                      {dep.source_column || '—'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-function PathStepRow({
-  step,
-  labelOf,
-}: {
-  step: ColumnPathStep
-  labelOf: (id: string) => string
-}) {
-  const glyph = transformationGlyph(step.transformation as TransformationType | undefined)
-  return (
-    <div
-      style={{
-        fontSize: 12,
-        background: 'var(--bg-surface, #f1f5f9)',
-        borderRadius: 6,
-        padding: '8px 10px',
-      }}
-    >
-      <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
-        {labelOf(step.nodeId)}
-        {step.transformation && step.transformation !== 'passthrough' && (
-          <span
-            style={{
-              marginLeft: 6,
-              fontSize: 9,
-              fontWeight: 700,
-              textTransform: 'uppercase',
-              color: '#92400e',
-              background: '#fef3c7',
-              borderRadius: 3,
-              padding: '0 4px',
-            }}
-          >
-            {glyph ? `${glyph} ` : ''}
-            {transformationLabel(step.transformation as TransformationType)}
-          </span>
-        )}
-      </div>
-      <div
-        style={{
-          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-          color: 'var(--text, #0f172a)',
-          wordBreak: 'break-word',
-        }}
-      >
-        {step.column}
-      </div>
-    </div>
-  )
-}

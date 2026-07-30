@@ -12,6 +12,7 @@ export type {
   JoinIndirectParent,
   LineageEdgeJoinKey,
   SqlGraph,
+  SqlGraphAggFn,
   SqlGraphColumnDep,
   SqlGraphColumnLineage,
   SqlGraphEdge,

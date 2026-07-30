@@ -262,6 +262,70 @@ class TestBuildSqlGraph:
         assert "row_number" in win_ops[0]["expression"].lower()
         assert "window" in (numbered.get("transforms") or [])
 
+    def test_aggregate_cte_column_agg_and_no_case_ops(self) -> None:
+        sql = """
+        with
+        order_items as (select * from analytics.stg_order_items),
+        order_items_summary as (
+            select
+                order_id,
+                sum(supply_cost) as order_cost,
+                count(order_item_id) as count_order_items,
+                sum(case when is_food_item then 1 else 0 end) as count_food_items
+            from order_items
+            group by 1
+        )
+        select * from order_items_summary
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_order_items": {
+                        "name": "stg_order_items",
+                        "schema": "analytics",
+                    },
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.stg_order_items": {
+                    "order_id": "varchar",
+                    "order_item_id": "varchar",
+                    "supply_cost": "float",
+                    "is_food_item": "boolean",
+                }
+            },
+            output_columns=[
+                "order_id",
+                "order_cost",
+                "count_order_items",
+                "count_food_items",
+            ],
+        )
+        assert graph is not None
+        by_id = {n["id"]: n for n in graph["nodes"]}
+        summary = by_id["cte:order_items_summary"]
+        assert summary.get("transforms") == ["aggregate"]
+        assert summary.get("column_agg") == {
+            "order_id": "group",
+            "order_cost": "sum",
+            "count_order_items": "count",
+            "count_food_items": "sum",
+        }
+        assert summary.get("select_sql")
+        assert "count_food_items" in summary["select_sql"].lower()
+        assert "group by" in summary["select_sql"].lower()
+        ops = summary.get("ops") or []
+        assert not any(o["kind"] in ("case", "aggregate") for o in ops)
+        food_deps = graph["column_lineage"]["cte:order_items_summary"]["count_food_items"]
+        assert food_deps[0].get("expression")
+        assert "sum" in food_deps[0]["expression"].lower()
+        assert "case" in food_deps[0]["expression"].lower()
+
     def test_passthrough_flag_and_derived_ops(self) -> None:
         sql = """
         with

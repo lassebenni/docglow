@@ -1,4 +1,4 @@
-"""Build an intra-model SQL / CTE graph for lineage visualization (v1–v3)."""
+"""Build an intra-model SQL / CTE graph for lineage visualization (v1–v4)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 _MAX_OPS_PER_CTE = 12
 
+# Normalized agg tags for UI glyphs (SUM / CNT / GRP / …).
+_AGG_FN_KEYS = frozenset({"sum", "count", "avg", "min", "max"})
+
 
 def build_sql_graph(
     compiled_sql: str,
@@ -35,7 +38,8 @@ def build_sql_graph(
 
     v1: parent / cte / join / output structure.
     v2: ``columns`` on nodes + ``column_lineage`` for field drill-down.
-    v3: ``ops`` on CTE nodes for on-demand expand (where/case/window/group/derived/…).
+    v3: ``ops`` on CTE nodes for on-demand expand (where/case/window/…).
+    v4: ``column_agg`` + ``select_sql`` on aggregate CTEs; no group/case op nodes.
     """
     if not compiled_sql or not compiled_sql.strip():
         return None
@@ -133,7 +137,8 @@ def build_sql_graph(
         alias_l = alias.lower()
         cte_id = f"cte:{alias_l}"
         transforms: list[str] = []
-        if _select_is_aggregate(select, exp):
+        is_agg = _select_is_aggregate(select, exp)
+        if is_agg:
             transforms.append("aggregate")
 
         ops = _extract_cte_ops(select, exp, cte_id=cte_id)
@@ -144,6 +149,8 @@ def build_sql_graph(
                 transforms.append("window")
 
         passthrough = _select_is_passthrough(select, exp)
+        column_agg = _column_agg_map(select, exp) if is_agg else None
+        select_sql = _select_sql(select) if is_agg else None
         add_node(
             {
                 "id": cte_id,
@@ -153,6 +160,8 @@ def build_sql_graph(
                 **({"transforms": transforms} if transforms else {}),
                 **({"ops": ops} if ops else {}),
                 **({"passthrough": True} if passthrough else {}),
+                **({"column_agg": column_agg} if column_agg else {}),
+                **({"select_sql": select_sql} if select_sql else {}),
             }
         )
 
@@ -321,10 +330,71 @@ def _select_is_passthrough(select: Any, exp: Any) -> bool:
     return False
 
 
+def _select_sql(select: Any) -> str | None:
+    """Pretty-ish SELECT text for the side panel."""
+    try:
+        sql = select.sql(pretty=True)
+    except Exception:  # noqa: BLE001
+        sql = _expression_sql(select)
+    if not sql:
+        return None
+    return sql.strip()
+
+
+def _agg_fn_key(agg: Any) -> str:
+    key = (getattr(agg, "key", None) or "").lower()
+    if key in _AGG_FN_KEYS:
+        return key
+    try:
+        name = (agg.sql_name() or "").lower()
+    except Exception:  # noqa: BLE001
+        name = ""
+    if name in _AGG_FN_KEYS:
+        return name
+    return key or "sum"
+
+
+def _column_agg_map(select: Any, exp: Any) -> dict[str, str]:
+    """Map output column → agg tag (sum/count/avg/min/max/group)."""
+    out: dict[str, str] = {}
+    for expression in select.expressions or []:
+        out_name: str | None = None
+        inner = expression
+        if isinstance(expression, exp.Alias):
+            out_name = expression.alias
+            inner = expression.this
+        elif isinstance(expression, exp.Column):
+            out_name = expression.name
+            inner = expression
+        elif hasattr(expression, "alias_or_name") and expression.alias_or_name:
+            out_name = expression.alias_or_name
+
+        if not out_name or inner is None:
+            continue
+
+        if isinstance(inner, exp.Star):
+            continue
+
+        if hasattr(inner, "find"):
+            agg = inner.find(exp.AggFunc)
+            if agg is not None:
+                out[out_name] = _agg_fn_key(agg)
+                continue
+
+        # Non-aggregated projection in an aggregate SELECT = group key
+        out[out_name] = "group"
+    return out
+
+
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
-    """Extract CTE-internal ops for on-demand expand."""
+    """Extract CTE-internal ops for on-demand expand.
+
+    Aggregate SELECTs only expose filter/window ops — group/case/agg fragments
+    belong on the CTE node via ``column_agg`` + ``select_sql``.
+    """
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
+    is_agg = _select_is_aggregate(select, exp)
 
     def add(kind: str, label: str, expression: str | None, columns: list[str] | None = None) -> None:
         if len(ops) >= _MAX_OPS_PER_CTE:
@@ -354,10 +424,6 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
         having_expr = having.this if getattr(having, "this", None) is not None else having
         add("filter", "having", _expression_sql(having_expr))
 
-    group = select.args.get("group")
-    if group is not None:
-        add("aggregate", "group by", _expression_sql(group) or "GROUP BY")
-
     cmp_types = (
         exp.EQ,
         exp.NEQ,
@@ -385,9 +451,14 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
 
         cols = [out_name] if out_name else None
         windows = list(inner.find_all(exp.Window))
-        cases = list(inner.find_all(exp.Case))
         for win in windows:
             add("window", "window", _expression_sql(win), cols)
+
+        # Aggregate CTE: skip case/derived/cast — full SELECT is on the node
+        if is_agg:
+            continue
+
+        cases = list(inner.find_all(exp.Case))
         for case in cases:
             add("case", "case", _expression_sql(case), cols)
 
@@ -405,8 +476,7 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
         if isinstance(inner, cmp_types) or any(isinstance(n, cmp_types) for n in inner.walk()):
             add("derived", "derived", _expression_sql(inner), cols)
             continue
-        # Skip per-column aggregates when GROUP BY already captured the block
-        if group is None and inner.find(exp.AggFunc) is not None:
+        if inner.find(exp.AggFunc) is not None:
             add("aggregate", "aggregate", _expression_sql(inner), cols)
 
     return ops

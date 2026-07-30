@@ -1,4 +1,4 @@
-import type { SqlGraph, SqlGraphNode, SqlGraphOp } from '../types'
+import type { SqlGraph, SqlGraphAggFn, SqlGraphNode, SqlGraphOp } from '../types'
 import { colKey } from './sqlGraphColumns'
 
 /** Collapse pure passthrough CTEs by rewiring neighbors A→passthrough→B into A→B. */
@@ -67,22 +67,26 @@ export function collapsePassthroughCtes(graph: SqlGraph): SqlGraph {
   }
 }
 
-/** Find ops that define a column on a CTE (or along a path of column keys). */
+const PATH_OP_KINDS = new Set(['filter', 'window'])
+
+/** Find ops that define a column — path auto-expand only for filter/window. */
 export function findDefiningOps(
   graph: SqlGraph,
   column: string,
   pathKeys?: Set<string>,
+  options?: { pathExpandOnly?: boolean },
 ): { cteId: string; op: SqlGraphOp }[] {
+  const pathExpandOnly = options?.pathExpandOnly ?? false
   const colLower = column.toLowerCase()
   const hits: { cteId: string; op: SqlGraphOp }[] = []
   for (const n of graph.nodes) {
     if (n.kind !== 'cte' || !n.ops?.length) continue
     if (pathKeys && !pathKeys.has(colKey(n.id, column))) {
-      // also allow ops that define the column even if path uses a rename later
       const defines = n.ops.some(o => o.columns?.some(c => c.toLowerCase() === colLower))
       if (!defines) continue
     }
     for (const op of n.ops) {
+      if (pathExpandOnly && !PATH_OP_KINDS.has(op.kind)) continue
       if (op.columns?.some(c => c.toLowerCase() === colLower)) {
         hits.push({ cteId: n.id, op })
       }
@@ -108,4 +112,53 @@ export function joinHighlightFromNode(
     if (e.target === joinNode.id) nodeIds.add(e.source)
   }
   return { columns, nodeIds }
+}
+
+const AGG_GLYPH: Record<SqlGraphAggFn, string> = {
+  sum: 'SUM',
+  count: 'CNT',
+  avg: 'AVG',
+  min: 'MIN',
+  max: 'MAX',
+  group: 'GRP',
+  none: '',
+}
+
+/** Short glyph for aggregate CTE columns (SUM / CNT / GRP). */
+export function aggFnGlyph(fn: SqlGraphAggFn | null | undefined): string | null {
+  if (!fn || fn === 'none') return null
+  return AGG_GLYPH[fn] ?? fn.toUpperCase()
+}
+
+export function aggFnLabel(fn: SqlGraphAggFn | null | undefined): string | null {
+  if (!fn || fn === 'none') return null
+  if (fn === 'group') return 'Group key'
+  if (fn === 'count') return 'Count'
+  return fn.charAt(0).toUpperCase() + fn.slice(1)
+}
+
+/** Split select_sql into lines and mark the line defining ``column``. */
+export function highlightSelectSqlLines(
+  sql: string,
+  column: string,
+): { text: string; highlight: boolean }[] {
+  const lines = sql.replace(/\r\n/g, '\n').split('\n')
+  const col = column.toLowerCase()
+  const asRe = new RegExp(`\\bas\\s+["\`]?${escapeRegExp(col)}["\`]?\\b`, 'i')
+  const bareRe = new RegExp(
+    `(^|[\\s,(])["\`]?${escapeRegExp(col)}["\`]?(\\s*[,)]|\\s*$)`,
+    'i',
+  )
+  return lines.map(text => {
+    const trimmed = text.trim()
+    if (!trimmed) return { text, highlight: false }
+    const highlight =
+      asRe.test(trimmed)
+      || (bareRe.test(trimmed) && !/\b(from|group|order|where|having)\b/i.test(trimmed))
+    return { text, highlight }
+  })
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }

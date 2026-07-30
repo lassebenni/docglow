@@ -66,6 +66,9 @@ export type SqlGraphOpKind =
   | "cast"
   | "calc";
 
+/** Per-column aggregation tag on aggregate CTE nodes (v4+). */
+export type SqlGraphAggFn = "sum" | "count" | "avg" | "min" | "max" | "group" | "none";
+
 export interface SqlGraphJoinKey {
   readonly left_column: string;
   readonly right_column: string;
@@ -90,10 +93,14 @@ export interface SqlGraphNode {
   readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>;
   readonly transforms?: ReadonlyArray<"aggregate" | "filter" | "window" | "other">;
   readonly columns?: ReadonlyArray<string>;
-  /** v3+: WHERE / CASE / WINDOW / … ops collapsed until CTE is expanded */
+  /** v3+: WHERE / WINDOW / … ops collapsed until CTE is expanded */
   readonly ops?: ReadonlyArray<SqlGraphOp>;
   /** Pure ``SELECT * FROM x`` CTE — collapsible in the UI */
   readonly passthrough?: boolean;
+  /** v4+: per-column SUM/CNT/GRP tags on aggregate CTEs */
+  readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>;
+  /** v4+: full SELECT text for aggregate CTE side panel */
+  readonly select_sql?: string;
   /** When kind=op, optional defining SQL (mirrored from SqlGraphOp) */
   readonly expression?: string;
   readonly op_kind?: SqlGraphOpKind;

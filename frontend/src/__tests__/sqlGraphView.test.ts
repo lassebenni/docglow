@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { SqlGraph } from '../types'
 import {
+  aggFnGlyph,
   collapsePassthroughCtes,
   findDefiningOps,
+  highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../utils/sqlGraphView'
 
@@ -58,6 +60,11 @@ describe('findDefiningOps', () => {
     expect(hits[0]?.op.expression).toBe('x > 0')
     expect(hits[0]?.cteId).toBe('cte:calc')
   })
+
+  it('pathExpandOnly skips derived ops', () => {
+    const hits = findDefiningOps(sample, 'flag', undefined, { pathExpandOnly: true })
+    expect(hits).toHaveLength(0)
+  })
 })
 
 describe('joinHighlightFromNode', () => {
@@ -67,5 +74,29 @@ describe('joinHighlightFromNode', () => {
     expect(hl?.columns.has('id')).toBe(true)
     expect(hl?.nodeIds.has('cte:calc')).toBe(true)
     expect(hl?.nodeIds.has('output:m')).toBe(true)
+  })
+})
+
+describe('aggFnGlyph', () => {
+  it('maps agg tags to short labels', () => {
+    expect(aggFnGlyph('sum')).toBe('SUM')
+    expect(aggFnGlyph('count')).toBe('CNT')
+    expect(aggFnGlyph('group')).toBe('GRP')
+    expect(aggFnGlyph('none')).toBeNull()
+  })
+})
+
+describe('highlightSelectSqlLines', () => {
+  it('highlights the alias line for a column', () => {
+    const sql = `SELECT
+  order_id,
+  SUM(supply_cost) AS order_cost,
+  SUM(CASE WHEN is_food_item THEN 1 ELSE 0 END) AS count_food_items
+FROM order_items
+GROUP BY 1`
+    const lines = highlightSelectSqlLines(sql, 'count_food_items')
+    const hit = lines.filter(l => l.highlight)
+    expect(hit).toHaveLength(1)
+    expect(hit[0]?.text.toLowerCase()).toContain('count_food_items')
   })
 })

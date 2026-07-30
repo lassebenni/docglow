@@ -127,6 +127,8 @@ export type SqlGraphOpKind =
   | 'cast'
   | 'calc'
 
+export type SqlGraphAggFn = 'sum' | 'count' | 'avg' | 'min' | 'max' | 'group' | 'none'
+
 export interface SqlGraphJoinKey {
   readonly left_column: string
   readonly right_column: string
@@ -152,6 +154,8 @@ export interface SqlGraphNode {
   readonly columns?: ReadonlyArray<string>
   readonly ops?: ReadonlyArray<SqlGraphOp>
   readonly passthrough?: boolean
+  readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>
+  readonly select_sql?: string
   readonly expression?: string
   readonly op_kind?: SqlGraphOpKind
 }
