@@ -37,6 +37,8 @@ import {
   aggFnGlyph,
   aggFnLabel,
   collapsePassthroughCtes,
+  cteFilterOps,
+  filterOpColumns,
   highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../../utils/sqlGraphView'
@@ -48,87 +50,42 @@ const COL_ROW_H = 18
 const MAX_VISIBLE_COLS = 18
 const JOIN_W = 140
 const JOIN_H = 44
-const OP_W = 128
-const OP_H = 44
 const PATH_COLOR = '#d97706'
 const JOIN_HL_COLOR = '#2563eb'
 const OP_ACCENT: Record<SqlGraphOpKind, string> = {
   filter: '#0d9488',
 }
+const FILT_COLOR = OP_ACCENT.filter
+
 
 const KIND_ACCENT: Record<string, string> = {
   parent: '#16a34a',
   cte: '#7c3aed',
   join: '#2563eb',
   output: '#c2410c',
-  op: '#db2777',
 }
 
 function nodeWidth(n: SqlGraphNode): number {
   if (n.kind === 'join') return JOIN_W
-  if (n.kind === 'op') return OP_W
   return NODE_W
 }
 
 function nodeHeight(n: SqlGraphNode): number {
   if (n.kind === 'join') return JOIN_H
-  if (n.kind === 'op') return OP_H
   const cols = n.columns?.length ?? 0
   const visible = Math.min(cols, MAX_VISIBLE_COLS)
   return HEADER_H + (visible > 0 ? visible * COL_ROW_H + 4 : 8)
 }
 
-/** Materialize expanded CTE ops into the layout graph. */
-function expandGraph(
-  graph: SqlGraph,
-  expanded: Set<string>,
-): { nodes: SqlGraphNode[]; edges: { source: string; target: string; label?: string }[] } {
-  const nodes: SqlGraphNode[] = [...graph.nodes]
-  const edges = graph.edges.map(e => ({ ...e }))
-  const byId = new Map(nodes.map(n => [n.id, n]))
-
-  for (const cteId of expanded) {
-    const cte = byId.get(cteId)
-    const ops = cte?.ops
-    if (!cte || !ops?.length) continue
-
-    for (const op of ops) {
-      nodes.push({
-        id: op.id,
-        kind: 'op',
-        label: op.label,
-        expression: op.expression,
-        op_kind: op.kind,
-        columns: op.columns,
-      })
-    }
-
-    const incoming = edges.filter(e => e.target === cteId)
-    for (const e of incoming) {
-      e.target = ops[0]!.id
-    }
-    for (let i = 0; i < ops.length - 1; i++) {
-      edges.push({ source: ops[i]!.id, target: ops[i + 1]!.id })
-    }
-    edges.push({ source: ops[ops.length - 1]!.id, target: cteId })
-  }
-
-  return { nodes, edges }
-}
-
-function layoutGraph(
-  graph: SqlGraph,
-  expanded: Set<string>,
-): { nodes: Node[]; edges: Edge[] } {
-  const expandedGraph = expandGraph(graph, expanded)
+function layoutGraph(graph: SqlGraph): { nodes: Node[]; edges: Edge[] } {
   const g = new dagre.graphlib.Graph()
   g.setDefaultEdgeLabel(() => ({}))
   g.setGraph({ rankdir: 'LR', nodesep: 40, ranksep: 72, marginx: 24, marginy: 24 })
 
-  for (const n of expandedGraph.nodes) {
+  for (const n of graph.nodes) {
     g.setNode(n.id, { width: nodeWidth(n), height: nodeHeight(n) })
   }
-  for (const e of expandedGraph.edges) {
+  for (const e of graph.edges) {
     g.setEdge(e.source, e.target)
   }
   dagre.layout(g)
@@ -147,14 +104,11 @@ function layoutGraph(
     return c
   }
 
-  const nodes: Node[] = expandedGraph.nodes.map(n => {
+  const nodes: Node[] = graph.nodes.map(n => {
     const pos = g.node(n.id)
     const w = nodeWidth(n)
     const h = nodeHeight(n)
-    const accent =
-      n.kind === 'op' && n.op_kind
-        ? OP_ACCENT[n.op_kind]
-        : (colorForJoin(n) ?? KIND_ACCENT[n.kind] ?? '#64748b')
+    const accent = colorForJoin(n) ?? KIND_ACCENT[n.kind] ?? '#64748b'
     return {
       id: n.id,
       type: 'sql',
@@ -165,7 +119,7 @@ function layoutGraph(
     }
   })
 
-  const edges: Edge[] = expandedGraph.edges.map((e, i) => ({
+  const edges: Edge[] = graph.edges.map((e, i) => ({
     id: `e-${i}-${e.source}-${e.target}`,
     source: e.source,
     target: e.target,
@@ -185,12 +139,11 @@ type SqlNodeData = SqlGraphNode & {
   highlightedCols?: Set<string>
   selectedCol?: string | null
   columnKinds?: Map<string, TransformationType>
-  expanded?: boolean
-  selectedOp?: boolean
+  filterSelected?: boolean
+  filterHighlightCols?: Set<string>
   joinHighlightCols?: Set<string>
   onColumnClick?: (nodeId: string, column: string) => void
-  onToggleExpand?: (cteId: string) => void
-  onOpClick?: (op: SqlGraphOp) => void
+  onFilterClick?: (cteId: string, ops: SqlGraphOp[]) => void
   onJoinClick?: (nodeId: string) => void
 }
 
@@ -207,99 +160,77 @@ function columnTag(
 function SqlGraphNodeView({ id, data }: NodeProps) {
   const d = data as unknown as SqlNodeData
   const isJoin = d.kind === 'join'
-  const isOp = d.kind === 'op'
   const isAgg = d.transforms?.includes('aggregate')
-  const hasOps = (d.ops?.length ?? 0) > 0
-  const subtitle = isOp
-    ? (d.columns?.join(', ') || d.op_kind || 'op')
-    : isJoin
-      ? (d.join_keys?.map(k => `${k.left_column}=${k.right_column}`).join(', ') || d.join_type || '')
-      : isAgg
-        ? 'cte · aggregate'
-        : d.kind === 'parent'
-          ? 'parent'
-          : d.kind === 'output'
-            ? 'output'
-            : d.transforms?.includes('window')
-              ? 'cte · window'
-              : hasOps
-                ? `cte · ${d.ops!.length} filter${d.ops!.length === 1 ? '' : 's'}`
-                : 'cte'
+  const isCte = d.kind === 'cte'
+  const hasFilterOps = isCte && cteFilterOps(d).length > 0
+  // Join cards activate the join panel; filters only via the FILT badge (avoid nested buttons).
+  const clickable = isJoin
+  const subtitle = isJoin
+    ? (d.join_keys?.map(k => `${k.left_column}=${k.right_column}`).join(', ') || d.join_type || '')
+    : isAgg
+      ? 'cte · aggregate'
+      : d.kind === 'parent'
+        ? 'parent'
+        : d.kind === 'output'
+          ? 'output'
+          : d.transforms?.includes('window')
+            ? 'cte · window'
+            : hasFilterOps
+              ? 'cte · filtered'
+              : 'cte'
 
-  const cols = isOp ? [] : (d.columns ?? [])
+  const cols = d.columns ?? []
   const overflow = cols.length > MAX_VISIBLE_COLS
   const visibleCols = overflow ? cols.slice(0, MAX_VISIBLE_COLS - 1) : cols
   const width = nodeWidth(d)
+
+  const handleActivate = (e: { stopPropagation: () => void; preventDefault?: () => void }) => {
+    e.stopPropagation()
+    if (isJoin) d.onJoinClick?.(id)
+  }
 
   return (
     <>
       <Handle type="target" position={Position.Left} className="!opacity-0 !w-0 !h-0" />
       <div
-        role={isOp || isJoin ? 'button' : undefined}
-        tabIndex={isOp || isJoin ? 0 : undefined}
-        onClick={
-          isOp
-            ? e => {
-                e.stopPropagation()
-                d.onOpClick?.({
-                  id: d.id,
-                  kind: d.op_kind ?? 'filter',
-                  label: d.label,
-                  expression: d.expression,
-                  columns: d.columns,
-                })
-              }
-            : isJoin
-              ? e => {
-                  e.stopPropagation()
-                  d.onJoinClick?.(id)
-                }
-              : undefined
-        }
+        role={clickable ? 'button' : undefined}
+        tabIndex={clickable ? 0 : undefined}
+        onClick={clickable ? handleActivate : undefined}
         onKeyDown={
-          isOp
+          clickable
             ? e => {
                 if (e.key === 'Enter' || e.key === ' ') {
                   e.preventDefault()
-                  d.onOpClick?.({
-                    id: d.id,
-                    kind: d.op_kind ?? 'filter',
-                    label: d.label,
-                    expression: d.expression,
-                    columns: d.columns,
-                  })
+                  handleActivate(e)
                 }
               }
-            : isJoin
-              ? e => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault()
-                    d.onJoinClick?.(id)
-                  }
-                }
-              : undefined
+            : undefined
         }
         style={{
           width,
-          minHeight: isJoin || isOp ? (isOp ? OP_H : JOIN_H) : HEADER_H,
+          minHeight: isJoin ? JOIN_H : HEADER_H,
           borderRadius: 6,
-          border: d.selectedOp
-            ? `1px solid ${PATH_COLOR}`
+          border: d.filterSelected
+            ? `1px solid ${FILT_COLOR}`
             : d.joinHighlightCols && isJoin
               ? `1px solid ${JOIN_HL_COLOR}`
               : `1px solid var(--border, #e2e8f0)`,
-          background: isOp ? `${d.accent}12` : 'var(--bg, #fff)',
-          boxShadow: d.kind === 'output' ? `0 0 0 2px ${d.accent}33` : undefined,
+          background: 'var(--bg, #fff)',
+          boxShadow: d.filterSelected
+            ? `0 0 0 2px ${FILT_COLOR}33`
+            : d.kind === 'output'
+              ? `0 0 0 2px ${d.accent}33`
+              : undefined,
           overflow: 'hidden',
           fontSize: 11,
-          cursor: isOp || isJoin ? 'pointer' : undefined,
+          cursor: clickable ? 'pointer' : undefined,
         }}
       >
         <div
           style={{
             display: 'flex',
             alignItems: 'stretch',
-            minHeight: isJoin || isOp ? (isOp ? OP_H : JOIN_H) : HEADER_H,
+            minHeight: isJoin ? JOIN_H : HEADER_H,
           }}
         >
           <div style={{ width: 4, background: d.accent, flexShrink: 0 }} />
@@ -316,29 +247,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                 gap: 4,
               }}
             >
-              {hasOps && !isOp && (
-                <button
-                  type="button"
-                  title={d.expanded ? 'Collapse CTE ops' : 'Expand CTE ops'}
-                  onClick={e => {
-                    e.stopPropagation()
-                    d.onToggleExpand?.(id)
-                  }}
-                  style={{
-                    border: 'none',
-                    background: 'transparent',
-                    padding: 0,
-                    cursor: 'pointer',
-                    color: 'var(--text-muted, #64748b)',
-                    fontSize: 10,
-                    lineHeight: 1,
-                    flexShrink: 0,
-                  }}
-                >
-                  {d.expanded ? '▼' : '▶'}
-                </button>
-              )}
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', textTransform: isOp ? 'uppercase' : undefined }}>
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {d.label}
               </span>
               {isAgg && (
@@ -357,7 +266,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                   agg
                 </span>
               )}
-              {d.transforms?.includes('window') && !isOp && (
+              {d.transforms?.includes('window') && (
                 <span
                   style={{
                     fontSize: 8,
@@ -371,6 +280,37 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                   }}
                 >
                   win
+                </span>
+              )}
+              {hasFilterOps && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  title="View filter"
+                  onClick={e => {
+                    e.stopPropagation()
+                    d.onFilterClick?.(id, cteFilterOps(d))
+                  }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      d.onFilterClick?.(id, cteFilterOps(d))
+                    }
+                  }}
+                  style={{
+                    fontSize: 8,
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    color: '#fff',
+                    background: FILT_COLOR,
+                    borderRadius: 3,
+                    padding: '0 3px',
+                    flexShrink: 0,
+                    cursor: 'pointer',
+                  }}
+                >
+                  filt
                 </span>
               )}
             </div>
@@ -387,12 +327,13 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
             </div>
           </div>
         </div>
-        {!isJoin && !isOp && visibleCols.length > 0 && (
+        {!isJoin && visibleCols.length > 0 && (
           <div style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '2px 0' }}>
             {visibleCols.map(col => {
               const active = d.highlightedCols?.has(col)
               const selected = d.selectedCol === col
               const joinHl = d.joinHighlightCols?.has(col)
+              const filterHl = d.filterHighlightCols?.has(col)
               const kind = d.columnKinds?.get(col)
               const agg = d.column_agg?.[col]
               const glyph = columnTag(col, d.column_agg, kind)
@@ -404,6 +345,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                 <button
                   key={col}
                   type="button"
+                  data-cte-col={col}
                   onClick={e => {
                     e.stopPropagation()
                     d.onColumnClick?.(id, col)
@@ -420,16 +362,20 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                       ? `${PATH_COLOR}33`
                       : joinHl
                         ? `${JOIN_HL_COLOR}22`
-                        : active
-                          ? `${PATH_COLOR}18`
-                          : 'transparent',
+                        : filterHl
+                          ? `${FILT_COLOR}22`
+                          : active
+                            ? `${PATH_COLOR}18`
+                            : 'transparent',
                     color:
-                      active || selected || joinHl
+                      active || selected || joinHl || filterHl
                         ? joinHl && !selected && !active
                           ? '#1e40af'
-                          : '#92400e'
+                          : filterHl && !selected && !active && !joinHl
+                            ? '#0f766e'
+                            : '#92400e'
                         : 'var(--text, #0f172a)',
-                    fontWeight: selected || joinHl ? 700 : active ? 600 : 400,
+                    fontWeight: selected || joinHl || filterHl ? 700 : active ? 600 : 400,
                     fontSize: 10,
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                     padding: '2px 10px 2px 12px',
@@ -441,7 +387,9 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                       ? `2px solid ${PATH_COLOR}`
                       : joinHl
                         ? `2px solid ${JOIN_HL_COLOR}`
-                        : '2px solid transparent',
+                        : filterHl
+                          ? `2px solid ${FILT_COLOR}`
+                          : '2px solid transparent',
                   }}
                 >
                   {glyph && (
@@ -511,9 +459,8 @@ interface CteFlowProps {
 
 export function CteFlow({ graph }: CteFlowProps) {
   const [showPassthrough, setShowPassthrough] = useState(false)
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [selected, setSelected] = useState<{ nodeId: string; column: string } | null>(null)
-  const [selectedOp, setSelectedOp] = useState<SqlGraphOp | null>(null)
+  const [selectedFilter, setSelectedFilter] = useState<{ cteId: string; ops: SqlGraphOp[] } | null>(null)
   const [joinHl, setJoinHl] = useState<{ columns: Set<string>; nodeIds: Set<string> } | null>(null)
 
   const hasPassthrough = useMemo(
@@ -526,7 +473,7 @@ export function CteFlow({ graph }: CteFlowProps) {
     [graph, showPassthrough],
   )
 
-  const layout = useMemo(() => layoutGraph(viewGraph, expanded), [viewGraph, expanded])
+  const layout = useMemo(() => layoutGraph(viewGraph), [viewGraph])
 
   const path = useMemo(() => {
     if (!selected) return null
@@ -590,13 +537,19 @@ export function CteFlow({ graph }: CteFlowProps) {
     )
   }, [selected, viewGraph.column_lineage, path, selectedAggFn])
 
+  // WHERE/HAVING apply to the CTE row set — show on every column of that node.
+  const selectedFilters = useMemo(() => {
+    if (!selected || !selectedNode) return []
+    return cteFilterOps(selectedNode)
+  }, [selected, selectedNode])
+
   const highlighted = path?.keys ?? new Set<string>()
   const pathEdges = path?.edgeKeys ?? new Set<string>()
 
   const onColumnClick = useCallback(
     (nodeId: string, column: string) => {
       setJoinHl(null)
-      setSelectedOp(null)
+      setSelectedFilter(null)
       setSelected(prev =>
         prev?.nodeId === nodeId && prev.column === column
           ? null
@@ -606,25 +559,16 @@ export function CteFlow({ graph }: CteFlowProps) {
     [],
   )
 
-  const onToggleExpand = useCallback((cteId: string) => {
-    setExpanded(prev => {
-      const next = new Set(prev)
-      if (next.has(cteId)) next.delete(cteId)
-      else next.add(cteId)
-      return next
-    })
-  }, [])
-
-  const onOpClick = useCallback((op: SqlGraphOp) => {
+  const onFilterClick = useCallback((cteId: string, ops: SqlGraphOp[]) => {
     setSelected(null)
     setJoinHl(null)
-    setSelectedOp(prev => (prev?.id === op.id ? null : op))
+    setSelectedFilter(prev => (prev?.cteId === cteId ? null : { cteId, ops }))
   }, [])
 
   const onJoinClick = useCallback(
     (nodeId: string) => {
       setSelected(null)
-      setSelectedOp(null)
+      setSelectedFilter(null)
       const joinNode = viewGraph.nodes.find(n => n.id === nodeId)
       if (!joinNode) return
       const hl = joinHighlightFromNode(viewGraph, joinNode)
@@ -643,6 +587,7 @@ export function CteFlow({ graph }: CteFlowProps) {
         }
         const selCol = selected?.nodeId === n.id ? selected.column : null
         const joinCols = joinHl && joinHl.nodeIds.has(n.id) ? joinHl.columns : undefined
+        const filterCols = selectedFilter?.cteId === n.id ? filterOpColumns(selectedFilter.ops) : undefined
         return {
           ...n,
           data: {
@@ -650,12 +595,11 @@ export function CteFlow({ graph }: CteFlowProps) {
             highlightedCols: colsOnNode,
             selectedCol: selCol,
             columnKinds: columnKindsForNode(viewGraph.column_lineage, n.id),
-            expanded: expanded.has(n.id),
-            selectedOp: selectedOp?.id === n.id,
+            filterSelected: selectedFilter?.cteId === n.id,
+            filterHighlightCols: filterCols,
             joinHighlightCols: joinCols,
             onColumnClick,
-            onToggleExpand,
-            onOpClick,
+            onFilterClick,
             onJoinClick,
           },
         }
@@ -665,12 +609,10 @@ export function CteFlow({ graph }: CteFlowProps) {
       highlighted,
       selected,
       onColumnClick,
-      onToggleExpand,
-      onOpClick,
+      onFilterClick,
       onJoinClick,
       viewGraph.column_lineage,
-      expanded,
-      selectedOp,
+      selectedFilter,
       joinHl,
     ],
   )
@@ -712,7 +654,7 @@ export function CteFlow({ graph }: CteFlowProps) {
 
   const clearSelection = useCallback(() => {
     setSelected(null)
-    setSelectedOp(null)
+    setSelectedFilter(null)
     setJoinHl(null)
   }, [])
 
@@ -771,14 +713,14 @@ export function CteFlow({ graph }: CteFlowProps) {
         <Background gap={16} size={1} color="var(--border, #e2e8f0)" />
       </ReactFlow>
 
-      {selectedOp && (
+      {selectedFilter && (
         <div
           className="react-flow__panel"
           style={{
             position: 'absolute',
             top: 0,
             right: 0,
-            width: 300,
+            width: 320,
             height: '100%',
             background: 'var(--bg, #fff)',
             borderLeft: '1px solid var(--border, #e2e8f0)',
@@ -795,12 +737,23 @@ export function CteFlow({ graph }: CteFlowProps) {
               marginBottom: 12,
             }}
           >
-            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
-              CTE op
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
+                Filter
+              </div>
+              <div
+                style={{
+                  fontSize: 11,
+                  color: 'var(--text-muted, #64748b)',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                }}
+              >
+                {labelOf(selectedFilter.cteId)}
+              </div>
             </div>
             <button
               type="button"
-              onClick={() => setSelectedOp(null)}
+              onClick={() => setSelectedFilter(null)}
               style={{
                 background: 'none',
                 border: 'none',
@@ -816,42 +769,62 @@ export function CteFlow({ graph }: CteFlowProps) {
               </svg>
             </button>
           </div>
-          <div style={{ fontSize: 12, marginBottom: 8, color: 'var(--text, #0f172a)' }}>
-            <span style={{ color: 'var(--text-muted, #64748b)' }}>Kind </span>
-            <span style={{ textTransform: 'uppercase', fontWeight: 600 }}>{selectedOp.kind}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {selectedFilter.ops.map(op => (
+              <div key={op.id}>
+                <div style={{ fontSize: 12, marginBottom: 6, color: 'var(--text, #0f172a)' }}>
+                  <span
+                    style={{
+                      fontSize: 9,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      color: '#fff',
+                      background: FILT_COLOR,
+                      borderRadius: 3,
+                      padding: '1px 5px',
+                    }}
+                  >
+                    {op.label}
+                  </span>
+                </div>
+                {op.expression && (
+                  <pre
+                    style={{
+                      margin: 0,
+                      marginBottom: op.columns?.length ? 6 : 0,
+                      padding: '8px 10px',
+                      borderRadius: 6,
+                      background: 'var(--bg-surface, #f1f5f9)',
+                      fontSize: 11,
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      whiteSpace: 'pre-wrap',
+                      wordBreak: 'break-word',
+                      color: 'var(--text, #0f172a)',
+                    }}
+                  >
+                    {op.expression}
+                  </pre>
+                )}
+                {op.columns && op.columns.length > 0 && (
+                  <div style={{ fontSize: 11, color: 'var(--text-muted, #64748b)' }}>
+                    Columns{' '}
+                    <span
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: 'var(--text, #0f172a)',
+                      }}
+                    >
+                      {op.columns.join(', ')}
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
           </div>
-          {selectedOp.columns && selectedOp.columns.length > 0 && (
-            <div style={{ fontSize: 12, marginBottom: 10, color: 'var(--text, #0f172a)' }}>
-              <span style={{ color: 'var(--text-muted, #64748b)' }}>Columns </span>
-              <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
-                {selectedOp.columns.join(', ')}
-              </span>
-            </div>
-          )}
-          {selectedOp.expression && (
-            <div>
-              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>Expression</div>
-              <pre
-                style={{
-                  margin: 0,
-                  padding: '8px 10px',
-                  borderRadius: 6,
-                  background: 'var(--bg-surface, #f1f5f9)',
-                  fontSize: 11,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                  color: 'var(--text, #0f172a)',
-                }}
-              >
-                {selectedOp.expression}
-              </pre>
-            </div>
-          )}
         </div>
       )}
 
-      {!selectedOp && selected && (
+      {!selectedFilter && selected && (
         <div
           className="react-flow__panel"
           style={{
@@ -948,6 +921,52 @@ export function CteFlow({ graph }: CteFlowProps) {
                 <span>{selectedRename.oldName}</span>
                 <span style={{ color: PATH_COLOR, fontWeight: 700 }}>→</span>
                 <span style={{ color: PATH_COLOR, fontWeight: 700 }}>{selectedRename.newName}</span>
+              </div>
+            </div>
+          )}
+          {selectedFilters.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6, fontSize: 12 }}>
+                Filtered by
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {selectedFilters.map(op => (
+                  <div
+                    key={op.id}
+                    style={{
+                      fontSize: 12,
+                      background: 'var(--bg-surface, #f1f5f9)',
+                      borderRadius: 6,
+                      padding: '8px 10px',
+                    }}
+                  >
+                    <span
+                      style={{
+                        fontSize: 9,
+                        fontWeight: 700,
+                        textTransform: 'uppercase',
+                        color: '#fff',
+                        background: FILT_COLOR,
+                        borderRadius: 3,
+                        padding: '1px 5px',
+                        marginRight: 6,
+                      }}
+                    >
+                      {op.label}
+                    </span>
+                    {' '}
+                    {op.expression && (
+                      <span
+                        style={{
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                          color: 'var(--text, #0f172a)',
+                        }}
+                      >
+                        {op.expression}
+                      </span>
+                    )}
+                  </div>
+                ))}
               </div>
             </div>
           )}

@@ -126,3 +126,41 @@ def expression_sql(expression: Any) -> str | None:
         return inner.sql()
     except Exception:  # noqa: BLE001
         return str(inner) if inner is not None else None
+
+
+def unique_column_refs(expression: Any, exp: Any) -> list[dict[str, str | None]]:
+    """Unique ``(table, column)`` refs in an expression (order preserved).
+
+    Dedupes on ``(table.lower()|None, name.lower())``. Skips ``*``.
+    """
+    if expression is None or not hasattr(expression, "find_all"):
+        return []
+    seen: set[tuple[str | None, str]] = set()
+    refs: list[dict[str, str | None]] = []
+    for col in expression.find_all(exp.Column):
+        name = col.name
+        if not name or name == "*":
+            continue
+        table = col.table or None
+        key = (table.lower() if table else None, name.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        refs.append({"table": table, "column": name})
+    return refs
+
+
+def unique_column_names(expression: Any, exp: Any) -> list[str]:
+    """Unique column names in an expression (case-insensitive dedupe, order preserved)."""
+    seen: set[str] = set()
+    cols: list[str] = []
+    for ref in unique_column_refs(expression, exp):
+        name = ref.get("column")
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cols.append(name)
+    return cols

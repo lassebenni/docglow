@@ -107,7 +107,7 @@ export interface JoinKeyPair {
 
 export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
-export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output' | 'op'
+export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output'
 
 export type SqlGraphOpKind = 'filter'
 
@@ -140,8 +140,6 @@ export interface SqlGraphNode {
   readonly passthrough?: boolean
   readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>
   readonly select_sql?: string
-  readonly expression?: string
-  readonly op_kind?: SqlGraphOpKind
 }
 
 export interface SqlGraphEdge {

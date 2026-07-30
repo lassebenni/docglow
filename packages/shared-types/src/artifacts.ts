@@ -81,7 +81,7 @@ export interface JoinIndirectParent {
  */
 export type JoinIndirectData = Record<string, JoinIndirectParent[]>;
 
-export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output" | "op";
+export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output";
 
 export type SqlGraphOpKind = "filter";
 
@@ -93,7 +93,7 @@ export interface SqlGraphJoinKey {
   readonly right_column: string;
 }
 
-/** Internal CTE operation for on-demand expand (v3+). */
+/** CTE-level op metadata (WHERE/HAVING) for FILT badge + panels — not graph nodes. */
 export interface SqlGraphOp {
   readonly id: string;
   readonly kind: SqlGraphOpKind;
@@ -112,7 +112,7 @@ export interface SqlGraphNode {
   readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>;
   readonly transforms?: ReadonlyArray<"aggregate" | "filter" | "window" | "other">;
   readonly columns?: ReadonlyArray<string>;
-  /** v3+: WHERE / HAVING filter ops collapsed until CTE is expanded */
+  /** WHERE / HAVING filter ops (FILT badge + column Filtered by) */
   readonly ops?: ReadonlyArray<SqlGraphOp>;
   /** Pure ``SELECT * FROM x`` CTE — collapsible in the UI */
   readonly passthrough?: boolean;
@@ -120,9 +120,6 @@ export interface SqlGraphNode {
   readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>;
   /** v4+: full SELECT text for aggregate CTE side panel */
   readonly select_sql?: string;
-  /** When kind=op, optional defining SQL (mirrored from SqlGraphOp) */
-  readonly expression?: string;
-  readonly op_kind?: SqlGraphOpKind;
 }
 
 export interface SqlGraphEdge {

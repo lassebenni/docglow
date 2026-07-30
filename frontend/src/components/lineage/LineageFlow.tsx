@@ -378,6 +378,13 @@ export interface LineageFlowProps {
   joinIndirectData?: Record<string, ReadonlyArray<{ readonly model: string; readonly kind: string }>>
   /** Map of model ID → list of column names (for DagNode expansion) */
   modelColumns?: Record<string, string[]>
+  /**
+   * When false, skip the small-graph auto-expand of column lists.
+   * Model Lineage passes this from the Table/Columns toggle (default Table)
+   * so the button state matches what is rendered. Global Lineage keeps the
+   * default true.
+   */
+  autoExpandColumns?: boolean
 }
 
 function LineageFlowInner({
@@ -396,6 +403,7 @@ function LineageFlowInner({
   joinBasesData,
   joinIndirectData,
   modelColumns,
+  autoExpandColumns = true,
 }: LineageFlowProps) {
   const navigate = useNavigate()
   const { fitView, getNodes } = useReactFlow()
@@ -501,9 +509,10 @@ function LineageFlowInner({
 
   // Auto-expand column lists when the graph has few enough models.
   // Computed from raw nodes prop (before layout) to avoid circular dependency.
+  // Disabled when the Table/Columns control is on Table (autoExpandColumns=false).
   const AUTO_EXPAND_THRESHOLD = 12
   const autoExpandNodeIds = useMemo(() => {
-    if (!columnLineageData) return new Set<string>()
+    if (!autoExpandColumns || !columnLineageData) return new Set<string>()
 
     const dataNodes = nodes.filter(n => !folderNodeIds.has(n.id))
     if (dataNodes.length > AUTO_EXPAND_THRESHOLD) return new Set<string>()
@@ -515,7 +524,7 @@ function LineageFlowInner({
       }
     }
     return ids
-  }, [nodes, folderNodeIds, columnLineageData, upstreamColumnLineageIds])
+  }, [autoExpandColumns, nodes, folderNodeIds, columnLineageData, upstreamColumnLineageIds])
 
   // Combined set of effectively expanded nodes for layout calculation
   const layoutExpandedIds = useMemo(() => {

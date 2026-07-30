@@ -13,6 +13,8 @@ from docglow.lineage.sql_ast import (
     normalize_table_ref,
     select_is_aggregate,
     table_ref,
+    unique_column_names,
+    unique_column_refs,
 )
 from docglow.lineage.table_resolver import TableResolver
 
@@ -155,7 +157,7 @@ def build_sql_graph(
         if _select_has_window(select, exp):
             transforms.append("window")
 
-        # Only WHERE/HAVING as expandable ops — column formulas live on the panel
+        # WHERE/HAVING → filter ops metadata (FILT badge / panel), not graph nodes
         ops = _extract_cte_ops(select, exp, cte_id=cte_id)
         for op in ops:
             if op["kind"] == "filter" and "filter" not in transforms:
@@ -417,10 +419,10 @@ def _select_has_window(select: Any, exp: Any) -> bool:
 
 
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
-    """Extract CTE-internal ops for on-demand expand.
+    """Extract WHERE / HAVING as filter metadata on the CTE (panel + FILT badge).
 
-    Only WHERE / HAVING become graph op nodes. Window / CASE / derived / agg
-    formulas are shown on the column panel via ``expression`` + lineage deps.
+    Not expanded as graph op nodes — same ambient pattern as window / aggregate.
+    ``columns`` lists predicate inputs for highlight + column-panel ``Filtered by``.
     """
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
@@ -446,12 +448,22 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
     where = select.args.get("where")
     if where is not None:
         where_expr = where.this if getattr(where, "this", None) is not None else where
-        add("filter", "where", expression_sql(where_expr))
+        add(
+            "filter",
+            "where",
+            expression_sql(where_expr),
+            unique_column_names(where_expr, exp),
+        )
 
     having = select.args.get("having")
     if having is not None:
         having_expr = having.this if getattr(having, "this", None) is not None else having
-        add("filter", "having", expression_sql(having_expr))
+        add(
+            "filter",
+            "having",
+            expression_sql(having_expr),
+            unique_column_names(having_expr, exp),
+        )
 
     return ops
 
@@ -655,21 +667,7 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
 
     def expr_sources(inner: Any) -> list[dict[str, str | None]]:
-        if not hasattr(inner, "find_all"):
-            return []
-        seen: set[tuple[str | None, str]] = set()
-        sources: list[dict[str, str | None]] = []
-        for col in inner.find_all(exp.Column):
-            name = col.name
-            if not name or name == "*":
-                continue
-            table = col.table or None
-            key = (table.lower() if table else None, name.lower())
-            if key in seen:
-                continue
-            seen.add(key)
-            sources.append({"table": table, "column": name})
-        return sources
+        return unique_column_refs(inner, exp)
 
     for expression in select.expressions or []:
         # table.*
