@@ -35,6 +35,7 @@ class ColumnDependency:
     source_table: str  # Table name as parsed from SQL (e.g. "schema.table")
     source_column: str  # Column name in the source table
     transformation: str  # "passthrough" | "rename" | "aggregated" | "derived" | "unknown"
+    expression: str | None = None  # Defining SQL expr for derived/aggregated columns
 
 
 def detect_dialect(adapter_type: str | None) -> str | None:
@@ -206,7 +207,7 @@ def _trace_column_in_executor(
                 schema=schema or {},
                 dialect=dialect,
             )
-            deps = _collect_dependencies(node)
+            deps = _collect_dependencies(node, output_column=col_name)
             if deps:
                 return deps
         except Exception:  # noqa: BLE001
@@ -221,7 +222,7 @@ def _trace_column_in_executor(
                 schema={},
                 dialect=dialect,
             )
-            return _collect_dependencies(node)
+            return _collect_dependencies(node, output_column=col_name)
         except Exception:  # noqa: BLE001
             return []
 
@@ -370,7 +371,10 @@ def _get_excluded_columns(select: Any) -> set[str]:
     return excluded
 
 
-def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
+def _collect_dependencies(
+    root_node: Any,
+    output_column: str | None = None,
+) -> list[ColumnDependency]:
     """Walk a SQLGlot lineage node tree and collect leaf dependencies.
 
     The lineage tree has:
@@ -380,13 +384,18 @@ def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
     For nodes with Table sources (true leaves), we extract the table and column.
     When a leaf is a '*' (from SELECT *), we look at the parent node for the
     actual column name.
+
+    Transformation is classified across the whole lineage tree (not just the
+    outermost SELECT), so CTE-defining expressions like
+    ``coalesce(type = 'jaffle', false)`` stay ``derived`` even when the outer
+    query is ``SELECT * FROM cte``.
     """
     from sqlglot import exp
 
     deps: list[ColumnDependency] = []
     seen: set[tuple[str, str]] = set()
 
-    root_transformation = _classify_transformation(root_node.expression)
+    transformation, expression = _classify_lineage_tree(root_node)
 
     # Collect all nodes with their parent context
     all_nodes: list[tuple[Any, Any | None]] = []
@@ -417,11 +426,20 @@ def _collect_dependencies(root_node: Any) -> list[ColumnDependency]:
                 continue
             seen.add(key)
 
+            dep_transformation = transformation
+            if (
+                dep_transformation == "passthrough"
+                and output_column
+                and output_column.lower() != source_column.lower()
+            ):
+                dep_transformation = "rename"
+
             deps.append(
                 ColumnDependency(
                     source_table=source_table,
                     source_column=source_column,
-                    transformation=root_transformation,
+                    transformation=dep_transformation,
+                    expression=expression if dep_transformation in ("derived", "aggregated") else None,
                 )
             )
 
@@ -453,8 +471,77 @@ def _extract_column_from_node_name(name: str) -> str:
     return name
 
 
+_PRIORITY = {
+    "unknown": 0,
+    "passthrough": 1,
+    "rename": 2,
+    "derived": 3,
+    "aggregated": 4,
+}
+
+
+def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
+    """Classify transformation from the full lineage tree + capture defining SQL.
+
+    Outer ``SELECT * FROM cte`` nodes often look like simple column aliases.
+    Walk downstream expressions and keep the strongest classification, along
+    with the SQL for the first derived/aggregated defining expression.
+
+    Leaf lineage nodes carry the source ``Table`` as ``expression`` — those are
+    not transformations and must be ignored or everything looks ``derived``.
+    """
+    from sqlglot import exp
+
+    best_kind = "unknown"
+    best_priority = -1
+    best_expression: str | None = None
+
+    def consider(expression: Any) -> None:
+        nonlocal best_kind, best_priority, best_expression
+        if isinstance(expression, exp.Table):
+            return
+        kind = _classify_transformation(expression)
+        priority = _PRIORITY.get(kind, 0)
+        if priority > best_priority:
+            best_priority = priority
+            best_kind = kind
+            if kind in ("derived", "aggregated"):
+                best_expression = _expression_sql(expression)
+        elif (
+            priority == best_priority
+            and kind in ("derived", "aggregated")
+            and best_expression is None
+        ):
+            best_expression = _expression_sql(expression)
+
+    def walk(node: Any) -> None:
+        if getattr(node, "expression", None) is not None:
+            consider(node.expression)
+        for child in getattr(node, "downstream", []) or []:
+            walk(child)
+
+    walk(root_node)
+    return best_kind, best_expression
+
+
+def _expression_sql(expression: Any) -> str | None:
+    """Return a compact SQL string for a defining expression (alias stripped)."""
+    if expression is None:
+        return None
+    try:
+        from sqlglot import exp
+    except ImportError:
+        return None
+
+    inner = expression.this if isinstance(expression, exp.Alias) else expression
+    try:
+        return inner.sql()
+    except Exception:  # noqa: BLE001
+        return str(inner) if inner is not None else None
+
+
 def _classify_transformation(expression: Any) -> str:
-    """Classify the transformation type based on the root node's expression.
+    """Classify the transformation type based on a single expression node.
 
     Returns:
         "passthrough" — column passes through unchanged (SELECT a FROM ...)
@@ -472,7 +559,7 @@ def _classify_transformation(expression: Any) -> str:
     if isinstance(inner, exp.Alias):
         inner = inner.this
 
-    # Simple column reference — passthrough (rename detection deferred to Phase 2)
+    # Simple column reference — passthrough (rename detection uses output name)
     if isinstance(inner, exp.Column):
         return "passthrough"
 

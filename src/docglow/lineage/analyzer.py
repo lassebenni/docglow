@@ -930,13 +930,14 @@ def _resolve_dependencies(
                 # Unresolvable — could be a CTE or external table
                 continue
 
-            resolved_deps.append(
-                {
-                    "source_model": source_model,
-                    "source_column": dep.source_column,
-                    "transformation": dep.transformation,
-                }
-            )
+            entry: dict[str, str] = {
+                "source_model": source_model,
+                "source_column": dep.source_column,
+                "transformation": dep.transformation,
+            }
+            if dep.expression and dep.transformation in ("derived", "aggregated"):
+                entry["expression"] = dep.expression
+            resolved_deps.append(entry)
 
         if resolved_deps:
             resolved[col_name] = resolved_deps

@@ -22,6 +22,13 @@ import { getUnionChain } from '../../utils/graphTraversal'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 import { buildReverseIndex, getColumnTraceResult } from '../../utils/columnLineageGraph'
 import {
+  columnExpression,
+  columnKindMapForModel,
+  strongestTransformation,
+  transformationGlyph,
+  transformationLabel,
+} from '../../utils/columnTransforms'
+import {
   connectedEndpointJoinKeyHighlights,
   formatJoinPredicate,
   getJoinKeysForEdge,
@@ -441,6 +448,11 @@ function LineageFlowInner({
     )
   }, [selectedColumn, columnLineageData, reverseIndex])
 
+  // Column click clears join-edge selection (panel exclusivity)
+  useEffect(() => {
+    if (selectedColumn) setSelectedEdgeId(null)
+  }, [selectedColumn])
+
   // Selected table edge → join-key predicates + column highlights
   const selectedEdgeJoin = useMemo(() => {
     if (!selectedEdgeId || selectedEdgeId.startsWith('col__')) return null
@@ -697,6 +709,7 @@ function LineageFlowInner({
           autoExpanded: autoExpandNodeIds.has(ln.id),
           highlightedColumns: nodeHighlightedCols,
           joinKeyColors: hasAmbientJoinColors ? ambientJoinColors : undefined,
+          columnKinds: columnKindMapForModel(columnLineageData, ln.id),
           isJoinBase: joinBaseNodeIds.has(ln.id),
           joinTypeBadge: joinBaseNodeIds.has(ln.id) ? undefined : joinTypeBadges.get(ln.id),
           inColumnTrace: inColumnTrace && !effectiveExpandedIds.has(ln.id),
@@ -833,6 +846,8 @@ function LineageFlowInner({
 
     const COLUMN_EDGE_COLORS: Record<string, string> = {
       direct: '#16a34a',
+      passthrough: '#16a34a',
+      rename: '#0d9488',
       derived: '#f59e0b',
       aggregated: '#7c3aed',
     }
@@ -841,6 +856,11 @@ function LineageFlowInner({
       const sourceExpanded = effectiveExpandedIds.has(ce.sourceModel)
       const targetExpanded = effectiveExpandedIds.has(ce.targetModel)
       const edgeColor = COLUMN_EDGE_COLORS[ce.transformation] ?? '#f59e0b'
+      const showLabel =
+        ce.transformation === 'derived'
+        || ce.transformation === 'aggregated'
+        || ce.transformation === 'rename'
+      const glyph = transformationGlyph(ce.transformation)
 
       return {
         id: `col__${ce.sourceModel}__${ce.sourceColumn}__${ce.targetModel}__${ce.targetColumn}`,
@@ -850,24 +870,31 @@ function LineageFlowInner({
         targetHandle: targetExpanded ? `col-${ce.targetColumn}-target` : undefined,
         type: 'smoothstep',
         animated: false,
-        label: ce.transformation,
-        labelStyle: {
-          fontSize: 9,
-          fontWeight: 600,
-          fill: edgeColor,
-          letterSpacing: '0.02em',
-        },
-        labelBgStyle: {
-          fill: 'var(--bg, #fff)',
-          fillOpacity: 0.85,
-          rx: 3,
-          ry: 3,
-        },
-        labelBgPadding: [4, 2] as [number, number],
+        label: showLabel ? (glyph ?? ce.transformation) : undefined,
+        labelStyle: showLabel
+          ? {
+              fontSize: 11,
+              fontWeight: 700,
+              fill: edgeColor,
+              letterSpacing: '0.02em',
+            }
+          : undefined,
+        labelBgStyle: showLabel
+          ? {
+              fill: 'var(--bg, #fff)',
+              fillOpacity: 0.85,
+              rx: 3,
+              ry: 3,
+            }
+          : undefined,
+        labelBgPadding: showLabel ? ([4, 2] as [number, number]) : undefined,
         style: {
           stroke: edgeColor,
-          strokeWidth: 2,
-          strokeDasharray: '6 3',
+          strokeWidth: ce.transformation === 'passthrough' || ce.transformation === 'direct' ? 1.5 : 2,
+          strokeDasharray:
+            ce.transformation === 'passthrough' || ce.transformation === 'direct' || ce.transformation === 'rename'
+              ? undefined
+              : '6 3',
           opacity: 0.9,
         },
         markerEnd: MARKER_COLUMN,
@@ -1023,6 +1050,18 @@ function LineageFlowInner({
     [nodes],
   )
 
+  const selectedColumnDetail = useMemo(() => {
+    if (!selectedColumn || !columnLineageData) return null
+    const deps = columnLineageData[selectedColumn.modelId]?.[selectedColumn.columnName] ?? []
+    return {
+      modelId: selectedColumn.modelId,
+      columnName: selectedColumn.columnName,
+      kind: strongestTransformation(deps),
+      expression: columnExpression(deps),
+      deps,
+    }
+  }, [selectedColumn, columnLineageData])
+
   if (nodes.length === 0) {
     return <div className="text-[var(--text-muted)] text-sm">No lineage data available.</div>
   }
@@ -1145,6 +1184,102 @@ function LineageFlowInner({
           >
             View details →
           </button>
+        </div>
+      )}
+      {/* Column transform detail side panel */}
+      {!selectedNodeData && !selectedEdgeJoin && selectedColumnDetail && (
+        <div
+          className="react-flow__panel"
+          style={{
+            position: 'absolute',
+            top: 0,
+            right: 0,
+            width: 300,
+            height: '100%',
+            background: 'var(--bg, #fff)',
+            borderLeft: '1px solid var(--border, #e2e8f0)',
+            zIndex: 10,
+            overflow: 'auto',
+            padding: 16,
+          }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text, #0f172a)', lineHeight: 1.3 }}>
+              Column
+            </div>
+            <button
+              onClick={() => clearColumnSelection()}
+              style={{
+                background: 'none', border: 'none', cursor: 'pointer', padding: 2,
+                color: 'var(--text-muted, #64748b)', flexShrink: 0, marginLeft: 8,
+              }}
+            >
+              <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 600, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', color: 'var(--text, #0f172a)', marginBottom: 4 }}>
+            {selectedColumnDetail.columnName}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted, #64748b)', marginBottom: 16 }}>
+            {nameOf(selectedColumnDetail.modelId)}
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, fontSize: 12 }}>
+            <PanelRow
+              label="Kind"
+              value={
+                selectedColumnDetail.kind
+                  ? `${transformationGlyph(selectedColumnDetail.kind) ?? ''} ${transformationLabel(selectedColumnDetail.kind)}`.trim()
+                  : '—'
+              }
+            />
+
+            {selectedColumnDetail.deps.length > 0 && (
+              <div>
+                <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6 }}>From</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {selectedColumnDetail.deps.map((dep) => (
+                    <div
+                      key={`${dep.source_model}:${dep.source_column}`}
+                      style={{
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                        color: 'var(--text, #0f172a)',
+                        background: 'var(--bg-surface, #f1f5f9)',
+                        borderRadius: 6,
+                        padding: '6px 8px',
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {nameOf(dep.source_model)}.{dep.source_column}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {selectedColumnDetail.expression && (
+              <div>
+                <div style={{ color: 'var(--text-muted, #64748b)', marginBottom: 6 }}>Formula</div>
+                <pre
+                  style={{
+                    margin: 0,
+                    fontSize: 11,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    color: 'var(--text, #0f172a)',
+                    background: 'var(--bg-surface, #f1f5f9)',
+                    borderRadius: 6,
+                    padding: '8px 10px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {selectedColumnDetail.expression}
+                </pre>
+              </div>
+            )}
+          </div>
         </div>
       )}
       {/* Join-key edge detail side panel */}

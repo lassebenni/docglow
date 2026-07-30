@@ -67,6 +67,7 @@ export function traceColumnUpstream(
         targetModel: model,
         targetColumn: column,
         transformation: dep.transformation,
+        ...(dep.expression ? { expression: dep.expression } : {}),
       })
 
       queue.push({ model: dep.source_model, column: dep.source_column, depth: depth + 1 })
@@ -115,6 +116,7 @@ export function traceColumnDownstream(
         targetModel: consumer.modelId,
         targetColumn: consumer.columnName,
         transformation: dep?.transformation ?? 'derived',
+        ...(dep?.expression ? { expression: dep.expression } : {}),
       })
 
       queue.push({ model: consumer.modelId, column: consumer.columnName, depth: depth + 1 })

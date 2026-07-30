@@ -9,6 +9,8 @@ export interface ColumnLineageDependency {
   readonly source_model: string;
   readonly source_column: string;
   readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "unknown" | "direct";
+  /** Defining SQL for derived/aggregated columns (alias stripped). */
+  readonly expression?: string;
 }
 
 export interface ColumnDownstreamDependency {
@@ -113,6 +115,7 @@ export interface ColumnEdge {
   readonly targetModel: string;
   readonly targetColumn: string;
   readonly transformation: "passthrough" | "rename" | "aggregated" | "derived" | "unknown" | "direct";
+  readonly expression?: string;
 }
 
 // -- Artifact version metadata -----------------------------------------------
