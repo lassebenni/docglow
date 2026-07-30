@@ -539,6 +539,7 @@ class TestHealthPackageExclusion:
         ctx.column_lineage = None
         ctx.metadata = {}
         ctx.ui_config = UiConfig()
+        ctx.reverse_deps = {}
 
         result = context_to_dict(ctx)
 
@@ -578,6 +579,7 @@ class TestHealthPackageExclusion:
         ctx.column_lineage = None
         ctx.metadata = {}
         ctx.ui_config = UiConfig()
+        ctx.reverse_deps = {}
 
         result = context_to_dict(ctx)
 
