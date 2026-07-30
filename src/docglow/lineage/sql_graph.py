@@ -5,14 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from docglow.lineage.column_parser import _expression_sql
-from docglow.lineage.join_keys import (
-    _build_cte_source_map,
-    _ident_name,
-    _join_type,
-    _normalize_table_ref,
-    _select_is_aggregate,
-    _table_ref,
+from docglow.lineage.sql_ast import (
+    build_cte_source_map,
+    expression_sql,
+    ident_name,
+    join_type,
+    normalize_table_ref,
+    select_is_aggregate,
+    table_ref,
 )
 from docglow.lineage.table_resolver import TableResolver
 
@@ -67,7 +67,7 @@ def build_sql_graph(
         if not has_joins:
             return None
 
-    cte_sources = _build_cte_source_map(tree, exp)
+    cte_sources = build_cte_source_map(tree, exp)
     cte_aliases = {getattr(cte, "alias", "").lower() for cte in ctes if getattr(cte, "alias", None)}
     schema = schema or {}
 
@@ -149,7 +149,7 @@ def build_sql_graph(
         alias_l = alias.lower()
         cte_id = f"cte:{alias_l}"
         transforms: list[str] = []
-        is_agg = _select_is_aggregate(select, exp)
+        is_agg = select_is_aggregate(select, exp)
         if is_agg:
             transforms.append("aggregate")
         if _select_has_window(select, exp):
@@ -186,7 +186,7 @@ def build_sql_graph(
         if cte_joins:
             continue
 
-        from_raw = _table_ref(from_.this, exp)
+        from_raw = table_ref(from_.this, exp)
         if not from_raw:
             continue
         from_key = from_raw.lower()
@@ -203,7 +203,7 @@ def build_sql_graph(
             src = f"cte:{from_short if from_short in cte_aliases else from_key}"
             add_edge(src, cte_id)
         else:
-            collapsed = _normalize_table_ref(from_raw, cte_sources)
+            collapsed = normalize_table_ref(from_raw, cte_sources)
             parent_id = ensure_parent(collapsed or from_raw)
             if parent_id:
                 add_edge(parent_id, cte_id)
@@ -234,7 +234,7 @@ def build_sql_graph(
             join_target_id = f"output:{model_uid}"
 
         from_ = best_select.args.get("from_")
-        left_raw = _table_ref(from_.this, exp) if from_ else None
+        left_raw = table_ref(from_.this, exp) if from_ else None
         left_id = relation_node_id(left_raw)
 
         for idx, join in enumerate(best_select.args.get("joins") or []):
@@ -242,13 +242,13 @@ def build_sql_graph(
             on_clause = join.args.get("on")
             using = join.args.get("using")
             if kind == "CROSS" and not on_clause and not using:
-                right_raw = _table_ref(join.this, exp)
+                right_raw = table_ref(join.this, exp)
                 left_id = relation_node_id(right_raw) or left_id
                 continue
 
-            right_raw = _table_ref(join.this, exp)
+            right_raw = table_ref(join.this, exp)
             right_id = relation_node_id(right_raw)
-            jtype = _join_type(join) or "inner"
+            jtype = join_type(join) or "inner"
             join_keys = _join_keys_from_join(join, exp)
 
             join_id = f"join:{idx}:{jtype}"
@@ -294,7 +294,7 @@ def build_sql_graph(
     if outer is not None:
         from_ = outer.args.get("from_")
         if from_ is not None:
-            out_raw = _table_ref(from_.this, exp)
+            out_raw = table_ref(from_.this, exp)
             out_src = relation_node_id(out_raw)
             if out_src:
                 add_edge(out_src, output_id)
@@ -356,7 +356,7 @@ def _select_sql(select: Any) -> str | None:
     try:
         sql = select.sql(pretty=True)
     except Exception:  # noqa: BLE001
-        sql = _expression_sql(select)
+        sql = expression_sql(select)
     if not sql:
         return None
     return sql.strip()
@@ -446,12 +446,12 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
     where = select.args.get("where")
     if where is not None:
         where_expr = where.this if getattr(where, "this", None) is not None else where
-        add("filter", "where", _expression_sql(where_expr))
+        add("filter", "where", expression_sql(where_expr))
 
     having = select.args.get("having")
     if having is not None:
         having_expr = having.this if getattr(having, "this", None) is not None else having
-        add("filter", "having", _expression_sql(having_expr))
+        add("filter", "having", expression_sql(having_expr))
 
     return ops
 
@@ -546,7 +546,7 @@ def _build_column_lineage(
 
         projections = _project_columns(select, exp)
         out_cols: list[str] = []
-        is_agg = _select_is_aggregate(select, exp)
+        is_agg = select_is_aggregate(select, exp)
 
         for proj in projections:
             if proj["kind"] == "star":
@@ -554,7 +554,7 @@ def _build_column_lineage(
                 src_id = resolve_rel(src_rel) if src_rel else None
                 if src_id is None:
                     from_ = select.args.get("from_")
-                    from_raw = _table_ref(from_.this, exp) if from_ else None
+                    from_raw = table_ref(from_.this, exp) if from_ else None
                     src_id = resolve_rel(from_raw) if from_raw else None
                 src_cols = node_columns(src_id) if src_id else []
                 for col in src_cols:
@@ -568,7 +568,7 @@ def _build_column_lineage(
                 src_id = resolve_rel(src_rel) if src_rel else None
                 if src_id is None:
                     from_ = select.args.get("from_")
-                    from_raw = _table_ref(from_.this, exp) if from_ else None
+                    from_raw = table_ref(from_.this, exp) if from_ else None
                     src_id = resolve_rel(from_raw) if from_raw else None
                 out_cols.append(out_name)
                 if src_id and src_col:
@@ -579,7 +579,7 @@ def _build_column_lineage(
                 out_cols.append(out_name)
                 expr_sql = proj.get("expression")
                 from_ = select.args.get("from_")
-                from_raw = _table_ref(from_.this, exp) if from_ else None
+                from_raw = table_ref(from_.this, exp) if from_ else None
                 default_src = resolve_rel(from_raw) if from_raw else None
                 xform = "aggregated" if is_agg or proj.get("aggregated") else "derived"
 
@@ -705,7 +705,7 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                         "sources": sources,
                         "aggregated": aggregated,
                         "constant": not sources,
-                        "expression": _expression_sql(expression),
+                        "expression": expression_sql(expression),
                     }
                 )
             continue
@@ -736,7 +736,7 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
                 "sources": sources,
                 "aggregated": aggregated,
                 "constant": not sources,
-                "expression": _expression_sql(expression),
+                "expression": expression_sql(expression),
             }
         )
     return out
@@ -747,7 +747,7 @@ def _join_keys_from_join(join: Any, exp: Any) -> list[dict[str, str]]:
     using = join.args.get("using")
     if using:
         for ident in using:
-            col = _ident_name(ident)
+            col = ident_name(ident)
             if col:
                 keys.append({"left_column": col, "right_column": col})
         return keys

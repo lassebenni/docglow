@@ -83,14 +83,7 @@ export type JoinIndirectData = Record<string, JoinIndirectParent[]>;
 
 export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output" | "op";
 
-export type SqlGraphOpKind =
-  | "filter"
-  | "case"
-  | "window"
-  | "aggregate"
-  | "derived"
-  | "cast"
-  | "calc";
+export type SqlGraphOpKind = "filter";
 
 /** Per-column aggregation tag on aggregate CTE nodes (v4+). */
 export type SqlGraphAggFn = "sum" | "count" | "avg" | "min" | "max" | "group" | "none";
@@ -119,7 +112,7 @@ export interface SqlGraphNode {
   readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>;
   readonly transforms?: ReadonlyArray<"aggregate" | "filter" | "window" | "other">;
   readonly columns?: ReadonlyArray<string>;
-  /** v3+: WHERE / WINDOW / … ops collapsed until CTE is expanded */
+  /** v3+: WHERE / HAVING filter ops collapsed until CTE is expanded */
   readonly ops?: ReadonlyArray<SqlGraphOp>;
   /** Pure ``SELECT * FROM x`` CTE — collapsible in the UI */
   readonly passthrough?: boolean;

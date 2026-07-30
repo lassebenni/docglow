@@ -19,8 +19,8 @@ const sample: SqlGraph = {
       ops: [
         {
           id: 'cte:calc:op:0',
-          kind: 'derived',
-          label: 'derived',
+          kind: 'filter',
+          label: 'where',
           expression: 'x > 0',
           columns: ['flag'],
         },

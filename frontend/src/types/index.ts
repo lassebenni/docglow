@@ -109,14 +109,7 @@ export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
 export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output' | 'op'
 
-export type SqlGraphOpKind =
-  | 'filter'
-  | 'case'
-  | 'window'
-  | 'aggregate'
-  | 'derived'
-  | 'cast'
-  | 'calc'
+export type SqlGraphOpKind = 'filter'
 
 export type SqlGraphAggFn = 'sum' | 'count' | 'avg' | 'min' | 'max' | 'group' | 'none'
 

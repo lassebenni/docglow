@@ -54,12 +54,6 @@ const PATH_COLOR = '#d97706'
 const JOIN_HL_COLOR = '#2563eb'
 const OP_ACCENT: Record<SqlGraphOpKind, string> = {
   filter: '#0d9488',
-  case: '#db2777',
-  window: '#7c3aed',
-  aggregate: '#a16207',
-  derived: '#c2410c',
-  cast: '#0369a1',
-  calc: '#4f46e5',
 }
 
 const KIND_ACCENT: Record<string, string> = {
@@ -249,7 +243,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                 e.stopPropagation()
                 d.onOpClick?.({
                   id: d.id,
-                  kind: d.op_kind ?? 'case',
+                  kind: d.op_kind ?? 'filter',
                   label: d.label,
                   expression: d.expression,
                   columns: d.columns,
@@ -269,7 +263,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                   e.preventDefault()
                   d.onOpClick?.({
                     id: d.id,
-                    kind: d.op_kind ?? 'case',
+                    kind: d.op_kind ?? 'filter',
                     label: d.label,
                     expression: d.expression,
                     columns: d.columns,
