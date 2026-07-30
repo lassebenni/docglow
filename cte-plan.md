@@ -39,9 +39,13 @@ Click a column on a parent/cte/output node → highlight path + side panel
 (`passthrough` / `rename` / `aggregated` / `derived` / `constant`) through CTE steps,
 with defining SQL `expression` and ambient transform glyphs.
 
-### v3 — Expand CTE internals
+### v3 — Expand CTE internals (done)
 
 On-demand WHERE / CASE / WINDOW op nodes inside a CTE.
+
+- Backend: `SqlGraphNode.ops[]` with `{ id, kind, label, expression?, columns? }`
+- Frontend: ▶ on CTEs that have ops → materialize op nodes in the flow; click op → expression panel
+- CTEs with window/filter also get `transforms: ["window"|"filter"]` badges
 
 ## v1 wire contract
 

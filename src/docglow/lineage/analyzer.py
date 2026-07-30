@@ -34,8 +34,8 @@ from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
 
-# Bumped when cached lineage semantics change (e.g. sql_graph expressions).
-_CACHE_FORMAT_VERSION = 8
+# Bumped when cached lineage semantics change (e.g. sql_graph CTE ops).
+_CACHE_FORMAT_VERSION = 9
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)

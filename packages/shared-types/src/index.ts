@@ -18,6 +18,8 @@ export type {
   SqlGraphJoinKey,
   SqlGraphNode,
   SqlGraphNodeKind,
+  SqlGraphOp,
+  SqlGraphOpKind,
   SqlGraphsData,
 } from "./artifacts.js";
 

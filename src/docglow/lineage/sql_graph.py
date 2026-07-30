@@ -1,10 +1,11 @@
-"""Build an intra-model SQL / CTE graph for lineage visualization (v1 + v2)."""
+"""Build an intra-model SQL / CTE graph for lineage visualization (v1–v3)."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
+from docglow.lineage.column_parser import _expression_sql
 from docglow.lineage.join_keys import (
     _build_cte_source_map,
     _ident_name,
@@ -13,10 +14,11 @@ from docglow.lineage.join_keys import (
     _select_is_aggregate,
     _table_ref,
 )
-from docglow.lineage.column_parser import _expression_sql
 from docglow.lineage.table_resolver import TableResolver
 
 logger = logging.getLogger(__name__)
+
+_MAX_OPS_PER_CTE = 8
 
 
 def build_sql_graph(
@@ -33,6 +35,7 @@ def build_sql_graph(
 
     v1: parent / cte / join / output structure.
     v2: ``columns`` on nodes + ``column_lineage`` for field drill-down.
+    v3: ``ops`` on CTE nodes (where / case / window) for on-demand expand.
     """
     if not compiled_sql or not compiled_sql.strip():
         return None
@@ -133,6 +136,13 @@ def build_sql_graph(
         if _select_is_aggregate(select, exp):
             transforms.append("aggregate")
 
+        ops = _extract_cte_ops(select, exp, cte_id=cte_id)
+        for op in ops:
+            if op["kind"] == "filter" and "filter" not in transforms:
+                transforms.append("filter")
+            elif op["kind"] == "window" and "window" not in transforms:
+                transforms.append("window")
+
         add_node(
             {
                 "id": cte_id,
@@ -140,6 +150,7 @@ def build_sql_graph(
                 "label": alias,
                 "cte_name": alias,
                 **({"transforms": transforms} if transforms else {}),
+                **({"ops": ops} if ops else {}),
             }
         )
 
@@ -289,6 +300,55 @@ def build_sql_graph(
         "edges": edges,
         "column_lineage": column_lineage,
     }
+
+
+def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
+    """Extract WHERE / CASE / WINDOW ops for on-demand CTE expand (v3)."""
+    ops: list[dict[str, Any]] = []
+    seen_expr: set[str] = set()
+
+    def add(kind: str, label: str, expression: str | None, columns: list[str] | None = None) -> None:
+        if len(ops) >= _MAX_OPS_PER_CTE:
+            return
+        key = f"{kind}:{expression or ''}"
+        if key in seen_expr:
+            return
+        seen_expr.add(key)
+        op: dict[str, Any] = {
+            "id": f"{cte_id}:op:{len(ops)}",
+            "kind": kind,
+            "label": label,
+        }
+        if expression:
+            op["expression"] = expression
+        if columns:
+            op["columns"] = columns
+        ops.append(op)
+
+    where = select.args.get("where")
+    if where is not None:
+        where_expr = where.this if getattr(where, "this", None) is not None else where
+        add("filter", "where", _expression_sql(where_expr))
+
+    for expression in select.expressions or []:
+        out_name: str | None = None
+        inner = expression
+        if isinstance(expression, exp.Alias):
+            out_name = expression.alias
+            inner = expression.this
+        elif hasattr(expression, "alias_or_name") and expression.alias_or_name:
+            out_name = expression.alias_or_name
+
+        if inner is None or not hasattr(inner, "find_all"):
+            continue
+
+        cols = [out_name] if out_name else None
+        for win in inner.find_all(exp.Window):
+            add("window", "window", _expression_sql(win), cols)
+        for case in inner.find_all(exp.Case):
+            add("case", "case", _expression_sql(case), cols)
+
+    return ops
 
 
 def _schema_columns(

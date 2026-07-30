@@ -55,11 +55,22 @@ export interface JoinIndirectParent {
  */
 export type JoinIndirectData = Record<string, JoinIndirectParent[]>;
 
-export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output";
+export type SqlGraphNodeKind = "parent" | "cte" | "join" | "output" | "op";
+
+export type SqlGraphOpKind = "filter" | "case" | "window";
 
 export interface SqlGraphJoinKey {
   readonly left_column: string;
   readonly right_column: string;
+}
+
+/** Internal CTE operation for on-demand expand (v3). */
+export interface SqlGraphOp {
+  readonly id: string;
+  readonly kind: SqlGraphOpKind;
+  readonly label: string;
+  readonly expression?: string;
+  readonly columns?: ReadonlyArray<string>;
 }
 
 export interface SqlGraphNode {
@@ -72,6 +83,11 @@ export interface SqlGraphNode {
   readonly join_keys?: ReadonlyArray<SqlGraphJoinKey>;
   readonly transforms?: ReadonlyArray<"aggregate" | "filter" | "window" | "other">;
   readonly columns?: ReadonlyArray<string>;
+  /** v3: WHERE / CASE / WINDOW ops collapsed until CTE is expanded */
+  readonly ops?: ReadonlyArray<SqlGraphOp>;
+  /** When kind=op, optional defining SQL (mirrored from SqlGraphOp) */
+  readonly expression?: string;
+  readonly op_kind?: SqlGraphOpKind;
 }
 
 export interface SqlGraphEdge {

@@ -207,3 +207,58 @@ class TestBuildSqlGraph:
         assert "jaffle" in deps[0]["expression"].lower()
         assert "coalesce" in deps[0]["expression"].lower()
 
+    def test_cte_ops_extract_case_and_window(self) -> None:
+        sql = """
+        with
+        base as (select * from analytics.stg_orders),
+        flagged as (
+            select
+                order_id,
+                case when status = 'completed' then 1 else 0 end as is_done
+            from base
+            where status is not null
+        ),
+        numbered as (
+            select
+                *,
+                row_number() over (partition by customer_id order by ordered_at) as n
+            from flagged
+        )
+        select * from numbered
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_orders": {"name": "stg_orders", "schema": "analytics"},
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.stg_orders": {
+                    "order_id": "varchar",
+                    "customer_id": "varchar",
+                    "status": "varchar",
+                    "ordered_at": "timestamp",
+                }
+            },
+            output_columns=["order_id", "is_done", "n"],
+        )
+        assert graph is not None
+        by_id = {n["id"]: n for n in graph["nodes"]}
+
+        flagged = by_id["cte:flagged"]
+        assert any(o["kind"] == "filter" for o in flagged.get("ops") or [])
+        assert any(o["kind"] == "case" for o in flagged.get("ops") or [])
+        assert "filter" in (flagged.get("transforms") or [])
+
+        numbered = by_id["cte:numbered"]
+        win_ops = [o for o in numbered.get("ops") or [] if o["kind"] == "window"]
+        assert win_ops
+        assert win_ops[0].get("expression")
+        assert "row_number" in win_ops[0]["expression"].lower()
+        assert "window" in (numbered.get("transforms") or [])
+
