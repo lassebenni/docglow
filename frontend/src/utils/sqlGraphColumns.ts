@@ -1,4 +1,10 @@
-import type { SqlGraphColumnDep, SqlGraphColumnLineage } from '../types'
+import type {
+  ColumnEdge,
+  SqlGraphColumnDep,
+  SqlGraphColumnLineage,
+  TransformationType,
+} from '../types'
+import { colorizeColumnTraceBranches, columnEdgeKey } from './columnLineageGraph'
 
 export function colKey(nodeId: string, column: string): string {
   return `${nodeId}\0${column}`
@@ -17,6 +23,12 @@ export interface ColumnPathResult {
   keys: Set<string>
   /** Structure edges that carry the path: `${source}\0${target}` */
   edgeKeys: Set<string>
+  /** Column-level hops for branch coloring (same shape as columns-mode trace). */
+  columnEdges: ColumnEdge[]
+  /** nodeId → (column → branch color); selected field stays amber. */
+  columnColors: Map<string, Map<string, string>>
+  /** keyed by {@link columnEdgeKey} */
+  edgeColors: Map<string, string>
 }
 
 /**
@@ -33,9 +45,19 @@ export function collectColumnPath(
 ): ColumnPathResult {
   const keys = new Set<string>()
   const edgeKeys = new Set<string>()
+  const emptyColors = {
+    columnColors: new Map<string, Map<string, string>>(),
+    edgeColors: new Map<string, string>(),
+  }
   if (!lineage) {
     keys.add(colKey(nodeId, column))
-    return { steps: [{ nodeId, column }], keys, edgeKeys }
+    return {
+      steps: [{ nodeId, column }],
+      keys,
+      edgeKeys,
+      columnEdges: [],
+      ...emptyColors,
+    }
   }
   const graphLineage = lineage
 
@@ -51,7 +73,9 @@ export function collectColumnPath(
     const deps = graphLineage[nid]?.[col]
     if (!deps?.length) return
     for (const dep of deps) {
-      if (!dep.source_node) continue
+      // Constants / untraced often have a node stub with no column — skip those
+      // so we do not invent empty-column highlights on parent CTEs.
+      if (!dep.source_node || !dep.source_column) continue
       keys.add(colKey(dep.source_node, dep.source_column))
       edgeKeys.add(`${dep.source_node}\0${nid}`)
       links.push({
@@ -83,6 +107,7 @@ export function collectColumnPath(
         const tk = colKey(tid, tcol)
         if (seenDown.has(tk)) continue
         for (const dep of deps) {
+          if (!dep.source_node || !dep.source_column) continue
           const sk = colKey(dep.source_node, dep.source_column)
           if (!seenDown.has(sk)) continue
           seenDown.add(tk)
@@ -105,7 +130,35 @@ export function collectColumnPath(
   }
 
   const steps = orderPathSteps(nodeId, column, links, keys)
-  return { steps, keys, edgeKeys }
+  const columnEdges = linksToColumnEdges(links)
+  const { columnColors, edgeColors } = colorizeColumnTraceBranches(
+    columnEdges,
+    nodeId,
+    column,
+  )
+  return { steps, keys, edgeKeys, columnEdges, columnColors, edgeColors }
+}
+
+function linksToColumnEdges(
+  links: { from: ColumnPathStep; to: ColumnPathStep; via: SqlGraphColumnDep }[],
+): ColumnEdge[] {
+  const out: ColumnEdge[] = []
+  const seen = new Set<string>()
+  for (const l of links) {
+    const edge: ColumnEdge = {
+      sourceModel: l.from.nodeId,
+      sourceColumn: l.from.column,
+      targetModel: l.to.nodeId,
+      targetColumn: l.to.column,
+      transformation: (l.via.transformation ?? 'unknown') as TransformationType,
+      expression: l.via.expression,
+    }
+    const k = columnEdgeKey(edge)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(edge)
+  }
+  return out
 }
 
 function orderPathSteps(
@@ -203,6 +256,48 @@ export function collectColumnDownstream(
         seen.add(k)
         out.push({ nodeId: tid, column: tcol, transformation: dep.transformation })
       }
+    }
+  }
+  return out
+}
+
+export interface ColumnUpstreamHop {
+  nodeId: string
+  column: string
+  transformation?: SqlGraphColumnDep['transformation']
+  expression?: string
+}
+
+/**
+ * Recursive upstream hops for the CTE detail panel (nearest first).
+ * Unlike direct deps, this walks through passthrough CTEs to parents/sources.
+ */
+export function collectColumnUpstream(
+  lineage: SqlGraphColumnLineage | undefined,
+  nodeId: string,
+  column: string,
+): ColumnUpstreamHop[] {
+  if (!lineage) return []
+  const out: ColumnUpstreamHop[] = []
+  const seen = new Set<string>()
+  const queue: { nodeId: string; column: string }[] = [{ nodeId, column }]
+  let head = 0
+  while (head < queue.length) {
+    const cur = queue[head++]!
+    const deps = lineage[cur.nodeId]?.[cur.column]
+    if (!deps?.length) continue
+    for (const dep of deps) {
+      if (!dep.source_node || !dep.source_column) continue
+      const k = colKey(dep.source_node, dep.source_column)
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push({
+        nodeId: dep.source_node,
+        column: dep.source_column,
+        transformation: dep.transformation,
+        expression: dep.expression,
+      })
+      queue.push({ nodeId: dep.source_node, column: dep.source_column })
     }
   }
   return out

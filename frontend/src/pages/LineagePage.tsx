@@ -1,9 +1,14 @@
 import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { useProjectStore } from '../stores/projectStore'
 import { useTagFilterStore } from '../stores/tagFilterStore'
 import { LineageFlow } from '../components/lineage/LineageFlow'
-import { ColumnExpandControls } from '../components/lineage/ColumnExpandControls'
+import {
+  ColumnExpandControls,
+  lineageViewModeSuffix,
+  parseLineageViewMode,
+  type LineageViewMode,
+} from '../components/lineage/ColumnExpandControls'
 import { getColumnLineageCandidateIds } from '../utils/columnLineageGraph'
 import { PinBar } from '../components/lineage/PinBar'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
@@ -44,6 +49,8 @@ function computeSuggestions(nodes: LineageNode[], edges: LineageEdge[]): ModelSu
 
 export function LineagePage() {
   const { data } = useProjectStore()
+  const { view: viewParam } = useParams<{ view?: string }>()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
 
   // Initialize pins from URL on first render
@@ -61,6 +68,18 @@ export function LineagePage() {
     return raw === 'upstream' || raw === 'downstream' ? raw : 'both'
   })
   const [search, setSearch] = useState('')
+  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() =>
+    parseLineageViewMode(viewParam),
+  )
+  useEffect(() => {
+    setLineageViewModeState(parseLineageViewMode(viewParam))
+  }, [viewParam])
+
+  const selectLineageViewMode = useCallback((mode: LineageViewMode) => {
+    setLineageViewModeState(mode)
+    const qs = searchParams.toString()
+    navigate(`/lineage${lineageViewModeSuffix(mode)}${qs ? `?${qs}` : ''}`, { replace: true })
+  }, [navigate, searchParams])
 
   // Sync state → URL
   useEffect(() => {
@@ -324,7 +343,11 @@ export function LineagePage() {
             </div>
 
             <div className="h-4 w-px bg-[var(--border)]" />
-            <ColumnExpandControls candidateIds={columnLineageCandidateIds} />
+            <ColumnExpandControls
+              candidateIds={columnLineageCandidateIds}
+              mode={lineageViewMode}
+              onModeChange={selectLineageViewMode}
+            />
 
             <div className="h-4 w-px bg-[var(--border)]" />
 

@@ -43,8 +43,10 @@ from docglow.cloud_hint import maybe_show_hint
     "--column-lineage-select",
     type=str,
     default=None,
-    help="Only analyze column lineage for this model and its dependencies "
-    "(e.g. fct_orders, +fct_orders, fct_orders+)",
+    help="Only analyze column lineage for these models and their dependencies "
+    "(e.g. fct_orders, +fct_orders, fct_orders+). Multiple patterns may be "
+    "comma- or space-separated. When --exposure-field-lineage is set, mart "
+    "models referenced by that sidecar are included automatically.",
 )
 @click.option(
     "--column-lineage-depth",
@@ -109,6 +111,13 @@ from docglow.cloud_hint import maybe_show_hint
     "Also settable via docs_dir in docglow.yml. Per-model paths can be declared "
     "in meta.docglow.docs (see docglow.generator.custom_docs).",
 )
+@click.option(
+    "--exposure-field-lineage",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to exposure_field_lineage.json mapping exposure fields "
+    "(e.g. Power BI measures) to dbt model columns for column-level lineage.",
+)
 def generate(
     project_dir: Path,
     target_dir: Path | None,
@@ -137,6 +146,7 @@ def generate(
     enable_erd: bool,
     sample_data_dir: Path | None,
     docs_dir: Path | None,
+    exposure_field_lineage: Path | None,
 ) -> None:
     """Generate the documentation site."""
     from docglow.cli import _parse_connection, _setup_logging, console
@@ -245,6 +255,7 @@ def generate(
                 enable_erd=enable_erd,
                 sample_data_dir=sample_data_dir,
                 docs_dir=docs_dir,
+                exposure_field_lineage_path=exposure_field_lineage,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")
             if static:

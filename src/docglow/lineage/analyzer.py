@@ -32,7 +32,7 @@ from docglow.lineage.table_resolver import TableResolver
 logger = logging.getLogger(__name__)
 
 # Bumped when cached lineage semantics change (e.g. sql_graph richer ops + passthrough).
-_CACHE_FORMAT_VERSION = 13
+_CACHE_FORMAT_VERSION = 20
 
 # Patterns for stripping Jinja from raw dbt SQL
 _JINJA_CONFIG = re.compile(r"\{\{\s*config\s*\(.*?\)\s*\}\}", re.DOTALL)
@@ -42,6 +42,23 @@ _JINJA_SOURCE = re.compile(
 )
 _JINJA_GENERIC = re.compile(r"\{\{.*?\}\}", re.DOTALL)
 _JINJA_BLOCK = re.compile(r"\{%.*?%\}", re.DOTALL)
+# {% set name = 'literal' %} / {% set name = "literal" %}
+_JINJA_SET_STRING = re.compile(
+    r"\{%-?\s*set\s+(\w+)\s*=\s*(['\"])([^'\"]*)\2\s*-?%\}",
+    re.IGNORECASE,
+)
+# '{{ ident }}' / "{{ ident }}" — unresolved Jinja var inside a SQL string
+_JINJA_QUOTED_IDENT = re.compile(
+    r"(['\"])\{\{\s*(\w+)\s*\}\}\1",
+)
+# Innermost {% if %}...[{% else %}...]{% endif %} (body may not contain {% if).
+_JINJA_INNERMOST_IF = re.compile(
+    r"\{%-?\s*if\b.*?%-?\}"
+    r"((?:(?!\{%-?\s*if\b).)*?)"
+    r"(?:\{%-?\s*else\s*-?%\}((?:(?!\{%-?\s*if\b).)*?))?"
+    r"\{%-?\s*endif\s*-?%\}",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -660,6 +677,13 @@ def analyze_column_lineage(
         len(column_lineage),
     )
 
+    backfilled = _backfill_referenced_column_gaps(column_lineage, all_models, cache)
+    if backfilled:
+        logger.info(
+            "Column lineage: backfilled %d column(s) referenced by downstream but missing upstream",
+            backfilled,
+        )
+
     # Save updated cache
     _save_cache(cache_path, cache, dialect)
 
@@ -734,19 +758,75 @@ def _merge_result(
         failure_details.append(result.failure)
 
 
+def _collapse_jinja_conditionals(sql: str) -> str:
+    """Collapse Jinja if/else so only one SQL branch remains.
+
+    Naive ``{% ... %}`` deletion leaves *both* branches of
+    ``{% if %}...{% else %}...{% endif %}``, which is invalid SQL (common for
+    adapter-specific timestamp/type idioms). Prefer the ``{% else %}`` body when
+    present (usually the portable dialect); otherwise keep the ``if`` body.
+    Innermost blocks are resolved first so nesting works.
+    """
+
+    def _pick_branch(match: re.Match[str]) -> str:
+        if_body = match.group(1) or ""
+        else_body = match.group(2)
+        return else_body if else_body is not None else if_body
+
+    prev = None
+    while prev != sql:
+        prev = sql
+        sql = _JINJA_INNERMOST_IF.sub(_pick_branch, sql)
+    return sql
+
+
+def _apply_jinja_string_sets(sql: str) -> str:
+    """Substitute ``{{ name }}`` using simple ``{% set name = 'literal' %}`` bindings.
+
+    Used for microbatch windows and similar patterns where the else branch sets a
+    concrete date string (e.g. ``_batch_end = "9999-12-31"``).
+    """
+    bindings = {m.group(1): m.group(3) for m in _JINJA_SET_STRING.finditer(sql)}
+    if not bindings:
+        return sql
+
+    names = "|".join(re.escape(n) for n in bindings)
+
+    def _quoted(match: re.Match[str]) -> str:
+        quote, name = match.group(1), match.group(2)
+        return f"{quote}{bindings[name]}{quote}"
+
+    def _bare(match: re.Match[str]) -> str:
+        return f"'{bindings[match.group(1)]}'"
+
+    # Quoted form first so we don't leave empty quotes around a bare replace.
+    sql = re.sub(rf"(['\"])\{{\{{\s*({names})\s*\}}\}}\1", _quoted, sql)
+    sql = re.sub(rf"\{{\{{\s*({names})\s*\}}\}}", _bare, sql)
+    return sql
+
+
 def strip_jinja(raw_sql: str) -> str:
     """Strip Jinja templating from raw dbt SQL to make it parseable.
 
     - {{ config(...) }} -> removed entirely
+    - {% if %} / {% else %} / {% endif %} -> one branch (prefer else)
+    - {% set name = 'literal' %} -> substitute into {{ name }}
+    - known macros (var, union_relations, column-arg helpers, …) via expand_macros
     - {{ ref('model_name') }} -> model_name
     - {{ source('source', 'table') }} -> source.table
+    - '{{ ident }}' (unresolved) -> 'ident' (keeps SQL valid; avoids CAST('NULL' AS DATE))
     - {{ other_macro(...) }} -> NULL (placeholder to keep SQL valid)
-    - {% ... %} blocks -> removed
+    - remaining {% ... %} blocks -> removed
     """
     sql = _JINJA_CONFIG.sub("", raw_sql)
+    # Collapse / sets / macros before ref() stripping so handlers can still see
+    # ``ref('model')`` inside dbt_utils.union_relations / star.
+    sql = _collapse_jinja_conditionals(sql)
+    sql = _apply_jinja_string_sets(sql)
+    sql = expand_macros(sql)
     sql = _JINJA_REF.sub(r"\1", sql)
     sql = _JINJA_SOURCE.sub(r"\1.\2", sql)
-    sql = expand_macros(sql)
+    sql = _JINJA_QUOTED_IDENT.sub(r"\1\2\1", sql)
     sql = _JINJA_GENERIC.sub("NULL", sql)
     sql = _JINJA_BLOCK.sub("", sql)
     return sql
@@ -769,6 +849,9 @@ def compute_column_lineage_subset(
 
     Glob patterns are supported (e.g. ``fct_*``).
 
+    Multiple patterns may be passed separated by commas or whitespace
+    (e.g. ``fct_orders,agg_sales_*``); the resulting subsets are unioned.
+
     Args:
         pattern: Model name pattern with optional direction operators.
         models: Transformed model data.
@@ -780,6 +863,17 @@ def compute_column_lineage_subset(
     Returns:
         Set of unique_ids to include in column lineage analysis.
     """
+    parts = [p.strip() for p in re.split(r"[\s,]+", pattern) if p.strip()]
+    if len(parts) > 1:
+        result: set[str] = set()
+        for part in parts:
+            result |= compute_column_lineage_subset(
+                part, models, sources, seeds, snapshots, max_depth=max_depth
+            )
+        return result
+
+    pattern = parts[0] if parts else pattern
+
     include_upstream = not pattern.endswith("+") or pattern.startswith("+")
     include_downstream = pattern.endswith("+")
 
@@ -810,7 +904,7 @@ def compute_column_lineage_subset(
         return set()
 
     # BFS walk
-    result: set[str] = set(matched)
+    result = set(matched)
 
     if include_upstream:
         _bfs_walk(matched, all_resources, sources, result, "depends_on", max_depth)
@@ -853,6 +947,77 @@ def _bfs_walk(
             if neighbor not in result:
                 result.add(neighbor)
                 queue.append((neighbor, depth + 1))
+
+
+def _backfill_referenced_column_gaps(
+    column_lineage: dict[str, dict[str, list[dict[str, str]]]],
+    models: dict[str, dict[str, Any]],
+    cache: dict[str, Any],
+) -> int:
+    """Fill columns that downstream models reference but upstream never traced.
+
+    Typical case: ``dbt_utils.union_relations`` / ``SELECT *`` shells whose YAML
+    only documents a few columns, while children reference others (e.g.
+    ``is_discount``). Without a lineage entry the field-path UI dead-ends even
+    though parent models already traced that column.
+    """
+    referenced: dict[str, set[str]] = {}
+    for cols in column_lineage.values():
+        for deps in cols.values():
+            for dep in deps:
+                sm = dep.get("source_model")
+                sc = dep.get("source_column")
+                if sm and sc:
+                    referenced.setdefault(sm, set()).add(sc)
+
+    filled = 0
+    for uid, colnames in referenced.items():
+        model = models.get(uid)
+        if model is None:
+            continue
+        parents = [p for p in model.get("depends_on") or [] if isinstance(p, str) and p in models]
+        if not parents:
+            continue
+        model_lin = column_lineage.setdefault(uid, {})
+        parent_col_sets = {
+            p: {
+                *(
+                    c.get("name")
+                    for c in (models.get(p) or {}).get("columns") or []
+                    if c.get("name")
+                ),
+                *((column_lineage.get(p) or {}).keys()),
+            }
+            for p in parents
+        }
+        for col in colnames:
+            existing = model_lin.get(col) or []
+            if any(
+                d.get("source_model")
+                and d.get("source_column")
+                and d.get("transformation") not in ("untraced", "constant")
+                for d in existing
+            ):
+                continue
+            deps = [
+                {
+                    "source_model": parent,
+                    "source_column": col,
+                    "transformation": "passthrough",
+                }
+                for parent in parents
+                if col in parent_col_sets.get(parent, set())
+            ]
+            if not deps:
+                continue
+            model_lin[col] = deps
+            filled += 1
+            entry = cache.get(uid)
+            if isinstance(entry, dict):
+                lineage = dict(entry.get("lineage") or {})
+                lineage[col] = deps
+                cache[uid] = {**entry, "lineage": lineage}
+    return filled
 
 
 def _resolve_dependencies(

@@ -274,6 +274,8 @@ declare module "@docglow/shared-types" {
     readonly url: string;
     readonly label: string;
     readonly maturity: string;
+    readonly meta?: Record<string, unknown>;
+    readonly columns?: import("@docglow/shared-types").DocglowColumn[];
   }
 
   // Added in 0.8.6 (DOC-296). False when no source has freshness monitoring, in

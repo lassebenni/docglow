@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "exposures": {
+    "executive_orders_dashboard": {
+      "fields": [
+        {
+          "name": "Total Revenue",
+          "kind": "measure",
+          "description": "Sum of order totals on the executive dashboard",
+          "depends_on": [
+            {
+              "model": "orders",
+              "column": "order_total",
+              "transformation": "aggregated"
+            }
+          ]
+        },
+        {
+          "name": "Order Count",
+          "kind": "measure",
+          "description": "Count of orders",
+          "depends_on": [
+            {
+              "model": "orders",
+              "column": "order_id",
+              "transformation": "aggregated"
+            }
+          ]
+        },
+        {
+          "name": "Customer Count",
+          "kind": "measure",
+          "depends_on": [
+            {
+              "model": "customers",
+              "column": "customer_id",
+              "transformation": "aggregated"
+            }
+          ]
+        },
+        {
+          "name": "Revenue + Orders",
+          "kind": "measure",
+          "depends_on": [],
+          "components": ["Total Revenue", "Order Count"]
+        }
+      ]
+    }
+  }
+}

@@ -29,7 +29,7 @@ describe('columnTransforms', () => {
     expect(transformationGlyph('rename')).toBe('→')
     expect(transformationGlyph('derived')).toBe('ƒ')
     expect(transformationGlyph('aggregated')).toBe('Σ')
-    expect(transformationGlyph('constant')).toBe('·')
+    expect(transformationGlyph('constant')).toBe('LIT')
     expect(transformationGlyph('untraced')).toBe('?')
     expect(transformationGlyph('unknown')).toBeNull()
   })

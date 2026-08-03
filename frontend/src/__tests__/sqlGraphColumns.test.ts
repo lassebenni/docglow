@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { collectColumnDownstream, collectColumnPath, colKey } from '../utils/sqlGraphColumns'
+import {
+  collectColumnDownstream,
+  collectColumnPath,
+  collectColumnUpstream,
+  colKey,
+} from '../utils/sqlGraphColumns'
 import type { SqlGraphColumnLineage } from '../types'
 
 const lineage: SqlGraphColumnLineage = {
@@ -56,6 +61,8 @@ describe('collectColumnPath', () => {
     expect(path.keys.has(colKey('cte:joined', 'supply_cost'))).toBe(true)
     expect(path.keys.has(colKey('output:order_items', 'supply_cost'))).toBe(true)
     expect(path.edgeKeys.has('cte:supplies\0cte:order_supplies_summary')).toBe(true)
+    expect(path.columnEdges.length).toBeGreaterThan(0)
+    expect(path.columnColors.size).toBeGreaterThan(0)
 
     const labels = path.steps.map(s => `${s.nodeId}:${s.column}`)
     expect(labels[0]).toBe('parent:stg_supplies:supply_cost')
@@ -67,6 +74,53 @@ describe('collectColumnPath', () => {
     const path = collectColumnPath(undefined, 'cte:x', 'a')
     expect([...path.keys]).toEqual([colKey('cte:x', 'a')])
     expect(path.steps).toEqual([{ nodeId: 'cte:x', column: 'a' }])
+    expect(path.columnEdges).toEqual([])
+  })
+
+  it('assigns distinct branch colors for multi-input aggregates', () => {
+    const multi: SqlGraphColumnLineage = {
+      'cte:pos_lines': {
+        amt_sales_excl_vat: [
+          { source_node: 'parent:fct', source_column: 'amt_sales_excl_vat', transformation: 'passthrough' },
+        ],
+        is_service: [
+          { source_node: 'parent:fct', source_column: 'is_service', transformation: 'passthrough' },
+        ],
+        is_voucher: [
+          { source_node: 'parent:fct', source_column: 'is_voucher', transformation: 'passthrough' },
+        ],
+      },
+      'cte:line_rollup': {
+        amt_item_sales_excl_vat: [
+          {
+            source_node: 'cte:pos_lines',
+            source_column: 'amt_sales_excl_vat',
+            transformation: 'aggregated',
+          },
+          {
+            source_node: 'cte:pos_lines',
+            source_column: 'is_service',
+            transformation: 'aggregated',
+          },
+          {
+            source_node: 'cte:pos_lines',
+            source_column: 'is_voucher',
+            transformation: 'aggregated',
+          },
+        ],
+      },
+    }
+    const path = collectColumnPath(multi, 'cte:line_rollup', 'amt_item_sales_excl_vat')
+    const c1 = path.columnColors.get('cte:pos_lines')?.get('amt_sales_excl_vat')
+    const c2 = path.columnColors.get('cte:pos_lines')?.get('is_service')
+    const c3 = path.columnColors.get('cte:pos_lines')?.get('is_voucher')
+    expect(c1).toBeTruthy()
+    expect(c2).toBeTruthy()
+    expect(c3).toBeTruthy()
+    expect(new Set([c1, c2, c3]).size).toBe(3)
+    expect(path.columnColors.get('cte:line_rollup')?.get('amt_item_sales_excl_vat')).toBe(
+      '#f59e0b',
+    )
   })
 
   it('highlights upstream inputs + focus downstream, not same-node siblings', () => {
@@ -117,5 +171,60 @@ describe('collectColumnPath', () => {
     expect(down).toEqual([
       { nodeId: 'output:order_items', column: 'supply_cost', transformation: 'passthrough' },
     ])
+  })
+
+  it('collectColumnUpstream walks recursively nearest-first', () => {
+    const up = collectColumnUpstream(lineage, 'output:order_items', 'supply_cost')
+    expect(up.map(h => `${h.nodeId}:${h.column}`)).toEqual([
+      'cte:joined:supply_cost',
+      'cte:order_supplies_summary:supply_cost',
+      'cte:supplies:supply_cost',
+      'parent:stg_supplies:supply_cost',
+    ])
+  })
+
+  it('skips constant deps with empty source_column when walking upstream', () => {
+    const constLineage: SqlGraphColumnLineage = {
+      'cte:line_rollup': {
+        amt_employee_discount_excl_vat: [
+          {
+            source_node: 'cte:pos_lines',
+            source_column: '',
+            transformation: 'constant',
+            expression: 'CAST(0 AS DECIMAL(18, 2))',
+          },
+        ],
+        amt_cogs_excl_vat: [
+          {
+            source_node: 'cte:pos_lines',
+            source_column: 'amt_cogs_excl_vat',
+            transformation: 'aggregated',
+            expression: 'SUM(amt_cogs_excl_vat)',
+          },
+        ],
+      },
+      'cte:pos_lines': {
+        amt_cogs_excl_vat: [
+          {
+            source_node: 'parent:fct',
+            source_column: 'amt_cogs_excl_vat',
+            transformation: 'passthrough',
+          },
+        ],
+      },
+    }
+    const constantPath = collectColumnPath(
+      constLineage,
+      'cte:line_rollup',
+      'amt_employee_discount_excl_vat',
+    )
+    expect([...constantPath.keys]).toEqual([
+      colKey('cte:line_rollup', 'amt_employee_discount_excl_vat'),
+    ])
+    expect(constantPath.edgeKeys.size).toBe(0)
+
+    const aggPath = collectColumnPath(constLineage, 'cte:line_rollup', 'amt_cogs_excl_vat')
+    expect(aggPath.keys.has(colKey('cte:pos_lines', 'amt_cogs_excl_vat'))).toBe(true)
+    expect(aggPath.keys.has(colKey('parent:fct', 'amt_cogs_excl_vat'))).toBe(true)
   })
 })

@@ -39,6 +39,7 @@ def generate_site(
     enable_erd: bool = False,
     sample_data_dir: Path | None = None,
     docs_dir: Path | None = None,
+    exposure_field_lineage_path: Path | None = None,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
 
@@ -86,6 +87,7 @@ def generate_site(
         exclude_packages=exclude_packages,
         slim=slim,
         enable_erd=enable_erd,
+        exposure_field_lineage_path=exposure_field_lineage_path,
     )
 
     # Run column insights if enabled

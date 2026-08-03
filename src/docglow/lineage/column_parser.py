@@ -118,17 +118,30 @@ def parse_column_lineage(
 
     # Detect if outermost SELECT uses * or * EXCLUDE
     has_star = any(isinstance(expr, exp.Star) for expr in select_stmt.expressions)
+    # UNION ALL of SELECT * — also treat as star (first arm already detected).
+    if not has_star and parsed[0] is not None and parsed[0].find(exp.Union) is not None:
+        has_star = any(
+            isinstance(expr, exp.Star)
+            for sel in parsed[0].find_all(exp.Select)
+            for expr in (sel.expressions or [])
+        )
+
+    schema_star = _star_columns_from_schema(parsed[0], schema, excluded_cols) if has_star else []
+    star_source = list(known_columns or [])
+    # Prefer schema-derived columns when richer (e.g. thin YAML on union_relations).
+    if schema_star and len(schema_star) > len(star_source):
+        star_source = schema_star
 
     # If SELECT * (with or without EXCLUDE) and we have known columns, use those
-    if has_star and known_columns:
+    if has_star and star_source:
         # Start with known columns, remove excluded ones
-        star_columns = [c for c in known_columns if c.lower() not in excluded_cols]
+        star_columns = [c for c in star_source if c.lower() not in excluded_cols]
         # Remove columns that are already explicitly listed (e.g. aliased CASE exprs)
         explicit_names = {c.lower() for c in output_columns}
         star_columns = [c for c in star_columns if c.lower() not in explicit_names]
         # Prepend star columns before explicit columns
         output_columns = star_columns + output_columns
-    elif has_star and not known_columns:
+    elif has_star and not star_source:
         # No catalog/manifest columns — try to resolve from the CTE definition
         cte_columns = _resolve_star_from_cte(parsed[0], select_stmt, excluded_cols, dialect)
         if cte_columns:
@@ -214,7 +227,7 @@ def _trace_column_in_executor(
                 schema=schema or {},
                 dialect=dialect,
             )
-            deps = _collect_dependencies(node, output_column=col_name)
+            deps = _collect_dependencies(node, output_column=col_name, dialect=dialect)
             if deps:
                 return deps
         except Exception:  # noqa: BLE001
@@ -229,7 +242,7 @@ def _trace_column_in_executor(
                 schema={},
                 dialect=dialect,
             )
-            return _collect_dependencies(node, output_column=col_name)
+            return _collect_dependencies(node, output_column=col_name, dialect=dialect)
         except Exception:  # noqa: BLE001
             return []
 
@@ -302,6 +315,47 @@ def _extract_output_columns(select: Any) -> list[str]:
             if alias:
                 columns.append(alias)
     return columns
+
+
+def _star_columns_from_schema(
+    tree: Any,
+    schema: dict[str, dict[str, str]] | None,
+    excluded_cols: set[str],
+) -> list[str]:
+    """Column names for ``SELECT *`` / ``UNION ALL`` arms from the schema map.
+
+    For multi-arm unions, return the intersection of arm schemas so name-aligned
+    ``union_relations`` shells expand to a shared column list.
+    """
+    if not schema or tree is None:
+        return []
+    from sqlglot import exp
+
+    per_arm: list[set[str]] = []
+    for sel in tree.find_all(exp.Select):
+        if not any(isinstance(e, exp.Star) for e in (sel.expressions or [])):
+            continue
+        arm: set[str] = set()
+        for table in sel.find_all(exp.Table):
+            name = getattr(table, "name", None) or ""
+            if not name:
+                continue
+            col_map = schema.get(name) or {}
+            db = getattr(table, "db", None) or ""
+            catalog = getattr(table, "catalog", None) or ""
+            if not col_map and db:
+                col_map = schema.get(f"{db}.{name}") or {}
+            if not col_map and catalog and db:
+                col_map = schema.get(f"{catalog}.{db}.{name}") or {}
+            for col in col_map:
+                if col.lower() not in excluded_cols:
+                    arm.add(col)
+        if arm:
+            per_arm.append(arm)
+    if not per_arm:
+        return []
+    shared = set.intersection(*per_arm) if len(per_arm) > 1 else per_arm[0]
+    return sorted(shared)
 
 
 def _resolve_star_from_cte(
@@ -381,6 +435,7 @@ def _get_excluded_columns(select: Any) -> set[str]:
 def _collect_dependencies(
     root_node: Any,
     output_column: str | None = None,
+    dialect: str | None = None,
 ) -> list[ColumnDependency]:
     """Walk a SQLGlot lineage node tree and collect leaf dependencies.
 
@@ -396,6 +451,10 @@ def _collect_dependencies(
     outermost SELECT), so CTE-defining expressions like
     ``coalesce(type = 'jaffle', false)`` stay ``derived`` even when the outer
     query is ``SELECT * FROM cte``.
+
+    When the defining expression references more columns than SQLGlot's lineage
+    tree exposed as table leaves (common for CASE with same-named output/input),
+    missing identifiers are supplemented from the expression SQL.
     """
     from sqlglot import exp
 
@@ -472,7 +531,90 @@ def _collect_dependencies(
                 )
             ]
 
-    return deps
+    return _supplement_deps_from_expression(deps, dialect=dialect)
+
+
+def _column_names_from_expression(
+    expression: str,
+    dialect: str | None = None,
+) -> list[str]:
+    """Return column identifiers referenced in a SQL expression (stable order)."""
+    if not expression or not expression.strip():
+        return []
+
+    try:
+        import sqlglot
+        from sqlglot import exp
+    except ImportError:
+        return []
+
+    try:
+        tree = sqlglot.parse_one(expression, dialect=dialect)
+    except Exception:  # noqa: BLE001
+        return []
+
+    names: list[str] = []
+    seen: set[str] = set()
+    for col in tree.find_all(exp.Column):
+        name = col.name
+        if not isinstance(name, str) or not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+    return names
+
+
+def _supplement_deps_from_expression(
+    deps: list[ColumnDependency],
+    dialect: str | None = None,
+) -> list[ColumnDependency]:
+    """Add missing expression column refs when SQLGlot lineage omitted them.
+
+    Only runs for single-source derived/aggregated expressions so we do not
+    invent cross-table edges. Example: a CASE that flips ``amt_sales_excl_vat``
+    using ``transaction_source`` / ``is_item_discount`` should list all three.
+    """
+    if not deps:
+        return deps
+
+    expression = next((d.expression for d in deps if d.expression), None)
+    if not expression:
+        return deps
+
+    transformation = deps[0].transformation
+    if transformation not in ("derived", "aggregated"):
+        return deps
+
+    tables = [d.source_table for d in deps if d.source_table]
+    unique_tables = list(dict.fromkeys(tables))
+    if len(unique_tables) != 1:
+        return deps
+
+    source_table = unique_tables[0]
+    existing = {
+        (d.source_table.lower(), d.source_column.lower())
+        for d in deps
+        if d.source_table and d.source_column
+    }
+
+    out = list(deps)
+    for name in _column_names_from_expression(expression, dialect=dialect):
+        key = (source_table.lower(), name.lower())
+        if key in existing:
+            continue
+        existing.add(key)
+        out.append(
+            ColumnDependency(
+                source_table=source_table,
+                source_column=name,
+                transformation=transformation,
+                expression=expression,
+            )
+        )
+    return out
 
 
 def _constant_expression_sql(root_node: Any) -> str | None:
@@ -522,6 +664,15 @@ _PRIORITY = {
 }
 
 
+def _lineage_has_table_leaf(root_node: Any) -> bool:
+    """True when the lineage tree reaches at least one physical table column."""
+    from sqlglot import exp
+
+    nodes: list[tuple[Any, Any | None]] = []
+    _walk_with_parent(root_node, None, nodes)
+    return any(isinstance(node.source, exp.Table) for node, _ in nodes)
+
+
 def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
     """Classify transformation from the full lineage tree + capture defining SQL.
 
@@ -531,18 +682,25 @@ def _classify_lineage_tree(root_node: Any) -> tuple[str, str | None]:
 
     Leaf lineage nodes carry the source ``Table`` as ``expression`` — those are
     not transformations and must be ignored or everything looks ``derived``.
+
+    UNION / sentinel arms often inject literals (e.g. ``'UNKNOWN'``) alongside
+    a real column path. When any table leaf exists, ignore constant expressions
+    so the sentinel does not override passthrough/rename/derived lineage.
     """
     from sqlglot import exp
 
     best_kind = "unknown"
     best_priority = -1
     best_expression: str | None = None
+    ignore_constants = _lineage_has_table_leaf(root_node)
 
     def consider(expression: Any) -> None:
         nonlocal best_kind, best_priority, best_expression
         if isinstance(expression, exp.Table):
             return
         kind = _classify_transformation(expression)
+        if kind == "constant" and ignore_constants:
+            return
         priority = _PRIORITY.get(kind, 0)
         if priority > best_priority:
             best_priority = priority

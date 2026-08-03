@@ -288,6 +288,22 @@ class TestComputeColumnLineageSubset:
         result = compute_column_lineage_subset("nonexistent_model", dag_models, dag_sources, {}, {})
         assert result == set()
 
+    def test_multi_pattern_comma(self, dag_models: dict, dag_sources: dict) -> None:
+        """Comma-separated patterns are unioned."""
+        result = compute_column_lineage_subset(
+            "fct_orders,stg_customers", dag_models, dag_sources, {}, {}, max_depth=0
+        )
+        assert "model.proj.fct_orders" in result
+        assert "model.proj.stg_customers" in result
+        assert "model.proj.stg_orders" not in result
+
+    def test_multi_pattern_space(self, dag_models: dict, dag_sources: dict) -> None:
+        result = compute_column_lineage_subset(
+            "fct_orders stg_customers", dag_models, dag_sources, {}, {}, max_depth=0
+        )
+        assert "model.proj.fct_orders" in result
+        assert "model.proj.stg_customers" in result
+
     def test_sources_in_depends_on_included(self, dag_models: dict, dag_sources: dict) -> None:
         """Sources referenced in depends_on are included in the subset."""
         result = compute_column_lineage_subset("stg_orders", dag_models, dag_sources, {}, {})
@@ -383,7 +399,7 @@ class TestAnalyzeOneModel:
         )
         shared = deserialize_shared_state(blob)
 
-        # Pick a model that produces resolved lineage in the project-wide path.
+        # Pick a model with at least one resolved (non-constant) upstream edge.
         project = analyze_column_lineage(
             models=models,
             sources=sources,
@@ -393,20 +409,27 @@ class TestAnalyzeOneModel:
             manifest_nodes=dict(manifest.nodes),
             manifest_sources=dict(manifest.sources),
         )
-        uid = next(u for u, frag in project.items() if frag)
+        uid = next(
+            u
+            for u, frag in project.items()
+            if any(dep.get("source_model") for deps in frag.values() for dep in deps)
+        )
 
         result = analyze_one_model(uid, models[uid], shared)
         assert isinstance(result, _ModelLineageResult)
         assert result.uid == uid
         assert result.lineage  # non-empty fragment
-        # Each dependency carries the resolved triple.
-        for deps in result.lineage.values():
-            for dep in deps:
-                assert set(dep.keys()) >= {
-                    "source_model",
-                    "source_column",
-                    "transformation",
-                }
+        # Resolved upstream deps carry the triple; constants/untraced only need transformation.
+        traced = [
+            dep for deps in result.lineage.values() for dep in deps if dep.get("source_model")
+        ]
+        assert traced
+        for dep in traced:
+            assert set(dep.keys()) >= {
+                "source_model",
+                "source_column",
+                "transformation",
+            }
 
     def test_parity_with_project_wide_path(self) -> None:
         """analyze_one_model produces identical lineage to analyze_column_lineage."""
@@ -497,14 +520,13 @@ class TestAnalyzeOneModel:
         assert isinstance(result, _ModelLineageResult)
         # No exception; fragment may be empty since columns can't be expanded.
 
-    def test_no_edges_returns_empty_fragment(self) -> None:
-        """A model whose deps trace to nothing returns an empty .lineage, not a raise."""
+    def test_literal_columns_emit_constant_entries(self) -> None:
+        """Literal-only columns have no upstream table — emit constant + expression."""
         models = {
             "model.proj.lit": {
                 "name": "lit",
                 "schema": "public",
                 "database": "db",
-                # Literal columns reference no upstream table → nothing resolvable.
                 "compiled_sql": "SELECT 1 AS a, 'x' AS b",
                 "columns": [{"name": "a"}, {"name": "b"}],
             }
@@ -514,7 +536,12 @@ class TestAnalyzeOneModel:
         )
         shared = deserialize_shared_state(blob)
         result = analyze_one_model("model.proj.lit", models["model.proj.lit"], shared)
-        assert result.lineage == {}
+        assert set(result.lineage.keys()) == {"a", "b"}
+        assert all(
+            dep["transformation"] == "constant" and "expression" in dep
+            for deps in result.lineage.values()
+            for dep in deps
+        )
 
     def test_malformed_sql_returns_structured_failure(self) -> None:
         """Unparseable SQL → structured per-model failure, never a raised exception."""
@@ -536,9 +563,83 @@ class TestAnalyzeOneModel:
         assert isinstance(result, _ModelLineageResult)
         assert result.failure is not None
         assert result.failure["model"] == "model.proj.broken"
-        assert result.lineage == {}
+        # Known catalog columns that cannot be traced are marked untraced.
+        assert result.lineage.get("x") == [{"transformation": "untraced"}]
 
     def test_skips_model_without_sql(self) -> None:
         shared = (TableResolver(models={}, sources={}), {}, None)
         result = analyze_one_model("model.proj.empty", {"name": "empty"}, shared)
         assert result.skipped
+
+
+class TestBackfillReferencedColumnGaps:
+    def test_fills_missing_union_column_from_parents(self) -> None:
+        from docglow.lineage.analyzer import _backfill_referenced_column_gaps
+
+        pos = "model.proj.int_pos"
+        postings = "model.proj.int_postings"
+        union = "model.proj.int_union"
+        enriched = "model.proj.int_enriched"
+        models = {
+            pos: {"name": "int_pos", "depends_on": [], "columns": [{"name": "is_discount"}]},
+            postings: {
+                "name": "int_postings",
+                "depends_on": [],
+                "columns": [{"name": "is_discount"}],
+            },
+            union: {
+                "name": "int_union",
+                "depends_on": [pos, postings],
+                "columns": [{"name": "document_no"}],
+            },
+            enriched: {
+                "name": "int_enriched",
+                "depends_on": [union],
+                "columns": [{"name": "is_item_discount"}],
+            },
+        }
+        lineage = {
+            pos: {
+                "is_discount": [
+                    {
+                        "source_model": "model.proj.stg",
+                        "source_column": "line_type",
+                        "transformation": "derived",
+                    }
+                ]
+            },
+            postings: {
+                "is_discount": [
+                    {
+                        "source_model": "model.proj.stg_inv",
+                        "source_column": "line_type",
+                        "transformation": "rename",
+                    }
+                ]
+            },
+            union: {"document_no": [{"transformation": "untraced"}]},
+            enriched: {
+                "is_item_discount": [
+                    {
+                        "source_model": union,
+                        "source_column": "is_discount",
+                        "transformation": "derived",
+                    }
+                ]
+            },
+        }
+        cache: dict = {}
+        filled = _backfill_referenced_column_gaps(lineage, models, cache)
+        assert filled == 1
+        assert lineage[union]["is_discount"] == [
+            {
+                "source_model": pos,
+                "source_column": "is_discount",
+                "transformation": "passthrough",
+            },
+            {
+                "source_model": postings,
+                "source_column": "is_discount",
+                "transformation": "passthrough",
+            },
+        ]

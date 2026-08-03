@@ -298,6 +298,13 @@ export interface DocglowExposure {
   readonly depends_on: string[];
   readonly owner: Record<string, string>;
   readonly tags: string[];
+  /** Opaque meta from the dbt exposure (e.g. meta.powerbi). */
+  readonly meta: Record<string, unknown>;
+  /**
+   * Pseudo-columns on the exposure (e.g. Power BI measures) when
+   * `--exposure-field-lineage` was provided at generate time.
+   */
+  readonly columns: DocglowColumn[];
 }
 
 export interface DocglowMetric {

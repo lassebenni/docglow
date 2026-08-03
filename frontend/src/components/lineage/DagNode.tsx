@@ -1,6 +1,7 @@
-import { memo, useCallback } from 'react'
+import { memo, useCallback, useMemo, useEffect, useRef } from 'react'
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
+import { FIELD_LINEAGE_EDGE_COLOR } from '../../utils/columnTransforms'
 import { joinRoleBadgeTitle } from '../../utils/joinKeys'
 import { transformationGlyph } from '../../utils/columnTransforms'
 import type { TransformationType } from '../../types'
@@ -23,7 +24,63 @@ const TEST_STATUS_BORDER: Record<string, string> = {
 
 const COLUMN_ROW_HEIGHT = 22
 const MAX_VISIBLE_COLUMNS = 20
-const AMBER = '#f59e0b'
+/** Field-path / selected-column highlight — same amber as lineage edges. */
+const AMBER = FIELD_LINEAGE_EDGE_COLOR
+
+/**
+ * Order columns for a DAG node.
+ *
+ * - Clicked/selected node: keep catalog order (clicking a field must not jump it to top).
+ * - Parent nodes on a field path: promote matched fields to the top only when at least
+ *   one match sits below the visible scroll window (index ≥ maxVisible).
+ */
+export function orderDagNodeColumns(
+  columns: readonly string[],
+  highlightedColumns: ReadonlySet<string> | undefined,
+  options: { isSelectedNode: boolean; maxVisible?: number },
+): string[] {
+  const cols = [...columns]
+  const maxVisible = options.maxVisible ?? MAX_VISIBLE_COLUMNS
+
+  if (highlightedColumns) {
+    const byLower = new Map(cols.map((c) => [c.toLowerCase(), c]))
+    for (const h of highlightedColumns) {
+      if (!byLower.has(h.toLowerCase())) {
+        byLower.set(h.toLowerCase(), h)
+        cols.push(h)
+      }
+    }
+  }
+
+  // Selected node: never reorder on click / self-highlight.
+  if (options.isSelectedNode || !highlightedColumns?.size) return cols
+
+  const isHot = (col: string) => {
+    if (highlightedColumns.has(col)) return true
+    const lower = col.toLowerCase()
+    for (const h of highlightedColumns) {
+      if (h.toLowerCase() === lower) return true
+    }
+    return false
+  }
+
+  const hotIndices: number[] = []
+  for (let i = 0; i < cols.length; i++) {
+    if (isHot(cols[i]!)) hotIndices.push(i)
+  }
+  if (hotIndices.length === 0) return cols
+
+  // Already in the first screenful — leave catalog order alone.
+  if (hotIndices.every((i) => i < maxVisible)) return cols
+
+  const hot: string[] = []
+  const rest: string[] = []
+  for (const col of cols) {
+    if (isHot(col)) hot.push(col)
+    else rest.push(col)
+  }
+  return [...hot, ...rest]
+}
 
 export interface DagNodeData {
   name: string
@@ -38,6 +95,8 @@ export interface DagNodeData {
   autoExpanded?: boolean
   /** Map of column names that should be highlighted in the column trace */
   highlightedColumns?: Set<string>
+  /** Per-column colors for multi-branch field paths (model-local column → color) */
+  fieldPathColumnColors?: Map<string, string>
   /** Ambient join-key highlights: column → relationship color */
   joinKeyColors?: Map<string, string>
   /** Ambient transformation kinds for column glyphs */
@@ -65,6 +124,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
     columns,
     hasColumnLineage,
     highlightedColumns,
+    fieldPathColumnColors,
     joinKeyColors,
     columnKinds,
     isJoinBase,
@@ -117,8 +177,27 @@ function DagNodeComponent({ data, id }: NodeProps) {
   const tooltipText = [schema && `Schema: ${schema}`, folder && `Folder: ${folder}`].filter(Boolean).join('\n')
   const canExpand = hasColumnLineage && columns && columns.length > 0
 
-  // All columns are rendered inside a scroll container capped at MAX_VISIBLE_COLUMNS height
-  const allColumns = columns ?? []
+  const allColumns = useMemo(() => {
+    const base = [...(columns ?? [])]
+    if (selectedColumnName && !base.some((c) => c.toLowerCase() === selectedColumnName.toLowerCase())) {
+      base.push(selectedColumnName)
+    }
+    return orderDagNodeColumns(base, highlightedColumns, {
+      isSelectedNode: isThisSelected,
+      maxVisible: MAX_VISIBLE_COLUMNS,
+    })
+  }, [columns, highlightedColumns, selectedColumnName, isThisSelected])
+
+  const columnsContainerRef = useRef<HTMLDivElement>(null)
+  // Parent nodes only: scroll a matched field into view when it was promoted or
+  // sits near the fold. Never jump scroll on the node the user is clicking in.
+  useEffect(() => {
+    if (isThisSelected || !isExpanded || !highlightedColumns?.size) return
+    const root = columnsContainerRef.current
+    if (!root) return
+    const firstHot = root.querySelector('[data-col-hot="1"]') as HTMLElement | null
+    firstHot?.scrollIntoView({ block: 'nearest' })
+  }, [isThisSelected, isExpanded, highlightedColumns])
 
   return (
     <>
@@ -243,7 +322,8 @@ function DagNodeComponent({ data, id }: NodeProps) {
         {/* Expanded column list */}
         {isExpanded && columns && (
           <div
-            className="dag-node-columns"
+            ref={columnsContainerRef}
+            className="dag-node-columns nowheel nodrag"
             style={{
               borderTop: '1px solid var(--border, #e2e8f0)',
               border: '1px solid var(--border, #e2e8f0)',
@@ -260,11 +340,28 @@ function DagNodeComponent({ data, id }: NodeProps) {
             {allColumns.map((col) => {
               const isSelected = isThisSelected && selectedColumnName === col
               const joinColor = joinKeyColors?.get(col)
-              const isTraceHighlighted = highlightedColumns?.has(col)
-              const isHighlighted = isTraceHighlighted || !!joinColor
-              const highlightColor = isSelected || isTraceHighlighted
+              const pathColor = (() => {
+                if (!fieldPathColumnColors?.size) return undefined
+                if (fieldPathColumnColors.has(col)) return fieldPathColumnColors.get(col)
+                const lower = col.toLowerCase()
+                for (const [key, color] of fieldPathColumnColors) {
+                  if (key.toLowerCase() === lower) return color
+                }
+                return undefined
+              })()
+              const isTraceHighlighted = (() => {
+                if (!highlightedColumns) return false
+                if (highlightedColumns.has(col)) return true
+                const lower = col.toLowerCase()
+                for (const h of highlightedColumns) {
+                  if (h.toLowerCase() === lower) return true
+                }
+                return false
+              })()
+              const isHighlighted = isTraceHighlighted || !!joinColor || !!pathColor
+              const highlightColor = isSelected
                 ? AMBER
-                : (joinColor ?? AMBER)
+                : (pathColor ?? (isTraceHighlighted ? AMBER : (joinColor ?? AMBER)))
               const colBg = isSelected
                 ? `${AMBER}30`
                 : isHighlighted
@@ -276,6 +373,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
               return (
                 <div
                   key={col}
+                  data-col-hot={isTraceHighlighted || isSelected ? '1' : undefined}
                   onClick={(e) => handleColumnClick(e, col)}
                   style={{
                     height: COLUMN_ROW_HEIGHT,
@@ -301,10 +399,11 @@ function DagNodeComponent({ data, id }: NodeProps) {
                       aria-hidden
                       style={{
                         flexShrink: 0,
-                        fontSize: 10,
-                        fontWeight: 600,
+                        fontSize: kind === 'constant' ? 8 : 10,
+                        fontWeight: 700,
                         color: 'var(--text-muted, #94a3b8)',
-                        width: 10,
+                        minWidth: kind === 'constant' ? 16 : 10,
+                        letterSpacing: kind === 'constant' ? '0.02em' : undefined,
                         textAlign: 'center',
                         opacity: 0.85,
                       }}

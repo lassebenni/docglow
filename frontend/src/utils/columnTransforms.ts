@@ -5,12 +5,36 @@ const PRIORITY: Record<TransformationType, number> = Object.fromEntries(
   TRANSFORMATION_STRENGTH.map((kind, i) => [kind, i]),
 ) as Record<TransformationType, number>
 
+/**
+ * Default stroke/chip color for a single-branch field path (and the selected field).
+ * Transformation type is shown via edge labels/glyphs (Σ / → / ƒ), not stroke hue.
+ */
+export const FIELD_LINEAGE_EDGE_COLOR = '#f59e0b'
+
+/**
+ * Distinct colors for multi-parent field paths (one hue per immediate upstream
+ * leaf, reused for that leaf's whole upstream chain). First entry matches the
+ * single-path amber so a lone branch looks unchanged.
+ */
+export const FIELD_PATH_BRANCH_PALETTE = [
+  '#f59e0b', // amber
+  '#0d9488', // teal
+  '#2563eb', // blue
+  '#c2410c', // rust
+  '#7c3aed', // violet
+  '#15803d', // green
+  '#be123c', // rose
+  '#a16207', // olive
+] as const
+
 /** Ambient glyph for a column's transformation kind. */
 export function transformationGlyph(kind: TransformationType | null | undefined): string | null {
   if (!kind || kind === 'unknown' || kind === 'direct') return null
   if (kind === 'passthrough' || kind === 'rename') return '→'
   if (kind === 'aggregated') return 'Σ'
-  if (kind === 'constant') return '·'
+  // Match SUM/CNT-style tags in CTE lists — a middle-dot was too easy to miss
+  // next to aggregate glyphs for on-the-fly literals (CAST(0 AS …) AS col).
+  if (kind === 'constant') return 'LIT'
   if (kind === 'untraced') return '?'
   return 'ƒ'
 }

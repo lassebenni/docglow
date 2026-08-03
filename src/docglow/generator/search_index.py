@@ -63,15 +63,33 @@ def build_search_index(
                 )
 
     for uid, data in (exposures or {}).items():
+        exposure_name = data.get("name", "")
         entries.append(
             {
                 "id": uid,
                 "unique_id": uid,
-                "name": data.get("name", ""),
+                "name": exposure_name,
                 "resource_type": "exposure",
                 "description": data.get("description", ""),
                 "tags": ", ".join(data.get("tags", [])),
             }
         )
+
+        # Field/measure entries when exposure field lineage was merged.
+        for col in data.get("columns", []) or []:
+            col_name = col.get("name", "") if isinstance(col, dict) else ""
+            if not col_name:
+                continue
+            entries.append(
+                {
+                    "id": f"{uid}::{col_name}",
+                    "unique_id": uid,
+                    "name": col_name,
+                    "resource_type": "column",
+                    "column_name": col_name,
+                    "model_name": exposure_name,
+                    "description": col.get("description", "") if isinstance(col, dict) else "",
+                }
+            )
 
     return entries

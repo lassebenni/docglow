@@ -5,6 +5,8 @@ import {
   columnsModeTooltip,
   ctesModeTooltip,
   formatOverCapHeadline,
+  lineageViewModeSuffix,
+  parseLineageViewMode,
   shouldDisableColumnMode,
   shouldDisableCtesMode,
   tableModeTooltip,
@@ -80,5 +82,27 @@ describe('OVER_CAP_DETAIL_TEXT', () => {
 describe('DEFAULT_EXPAND_ALL_CAP', () => {
   it('is 50 as specified in the requirements', () => {
     expect(DEFAULT_EXPAND_ALL_CAP).toBe(50)
+  })
+})
+
+describe('parseLineageViewMode', () => {
+  it('accepts table, columns, and ctes', () => {
+    expect(parseLineageViewMode('table')).toBe('table')
+    expect(parseLineageViewMode('columns')).toBe('columns')
+    expect(parseLineageViewMode('ctes')).toBe('ctes')
+  })
+
+  it('falls back to table for missing or unknown segments', () => {
+    expect(parseLineageViewMode(undefined)).toBe('table')
+    expect(parseLineageViewMode('')).toBe('table')
+    expect(parseLineageViewMode('dag')).toBe('table')
+  })
+})
+
+describe('lineageViewModeSuffix', () => {
+  it('omits table and prefixes other modes', () => {
+    expect(lineageViewModeSuffix('table')).toBe('')
+    expect(lineageViewModeSuffix('columns')).toBe('/columns')
+    expect(lineageViewModeSuffix('ctes')).toBe('/ctes')
   })
 })

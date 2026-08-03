@@ -67,12 +67,17 @@ function App() {
         <Route element={<MainLayout />}>
           <Route index element={<Overview />} />
           <Route path="/model/:id" element={<ModelPage />} />
-          {/* Deep-linkable tab: /#/model/<id>/<tab>  — falls back to 'columns'
-              for unknown tabs (handled in ModelPage). */}
+          {/* Deep-linkable tab: /#/model/<id>/<tab>
+              Lineage view mode: /#/model/<id>/lineage/<table|columns|ctes>
+              (table omitted → /lineage). Unknown tabs fall back to columns. */}
+          <Route path="/model/:id/:tab/:view" element={<ModelPage />} />
           <Route path="/model/:id/:tab" element={<ModelPage />} />
           <Route path="/source/:id" element={<SourcePage />} />
+          {/* Lineage view: /#/exposure/<id>/<columns|ctes> (table = no segment). */}
+          <Route path="/exposure/:id/:view" element={<ExposurePage />} />
           <Route path="/exposure/:id" element={<ExposurePage />} />
           <Route path="/erd" element={<ErdPage />} />
+          <Route path="/lineage/:view" element={<LineagePage />} />
           <Route path="/lineage" element={<LineagePage />} />
           <Route path="/health" element={<HealthPage />} />
           <Route path="/layers" element={<LayersPage />} />

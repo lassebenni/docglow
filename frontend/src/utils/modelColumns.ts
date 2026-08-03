@@ -8,5 +8,11 @@ export function buildModelColumnsMap(data: DocglowData): Record<string, string[]
   for (const [id, source] of Object.entries(data.sources)) {
     map[id] = source.columns.map(c => c.name)
   }
+  for (const [id, exposure] of Object.entries(data.exposures ?? {})) {
+    const cols = exposure.columns ?? []
+    if (cols.length > 0) {
+      map[id] = cols.map(c => c.name)
+    }
+  }
   return map
 }
