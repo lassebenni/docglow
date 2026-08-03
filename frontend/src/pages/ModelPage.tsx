@@ -825,6 +825,7 @@ export function ModelPage() {
                 joinIndirectData={data?.join_indirect}
                 modelColumns={modelColumnsMap}
                 fieldPathOnly={fieldPathOnly}
+                autoExpandColumns={lineageViewMode === 'columns'}
               />
             )}
           </div>

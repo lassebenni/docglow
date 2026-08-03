@@ -107,7 +107,7 @@ export interface JoinKeyPair {
 
 export type JoinKeysData = Record<string, JoinKeyPair[]>;
 
-export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output' | 'op'
+export type SqlGraphNodeKind = 'parent' | 'cte' | 'join' | 'output'
 
 export type SqlGraphOpKind = 'filter'
 
@@ -140,8 +140,6 @@ export interface SqlGraphNode {
   readonly passthrough?: boolean
   readonly column_agg?: Readonly<Record<string, SqlGraphAggFn>>
   readonly select_sql?: string
-  readonly expression?: string
-  readonly op_kind?: SqlGraphOpKind
 }
 
 export interface SqlGraphEdge {
@@ -274,8 +272,6 @@ declare module "@docglow/shared-types" {
     readonly url: string;
     readonly label: string;
     readonly maturity: string;
-    readonly meta?: Record<string, unknown>;
-    readonly columns?: import("@docglow/shared-types").DocglowColumn[];
   }
 
   // Added in 0.8.6 (DOC-296). False when no source has freshness monitoring, in

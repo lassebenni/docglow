@@ -394,6 +394,10 @@ class TestBuildSqlGraph:
 
         flagged = by_id["cte:flagged"]
         assert any(o["kind"] == "filter" for o in flagged.get("ops") or [])
+        where_op = next(o for o in flagged["ops"] if o["label"] == "where")
+        assert "status" in [c.lower() for c in (where_op.get("columns") or [])]
+        assert where_op.get("expression")
+        assert "status" in where_op["expression"].lower()
         assert not any(o["kind"] == "case" for o in flagged.get("ops") or [])
         assert "filter" in (flagged.get("transforms") or [])
         is_done = graph["column_lineage"]["cte:flagged"]["is_done"]
@@ -409,6 +413,59 @@ class TestBuildSqlGraph:
         assert "ordered_at" in cols
         assert n_deps[0].get("expression")
         assert "row_number" in n_deps[0]["expression"].lower()
+
+    def test_filter_ops_predicate_columns_where_and_having(self) -> None:
+        """WHERE/HAVING ops include unique predicate columns (order + case-insensitive)."""
+        sql = """
+        with
+        base as (select * from analytics.stg_orders),
+        filtered as (
+            select order_id, status, customer_id
+            from base
+            where status is not null and customer_id = customer_id and Status <> 'cancelled'
+        ),
+        summarized as (
+            select
+                customer_id,
+                count(*) as order_count
+            from filtered
+            group by 1
+            having count(*) > 1 and customer_id is not null
+        )
+        select * from summarized
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.orders",
+            model_name="orders",
+            resolver=TableResolver(
+                models={
+                    "model.proj.stg_orders": {"name": "stg_orders", "schema": "analytics"},
+                    "model.proj.orders": {"name": "orders", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.stg_orders": {
+                    "order_id": "varchar",
+                    "customer_id": "varchar",
+                    "status": "varchar",
+                }
+            },
+            output_columns=["customer_id", "order_count"],
+        )
+        assert graph is not None
+        by_id = {n["id"]: n for n in graph["nodes"]}
+
+        where_op = next(o for o in by_id["cte:filtered"]["ops"] if o["label"] == "where")
+        where_cols = [c.lower() for c in (where_op.get("columns") or [])]
+        assert where_cols == ["status", "customer_id"]
+        assert "status" in (where_op.get("expression") or "").lower()
+
+        having_op = next(o for o in by_id["cte:summarized"]["ops"] if o["label"] == "having")
+        having_cols = [c.lower() for c in (having_op.get("columns") or [])]
+        assert having_cols == ["customer_id"]
+        assert "filter" in (by_id["cte:summarized"].get("transforms") or [])
 
     def test_aggregate_cte_column_agg_and_no_case_ops(self) -> None:
         sql = """
