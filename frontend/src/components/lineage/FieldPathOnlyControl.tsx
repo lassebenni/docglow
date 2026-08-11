@@ -36,8 +36,9 @@ export function FieldPathOnlyControl({
       <input
         type="checkbox"
         checked={checked}
+        disabled={!hasSelection && !checked}
         onChange={(e) => onChange(e.target.checked)}
-        className="accent-[var(--primary)] cursor-pointer"
+        className="accent-[var(--primary)] cursor-pointer disabled:cursor-not-allowed"
       />
       Field path only
     </label>

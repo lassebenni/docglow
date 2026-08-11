@@ -18,6 +18,7 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import { useNavigate } from 'react-router-dom'
 import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData, JoinKeysData } from '../../types'
+import type { LineageDirection } from '../../utils/graph'
 import { getUnionChain } from '../../utils/graphTraversal'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
 import {
@@ -444,10 +445,14 @@ export interface LineageFlowProps {
    */
   fieldPathOnly?: boolean
   /**
+   * Toolbar Up/Down/Both — kept in sync with field-path subgraph filtering so
+   * column chips/edges match which models remain on the canvas.
+   */
+  direction?: LineageDirection
+  /**
    * When false, skip the small-graph auto-expand of column lists.
-   * Model Lineage passes this from the Table/Columns toggle (default Table)
-   * so the button state matches what is rendered. Global Lineage keeps the
-   * default true.
+   * Model / Exposure / Lineage pages pass this from the Table/Columns toggle
+   * (default Table) so the button state matches what is rendered.
    */
   autoExpandColumns?: boolean
 }
@@ -469,6 +474,7 @@ function LineageFlowInner({
   joinIndirectData,
   modelColumns,
   fieldPathOnly = false,
+  direction = 'both',
   autoExpandColumns = true,
 }: LineageFlowProps) {
   const navigate = useNavigate()
@@ -521,6 +527,10 @@ function LineageFlowInner({
         selectedColumn.columnName,
         columnLineageData,
         reverseIndex,
+        {
+          includeUpstream: direction !== 'downstream',
+          includeDownstream: direction !== 'upstream',
+        },
       )
     }
     return getColumnTraceResult(
@@ -529,7 +539,7 @@ function LineageFlowInner({
       columnLineageData,
       reverseIndex,
     )
-  }, [selectedColumn, columnLineageData, reverseIndex, fieldPathOnly])
+  }, [selectedColumn, columnLineageData, reverseIndex, fieldPathOnly, direction])
 
   // Expand every model on the selected field's path so parent columns are visible
   useEffect(() => {

@@ -244,6 +244,119 @@ class TestApplyExposureFieldLineage:
         assert [c["name"] for c in exposures[uid]["columns"]] == ["A", "B"]
         assert uid not in lineage or "A" not in lineage.get(uid, {})
 
+    def test_rename_transformation_accepted(self) -> None:
+        exposures, models, _ = _base_payload()
+        sidecar = {
+            "version": 1,
+            "exposures": {
+                "weekly_executive_dashboard": {
+                    "fields": [
+                        {
+                            "name": "Renamed Amt",
+                            "kind": "measure",
+                            "depends_on": [
+                                {
+                                    "model": "fct_orders",
+                                    "column": "amount",
+                                    "transformation": "rename",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        lineage = apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        assert lineage is not None
+        deps = lineage["exposure.jaffle.weekly_executive_dashboard"]["Renamed Amt"]
+        assert deps[0]["transformation"] == "rename"
+
+    def test_renamed_alias_maps_to_rename(self) -> None:
+        exposures, models, _ = _base_payload()
+        sidecar = {
+            "version": 1,
+            "exposures": {
+                "weekly_executive_dashboard": {
+                    "fields": [
+                        {
+                            "name": "Alias Amt",
+                            "kind": "measure",
+                            "depends_on": [
+                                {
+                                    "model": "fct_orders",
+                                    "column": "amount",
+                                    "transformation": "renamed",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        lineage = apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        assert lineage is not None
+        deps = lineage["exposure.jaffle.weekly_executive_dashboard"]["Alias Amt"]
+        assert deps[0]["transformation"] == "rename"
+
+    def test_case_expression_skips_sql_keywords(self) -> None:
+        exposures, models, _ = _base_payload()
+        sidecar = {
+            "version": 1,
+            "exposures": {
+                "weekly_executive_dashboard": {
+                    "fields": [
+                        {
+                            "name": "Conditional",
+                            "kind": "measure",
+                            "depends_on": [
+                                {
+                                    "model": "fct_orders",
+                                    "column": "case when status = 'x' then amount end",
+                                    "transformation": "derived",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        lineage = apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        assert lineage is not None
+        cols = {
+            d["source_column"]
+            for d in lineage["exposure.jaffle.weekly_executive_dashboard"]["Conditional"]
+        }
+        assert "amount" in cols
+        assert "status" in cols
+        assert "case" not in cols
+        assert "when" not in cols
+        assert "then" not in cols
+        assert "end" not in cols
+
 
 class TestSearchIndexExposureFields:
     def test_exposure_fields_indexed(self) -> None:

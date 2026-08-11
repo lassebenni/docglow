@@ -38,13 +38,46 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 SUPPORTED_VERSION = 1
+# Must match Docglow / shared-types TransformationType (not renamed/cast).
 _VALID_TRANSFORMATIONS = frozenset(
-    {"passthrough", "renamed", "cast", "derived", "aggregated", "constant"}
+    {"passthrough", "rename", "derived", "aggregated", "constant"}
 )
+_TRANSFORMATION_ALIASES: dict[str, str] = {
+    "renamed": "rename",
+    "cast": "passthrough",
+}
 _DEFAULT_TRANSFORMATION = "aggregated"
 
 # Column-like tokens inside expression mart_columns (e.g. "a + b").
 _COLUMN_TOKEN_RE = re.compile(r"\b([a-z_][a-z0-9_]*)\b", re.IGNORECASE)
+# Tokens that look like identifiers but are SQL keywords / noise in expressions.
+_SQL_NOISE_TOKENS = frozenset(
+    {
+        "and",
+        "as",
+        "between",
+        "case",
+        "cast",
+        "coalesce",
+        "distinct",
+        "else",
+        "end",
+        "false",
+        "from",
+        "iff",
+        "ifnull",
+        "in",
+        "is",
+        "like",
+        "not",
+        "null",
+        "nullif",
+        "or",
+        "then",
+        "true",
+        "when",
+    }
+)
 
 
 def load_exposure_field_lineage(path: Path) -> dict[str, Any]:
@@ -135,7 +168,39 @@ def _normalize_columns(column: str) -> list[str]:
         return []
     if re.fullmatch(r"[a-z_][a-z0-9_]*", column, re.IGNORECASE):
         return [column]
-    return _COLUMN_TOKEN_RE.findall(column)
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for token in _COLUMN_TOKEN_RE.findall(column):
+        if token.lower() in _SQL_NOISE_TOKENS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        tokens.append(token)
+    return tokens
+
+
+def _normalize_transformation(raw: Any) -> str:
+    """Map sidecar transformation strings onto Docglow's TransformationType."""
+    if not isinstance(raw, str) or not raw.strip():
+        return _DEFAULT_TRANSFORMATION
+    key = raw.strip().lower()
+    if key in _TRANSFORMATION_ALIASES:
+        mapped = _TRANSFORMATION_ALIASES[key]
+        logger.warning(
+            "exposure field lineage: transformation %r mapped to %r",
+            raw,
+            mapped,
+        )
+        return mapped
+    if key in _VALID_TRANSFORMATIONS:
+        return key
+    logger.warning(
+        "exposure field lineage: unknown transformation %r; using %r",
+        raw,
+        _DEFAULT_TRANSFORMATION,
+    )
+    return _DEFAULT_TRANSFORMATION
 
 
 def _direct_deps_for_field(
@@ -163,9 +228,7 @@ def _direct_deps_for_field(
             )
             continue
 
-        transformation = dep.get("transformation", _DEFAULT_TRANSFORMATION)
-        if transformation not in _VALID_TRANSFORMATIONS:
-            transformation = _DEFAULT_TRANSFORMATION
+        transformation = _normalize_transformation(dep.get("transformation", _DEFAULT_TRANSFORMATION))
 
         for column in _normalize_columns(column_raw):
             key = (model_uid, column)
@@ -176,7 +239,7 @@ def _direct_deps_for_field(
                 {
                     "source_model": model_uid,
                     "source_column": column,
-                    "transformation": str(transformation),
+                    "transformation": transformation,
                 }
             )
 

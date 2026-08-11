@@ -120,14 +120,26 @@ export function ExposurePage() {
   const [showParentSiblings, setShowParentSiblings] = useState(false)
   const [fieldPathOnly, setFieldPathOnly] = useState(false)
   const [lineageFullscreen, setLineageFullscreen] = useState(false)
-  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() =>
-    parseLineageViewMode(viewParam),
-  )
+  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() => {
+    const mode = parseLineageViewMode(viewParam)
+    // Exposures have no SQL graph — never land on CTEs.
+    return mode === 'ctes' ? 'table' : mode
+  })
   useEffect(() => {
-    setLineageViewModeState(parseLineageViewMode(viewParam))
-  }, [viewParam])
+    const mode = parseLineageViewMode(viewParam)
+    if (mode === 'ctes') {
+      setLineageViewModeState('table')
+      if (decodedId) {
+        navigate(`/exposure/${encodeURIComponent(decodedId)}`, { replace: true })
+      }
+      return
+    }
+    setLineageViewModeState(mode)
+  }, [viewParam, decodedId, navigate])
 
   const selectLineageViewMode = useCallback((mode: LineageViewMode) => {
+    // CTEs stays disabled for exposures (no sql_graph).
+    if (mode === 'ctes') return
     setLineageViewModeState(mode)
     if (!decodedId) return
     const encoded = encodeURIComponent(decodedId)
@@ -610,6 +622,8 @@ export function ExposurePage() {
               joinBasesData={data?.join_bases}
               joinIndirectData={data?.join_indirect}
               fieldPathOnly={fieldPathOnly}
+              direction={direction}
+              autoExpandColumns={lineageViewMode === 'columns'}
               onNavigateAway={() => setLineageFullscreen(false)}
             />
           </div>

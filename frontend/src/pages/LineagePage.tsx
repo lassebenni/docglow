@@ -68,14 +68,24 @@ export function LineagePage() {
     return raw === 'upstream' || raw === 'downstream' ? raw : 'both'
   })
   const [search, setSearch] = useState('')
-  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() =>
-    parseLineageViewMode(viewParam),
-  )
+  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() => {
+    const mode = parseLineageViewMode(viewParam)
+    // Global lineage has no focus-model SQL graph — never land on CTEs.
+    return mode === 'ctes' ? 'table' : mode
+  })
   useEffect(() => {
-    setLineageViewModeState(parseLineageViewMode(viewParam))
-  }, [viewParam])
+    const mode = parseLineageViewMode(viewParam)
+    if (mode === 'ctes') {
+      setLineageViewModeState('table')
+      const qs = searchParams.toString()
+      navigate(`/lineage${qs ? `?${qs}` : ''}`, { replace: true })
+      return
+    }
+    setLineageViewModeState(mode)
+  }, [viewParam, navigate, searchParams])
 
   const selectLineageViewMode = useCallback((mode: LineageViewMode) => {
+    if (mode === 'ctes') return
     setLineageViewModeState(mode)
     const qs = searchParams.toString()
     navigate(`/lineage${lineageViewModeSuffix(mode)}${qs ? `?${qs}` : ''}`, { replace: true })
@@ -481,6 +491,8 @@ export function LineagePage() {
               joinBasesData={data.join_bases}
               joinIndirectData={data.join_indirect}
               modelColumns={modelColumnsMap}
+              direction={direction}
+              autoExpandColumns={lineageViewMode === 'columns'}
             />
           )}
         </div>
