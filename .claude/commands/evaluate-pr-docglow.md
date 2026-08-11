@@ -20,7 +20,7 @@ not restated here). Overlay letters map to domains as follows:
 | Layer | Source | What it covers |
 |---|---|---|
 | **Global** | `~/.claude/commands/evaluate-pr.md` steps 1–5 | Necessity, DRY, SRP, placement, cross-PR scope, extendability, correctness-by-execution, comment quality |
-| **Overlay** | This file (A, A2, B, B2, D) | Path routes, static-bundle / shared-types traps, fork vs upstream, vt-dbt consumer blast radius |
+| **Overlay** | This file (A, A2, B, B2, C, D) | Path routes, static-bundle / shared-types traps, fork vs upstream, vt-dbt consumer blast radius, report skeleton additions |
 
 This file adds only what is specific to **`lassebenni/docglow`** (the
 VanTilburg / vt-dbt fork of `docglow/docglow`).
@@ -90,10 +90,14 @@ If nothing consumer-facing changed, report `consumer blast radius: none`.
 - **Fork, not upstream PR.** Do not block on "could be upstreamed" or "changes
   the upstream contract". Divergence is allowed. Do flag *local* bugs and
   contract drift inside the fork.
+- **Frontend (TSX/TS).** Source of truth is `frontend/src/`; run
+  `cd frontend && npx tsc --noEmit` and targeted vitest for behaviour the PR
+  adds. Do not review hashed assets under `src/docglow/static/assets/` as
+  source — see copilot-instructions § static-bundle assets.
 - **Static bundle pairing.** Frontend source edits that affect the shipped SPA
-  should land with a regenerated `src/docglow/static/` from `npm run build:sync`,
-  including **deletion** of stale content-hashed assets. Reviewing only the
-  minified bundle (or leaving both old and new hashes) is a finding.
+  must land with a regenerated `src/docglow/static/` from `npm run build:sync`,
+  including **deletion** of stale content-hashed assets. Orphaned hashes or
+  source-only frontend changes without sync are a finding.
 - **shared-types drift.** Changing `packages/shared-types` without rebuilding /
   without updating `frontend/src/types/index.ts` augmentations (the fork still
   carries temporary interface merges until republish) causes `tsc` failures that
@@ -103,21 +107,18 @@ If nothing consumer-facing changed, report `consumer blast radius: none`.
   cherry-picking upstream, confirm fork-only behaviour from `PORTING_TODO.md`
   still works. A lost Parents/Children depth slider or Documentation tab is a
   **must-fix**, not a nit.
-- **Fail-soft is intentional** in generator/profiler paths — don't request
-  "raise instead of warn" for malformed optional inputs.
-- **PII:** don't ask the fork to re-detect PII; trust producer metadata.
 - **Lineage cache format.** Shape changes to cached lineage results require
   `_CACHE_FORMAT_VERSION` (or equivalent) bumps — otherwise stale caches lie.
-- **Performance findings** only on hot paths called out in
-  copilot-instructions (per-model pipeline stages, BFS in `graph.ts`).
-  Constant-time / once-per-site work is not interesting.
-- **Out-of-scope nits** (do not raise): ruff/eslint style, DRY for <3 sites /
-  <10 lines, comment density, rename-for-clarity, type-alias extraction,
-  parallelize-the-build suggestions. See copilot-instructions § out-of-scope.
+- **Already in copilot-instructions — cite, don't restate:** fail-soft
+  generator/profiler paths, PII trust-the-producer, performance hot-path scope,
+  and out-of-scope review nits.
 
 ## Overlay B2 — read every changed path, and verify what it asserts
 
-Same two failures Overlay B2 exists to stop in vt-dbt — they apply here too:
+Two failures to avoid: (1) reviewing a subset of the changed-path list instead
+of every file in the PR, and (2) treating a file under review
+(copilot-instructions, `PORTING_TODO.md`, `CLAUDE.md`, skills/commands) as
+ground truth instead of evidence to verify.
 
 **Reviewing a subset.** Enumerate the PR's file list and account for every path
 (finding or "read, nothing to report"). Never narrow to `frontend/` or
