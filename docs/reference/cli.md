@@ -26,6 +26,7 @@ docglow generate [OPTIONS]
 | `--skip-column-lineage` | off | Skip column-level lineage analysis |
 | `--column-lineage-select` | all | Only analyze column lineage for this model |
 | `--column-lineage-depth` | unlimited | Max hops from the selected model |
+| `--exposure-field-lineage` | none | Path to `exposure_field_lineage.json` sidecar mapping exposure fields (e.g. Power BI measures) to mart columns; merged into column lineage at generate time |
 | `--include-packages` | off | Include dbt package models in lineage |
 | `--profile` | off | Enable column profiling |
 | `--profile-adapter` | none | Database adapter (`duckdb`, `postgres`, `snowflake`) |

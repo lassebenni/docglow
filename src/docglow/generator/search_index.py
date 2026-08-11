@@ -5,6 +5,51 @@ from __future__ import annotations
 from typing import Any
 
 
+def exposure_search_entries(uid: str, data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Resource + field/measure column entries for one exposure."""
+    exposure_name = data.get("name", "")
+    entries: list[dict[str, Any]] = [
+        {
+            "id": uid,
+            "unique_id": uid,
+            "name": exposure_name,
+            "resource_type": "exposure",
+            "description": data.get("description", ""),
+            "tags": ", ".join(data.get("tags", [])),
+        }
+    ]
+
+    for col in data.get("columns", []) or []:
+        col_name = col.get("name", "") if isinstance(col, dict) else ""
+        if not col_name:
+            continue
+        entries.append(
+            {
+                "id": f"{uid}::{col_name}",
+                "unique_id": uid,
+                "name": col_name,
+                "resource_type": "column",
+                "column_name": col_name,
+                "model_name": exposure_name,
+                "description": col.get("description", "") if isinstance(col, dict) else "",
+            }
+        )
+
+    return entries
+
+
+def refresh_exposure_search_entries(
+    entries: list[dict[str, Any]],
+    exposures: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Replace exposure resource + field entries after field lineage merge."""
+    exposure_uids = set(exposures)
+    kept = [entry for entry in entries if entry.get("unique_id") not in exposure_uids]
+    for uid, data in exposures.items():
+        kept.extend(exposure_search_entries(uid, data))
+    return kept
+
+
 def build_search_index(
     models: dict[str, Any],
     sources: dict[str, Any],
@@ -63,33 +108,6 @@ def build_search_index(
                 )
 
     for uid, data in (exposures or {}).items():
-        exposure_name = data.get("name", "")
-        entries.append(
-            {
-                "id": uid,
-                "unique_id": uid,
-                "name": exposure_name,
-                "resource_type": "exposure",
-                "description": data.get("description", ""),
-                "tags": ", ".join(data.get("tags", [])),
-            }
-        )
-
-        # Field/measure entries when exposure field lineage was merged.
-        for col in data.get("columns", []) or []:
-            col_name = col.get("name", "") if isinstance(col, dict) else ""
-            if not col_name:
-                continue
-            entries.append(
-                {
-                    "id": f"{uid}::{col_name}",
-                    "unique_id": uid,
-                    "name": col_name,
-                    "resource_type": "column",
-                    "column_name": col_name,
-                    "model_name": exposure_name,
-                    "description": col.get("description", "") if isinstance(col, dict) else "",
-                }
-            )
+        entries.extend(exposure_search_entries(uid, data))
 
     return entries

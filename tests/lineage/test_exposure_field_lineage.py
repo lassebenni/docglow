@@ -9,10 +9,12 @@ import pytest
 
 from docglow.lineage.exposure_field_lineage import (
     _field_expression,
+    _normalize_columns,
     _strip_formula_narrative,
     apply_exposure_field_lineage,
     collect_mart_model_names,
     load_exposure_field_lineage,
+    try_load_exposure_field_lineage,
 )
 
 FIXTURE = Path(__file__).parent.parent / "fixtures" / "exposure_field_lineage.json"
@@ -354,13 +356,72 @@ class TestApplyExposureFieldLineage:
         }
         assert "amount" in cols
         assert "status" in cols
+        assert "x" not in cols
         assert "case" not in cols
         assert "when" not in cols
         assert "then" not in cols
         assert "end" not in cols
 
+    def test_aggregate_call_skips_function_name(self) -> None:
+        assert _normalize_columns("sum(amount)") == ["amount"]
+        assert _normalize_columns("MAX(qty) - MIN(qty)") == ["qty"]
+
+    def test_qualified_column_keeps_trailing_segment(self) -> None:
+        assert _normalize_columns("fct_sales.amount") == ["amount"]
+
+    def test_direct_transformation_accepted(self) -> None:
+        exposures, models, _ = _base_payload()
+        sidecar = {
+            "version": 1,
+            "exposures": {
+                "weekly_executive_dashboard": {
+                    "fields": [
+                        {
+                            "name": "Direct Col",
+                            "kind": "measure",
+                            "depends_on": [
+                                {
+                                    "model": "fct_orders",
+                                    "column": "amount",
+                                    "transformation": "direct",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        lineage = apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        assert lineage is not None
+        deps = lineage["exposure.jaffle.weekly_executive_dashboard"]["Direct Col"]
+        assert deps[0]["transformation"] == "direct"
+
+
+class TestTryLoadExposureFieldLineage:
+    def test_invalid_json_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        assert try_load_exposure_field_lineage(path) is None
+
+    def test_bad_version_returns_none(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps({"version": 99, "exposures": {}}), encoding="utf-8")
+        assert try_load_exposure_field_lineage(path) is None
+
 
 class TestFormulaNarrativeStripping:
+    def test_strips_note_line_with_trailing_text(self) -> None:
+        raw = "SUM(revenue)\nNote: excludes VAT"
+        assert _strip_formula_narrative(raw) == "SUM(revenue)"
+
     def test_strips_sourced_from_tail(self) -> None:
         raw = """Brutowinst excl. BTW = SUM(amt_sales_excl_vat) − SUM(amt_cogs_excl_vat)
 
@@ -465,3 +526,29 @@ class TestSearchIndexExposureFields:
         ]
         assert len(measure_entries) == 1
         assert measure_entries[0]["unique_id"] == "exposure.jaffle.weekly_executive_dashboard"
+
+    def test_refresh_exposure_search_entries(self) -> None:
+        from docglow.generator.search_index import (
+            build_search_index,
+            refresh_exposure_search_entries,
+        )
+
+        exposures, models, _ = _base_payload()
+        base_index = build_search_index(models, {}, {}, {}, exposures=exposures)
+        sidecar = load_exposure_field_lineage(FIXTURE)
+        apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        refreshed = refresh_exposure_search_entries(base_index, exposures)
+        assert len(refreshed) > len(base_index)
+        assert any(
+            e.get("column_name") == "Total Revenue"
+            for e in refreshed
+            if e.get("resource_type") == "column"
+        )

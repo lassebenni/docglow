@@ -320,29 +320,30 @@ def _build_column_lineage(
     if subset is not None and exposure_field_lineage_path is not None:
         from docglow.lineage.exposure_field_lineage import (
             collect_mart_model_names,
-            load_exposure_field_lineage,
+            try_load_exposure_field_lineage,
         )
 
-        sidecar = load_exposure_field_lineage(_Path(exposure_field_lineage_path))
-        mart_names = collect_mart_model_names(sidecar)
-        if mart_names:
-            before = len(subset)
-            for name in sorted(mart_names):
-                subset |= compute_column_lineage_subset(
-                    pattern=name,
-                    models=models,
-                    sources=sources,
-                    seeds=seeds,
-                    snapshots=snapshots,
-                    max_depth=depth,
+        sidecar = try_load_exposure_field_lineage(_Path(exposure_field_lineage_path))
+        if sidecar is not None:
+            mart_names = collect_mart_model_names(sidecar)
+            if mart_names:
+                before = len(subset)
+                for name in sorted(mart_names):
+                    subset |= compute_column_lineage_subset(
+                        pattern=name,
+                        models=models,
+                        sources=sources,
+                        seeds=seeds,
+                        snapshots=snapshots,
+                        max_depth=depth,
+                    )
+                logger.info(
+                    "Expanded column lineage subset with %d exposure field lineage "
+                    "mart model(s): %d → %d unique_ids",
+                    len(mart_names),
+                    before,
+                    len(subset),
                 )
-            logger.info(
-                "Expanded column lineage subset with %d exposure field lineage "
-                "mart model(s): %d → %d unique_ids",
-                len(mart_names),
-                before,
-                len(subset),
-            )
 
     result = analyze_column_lineage(
         models=models,

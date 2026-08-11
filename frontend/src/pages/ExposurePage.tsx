@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Markdown } from '../components/Markdown'
 import {
   ColumnExpandControls,
@@ -94,6 +94,7 @@ function formatOwner(owner: Record<string, string>): string | null {
 
 export function ExposurePage() {
   const { id, view: viewParam } = useParams<{ id: string; view?: string }>()
+  const location = useLocation()
   const navigate = useNavigate()
   const { data, getExposure, getModel } = useProjectStore()
 
@@ -147,6 +148,55 @@ export function ExposurePage() {
   }, [navigate, decodedId])
 
   const selectedColumn = useColumnHighlightStore((s) => s.selectedColumn)
+  const selectColumn = useColumnHighlightStore((s) => s.selectColumn)
+  const ensureExpanded = useColumnHighlightStore((s) => s.ensureExpanded)
+
+  // Search deep-links land as /exposure/:id#col-<measure>; open Columns mode and scroll.
+  useEffect(() => {
+    const hash = location.hash
+    if (!hash.startsWith('#col-') || !decodedId) return
+
+    const columnName = hash.slice(5)
+    if (!columnName) return
+
+    setLineageViewModeState('columns')
+    if (viewParam !== 'columns') {
+      navigate(
+        `/exposure/${encodeURIComponent(decodedId)}${lineageViewModeSuffix('columns')}${hash}`,
+        { replace: true },
+      )
+    }
+
+    ensureExpanded([decodedId])
+    if (
+      selectedColumn?.modelId !== decodedId
+      || selectedColumn?.columnName !== columnName
+    ) {
+      selectColumn(decodedId, columnName)
+    }
+
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(hash.slice(1))
+      if (!el) return
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      el.style.transition = 'background-color 0.3s'
+      el.style.backgroundColor = 'var(--primary-bg, rgba(37, 99, 235, 0.12))'
+      window.setTimeout(() => {
+        el.style.backgroundColor = ''
+      }, 1500)
+    }, 200)
+    return () => window.clearTimeout(timer)
+  }, [
+    location.hash,
+    decodedId,
+    viewParam,
+    navigate,
+    ensureExpanded,
+    selectColumn,
+    selectedColumn?.modelId,
+    selectedColumn?.columnName,
+  ])
+
   const [typeFilter, toggleType, setTypeMode, clearTypes] = useFilterState()
   const {
     selected: globalTagSelected,

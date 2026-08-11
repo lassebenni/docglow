@@ -389,12 +389,14 @@ def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
 
     from docglow.lineage.exposure_field_lineage import (
         apply_exposure_field_lineage,
-        load_exposure_field_lineage,
+        try_load_exposure_field_lineage,
     )
 
     resolved = Path(path)
     logger.info("Loading exposure field lineage from %s", resolved)
-    sidecar = load_exposure_field_lineage(resolved)
+    sidecar = try_load_exposure_field_lineage(resolved)
+    if sidecar is None:
+        return
     ctx.column_lineage = apply_exposure_field_lineage(
         sidecar=sidecar,
         exposures=ctx.exposures,
@@ -406,15 +408,9 @@ def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
     )
 
     # Rebuild search so exposure measure/field names are indexed.
-    from docglow.generator.search_index import build_search_index
+    from docglow.generator.search_index import refresh_exposure_search_entries
 
-    ctx.search_index = build_search_index(
-        ctx.models,
-        ctx.sources,
-        ctx.seeds,
-        ctx.snapshots,
-        exposures=ctx.exposures,
-    )
+    ctx.search_index = refresh_exposure_search_entries(ctx.search_index, ctx.exposures)
 
 
 def stage_strip_sql(ctx: PipelineContext) -> None:

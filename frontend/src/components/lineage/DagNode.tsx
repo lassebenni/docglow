@@ -373,6 +373,7 @@ function DagNodeComponent({ data, id }: NodeProps) {
               return (
                 <div
                   key={col}
+                  id={`col-${col}`}
                   data-col-hot={isTraceHighlighted || isSelected ? '1' : undefined}
                   onClick={(e) => handleColumnClick(e, col)}
                   style={{

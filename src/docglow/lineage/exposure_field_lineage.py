@@ -38,9 +38,18 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 SUPPORTED_VERSION = 1
-# Must match Docglow / shared-types TransformationType (not renamed/cast).
+# Must match Docglow / shared-types TransformationType (aliases mapped separately).
 _VALID_TRANSFORMATIONS = frozenset(
-    {"passthrough", "rename", "derived", "aggregated", "constant"}
+    {
+        "passthrough",
+        "rename",
+        "derived",
+        "aggregated",
+        "constant",
+        "untraced",
+        "unknown",
+        "direct",
+    }
 )
 _TRANSFORMATION_ALIASES: dict[str, str] = {
     "renamed": "rename",
@@ -98,6 +107,19 @@ def load_exposure_field_lineage(path: Path) -> dict[str, Any]:
         raise ValueError(f"exposure field lineage missing 'exposures' object: {path}")
 
     return raw
+
+
+def try_load_exposure_field_lineage(path: Path) -> dict[str, Any] | None:
+    """Load sidecar JSON; log and return ``None`` on failure (fail-soft generate)."""
+    try:
+        return load_exposure_field_lineage(path)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        logger.warning(
+            "exposure field lineage: failed to load %s (%s) — skipping",
+            path,
+            exc,
+        )
+        return None
 
 
 def collect_mart_model_names(sidecar: dict[str, Any]) -> set[str]:
@@ -161,6 +183,11 @@ def _build_name_indexes(
     return exposure_by_name, model_by_name
 
 
+def _strip_quoted_literals(column: str) -> str:
+    """Remove single-quoted string literals so tokens like ``x`` are not treated as columns."""
+    return re.sub(r"'(?:[^'\\]|\\.)*'", " ", column)
+
+
 def _normalize_columns(column: str) -> list[str]:
     """Split expression-like column strings into identifier tokens."""
     column = column.strip()
@@ -168,9 +195,17 @@ def _normalize_columns(column: str) -> list[str]:
         return []
     if re.fullmatch(r"[a-z_][a-z0-9_]*", column, re.IGNORECASE):
         return [column]
+    if "." in column and re.fullmatch(r"[a-z_][a-z0-9_.]*", column, re.IGNORECASE):
+        # table.column — keep the mart column segment only
+        return [column.rsplit(".", 1)[-1]]
+
+    scrubbed = _strip_quoted_literals(column)
     tokens: list[str] = []
     seen: set[str] = set()
-    for token in _COLUMN_TOKEN_RE.findall(column):
+    for match in _COLUMN_TOKEN_RE.finditer(scrubbed):
+        token = match.group(1)
+        if match.end() < len(scrubbed) and scrubbed[match.end()] == "(":
+            continue
         if token.lower() in _SQL_NOISE_TOKENS:
             continue
         if token in seen:
@@ -228,7 +263,9 @@ def _direct_deps_for_field(
             )
             continue
 
-        transformation = _normalize_transformation(dep.get("transformation", _DEFAULT_TRANSFORMATION))
+        transformation = _normalize_transformation(
+            dep.get("transformation", _DEFAULT_TRANSFORMATION)
+        )
 
         for column in _normalize_columns(column_raw):
             key = (model_uid, column)
@@ -286,13 +323,13 @@ def _expand_field_deps(
 
 
 # kpi_lineage ``formula_md`` may append hand-written lineage notes after the formula.
-_FORMULA_NARRATIVE_START = re.compile(
+_FORMULA_NARRATIVE_LINE = re.compile(
     r"^\s*(?:"
     r"where\b.+\bis sourced from\b"
     r"|waarbij\s*:"
     r"|joined per\b"
     r"|note\s*:"
-    r")\s*$",
+    r")",
     re.IGNORECASE,
 )
 
@@ -301,11 +338,7 @@ def _strip_formula_narrative(text: str) -> str:
     """Drop narrative tails from kpi_lineage ``formula_md`` (keep the real formula)."""
     kept: list[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
-        if stripped and (
-            _FORMULA_NARRATIVE_START.match(line)
-            or re.match(r"where\b.+\bis sourced from\b", stripped, re.IGNORECASE)
-        ):
+        if line.strip() and _FORMULA_NARRATIVE_LINE.match(line):
             break
         kept.append(line)
     return "\n".join(kept).strip()

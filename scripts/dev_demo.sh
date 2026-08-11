@@ -54,6 +54,7 @@ echo "→ docglow generate (jaffle-shop + sample-data)"
   --output-dir "$OUT" \
   --static \
   --sample-data-dir "$SAMPLE" \
+  --exposure-field-lineage "$PROJECT/exposure_field_lineage.json" \
   --skip-column-lineage
 
 cat <<EOF
