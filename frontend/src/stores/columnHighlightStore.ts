@@ -17,6 +17,8 @@ interface ColumnHighlightState {
   isNodeExpanded: (nodeId: string) => boolean
   expandAll: (candidateIds: string[], cap: number) => { expanded: number; total: number }
   collapseAll: (candidateIds: string[]) => void
+  /** Merge node ids into the expanded set (e.g. column-trace path models). */
+  ensureExpanded: (nodeIds: readonly string[]) => void
   resetExpandState: () => void
 }
 
@@ -114,6 +116,26 @@ export const useColumnHighlightStore = create<ColumnHighlightState>((set, get) =
       autoExpandedNodeIds: new Set(),
       manuallyCollapsedIds: new Set(candidateIds),
     })
+  },
+
+  ensureExpanded: (nodeIds) => {
+    if (nodeIds.length === 0) return
+    const { expandedNodeIds, manuallyCollapsedIds } = get()
+    const nextExpanded = new Set(expandedNodeIds)
+    const nextCollapsed = new Set(manuallyCollapsedIds)
+    let changed = false
+    for (const id of nodeIds) {
+      if (!nextExpanded.has(id)) {
+        nextExpanded.add(id)
+        changed = true
+      }
+      if (nextCollapsed.has(id)) {
+        nextCollapsed.delete(id)
+        changed = true
+      }
+    }
+    if (!changed) return
+    set({ expandedNodeIds: nextExpanded, manuallyCollapsedIds: nextCollapsed })
   },
 
   // Wipes all expand-related state. Called on LineageFlow mount so per-page

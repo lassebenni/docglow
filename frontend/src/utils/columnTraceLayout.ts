@@ -1,6 +1,7 @@
 import dagre from 'dagre'
 import type { Node, Edge } from '@xyflow/react'
 import type { ColumnEdge } from '../types'
+import { FIELD_LINEAGE_EDGE_COLOR } from './columnTransforms'
 
 export interface TraceNodeData {
   readonly modelId: string
@@ -20,16 +21,6 @@ export interface TraceLayoutResult {
 const NODE_WIDTH = 180
 const NODE_BASE_HEIGHT = 44
 const COLUMN_ROW_HEIGHT = 22
-
-/** Transformation type → edge color */
-const EDGE_COLORS: Record<string, string> = {
-  passthrough: '#16a34a',
-  derived: '#d97706',
-  aggregated: '#7c3aed',
-  unknown: '#6b7280',
-  direct: '#16a34a',
-  rename: '#d97706',
-}
 
 /**
  * Convert trace edges into ReactFlow nodes + edges using dagre for LR layout.
@@ -114,7 +105,8 @@ export function buildTraceLayout(
     },
   )
 
-  // Convert to ReactFlow edges (one per ColumnEdge for column-level connections)
+  // Convert to ReactFlow edges (one per ColumnEdge for column-level connections).
+  // Same amber as LineageFlow field path — follow one color source → leaf.
   const edges: Edge[] = traceEdges.map((edge, i) => ({
     id: `trace-${i}`,
     source: edge.sourceModel,
@@ -122,7 +114,7 @@ export function buildTraceLayout(
     sourceHandle: `col-${edge.sourceColumn}-source`,
     targetHandle: `col-${edge.targetColumn}-target`,
     style: {
-      stroke: EDGE_COLORS[edge.transformation] ?? EDGE_COLORS.unknown,
+      stroke: FIELD_LINEAGE_EDGE_COLOR,
       strokeWidth: 2,
     },
     animated: edge.transformation === 'passthrough' || edge.transformation === 'direct',

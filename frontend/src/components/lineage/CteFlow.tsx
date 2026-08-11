@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ReactFlow,
   Controls,
@@ -25,13 +25,16 @@ import type {
 import { JOIN_KEY_PALETTE } from '../../utils/joinKeys'
 import {
   columnExpression,
+  FIELD_LINEAGE_EDGE_COLOR,
   strongestTransformation,
   transformationGlyph,
   transformationLabel,
 } from '../../utils/columnTransforms'
+import { columnEdgeKey } from '../../utils/columnLineageGraph'
 import {
   collectColumnDownstream,
   collectColumnPath,
+  collectColumnUpstream,
 } from '../../utils/sqlGraphColumns'
 import {
   aggFnGlyph,
@@ -42,6 +45,7 @@ import {
   highlightSelectSqlLines,
   joinHighlightFromNode,
 } from '../../utils/sqlGraphView'
+import { orderDagNodeColumns } from './DagNode'
 import type { TransformationType } from '../../types'
 
 const NODE_W = 188
@@ -50,8 +54,31 @@ const COL_ROW_H = 18
 const MAX_VISIBLE_COLS = 18
 const JOIN_W = 140
 const JOIN_H = 44
-const PATH_COLOR = '#d97706'
+const PATH_COLOR = FIELD_LINEAGE_EDGE_COLOR
 const JOIN_HL_COLOR = '#2563eb'
+
+function setHasColumn(set: ReadonlySet<string> | undefined, col: string): boolean {
+  if (!set?.size) return false
+  if (set.has(col)) return true
+  const lower = col.toLowerCase()
+  for (const h of set) {
+    if (h.toLowerCase() === lower) return true
+  }
+  return false
+}
+
+function colorForColumn(
+  colors: Map<string, string> | undefined,
+  col: string,
+): string | undefined {
+  if (!colors?.size) return undefined
+  if (colors.has(col)) return colors.get(col)
+  const lower = col.toLowerCase()
+  for (const [key, color] of colors) {
+    if (key.toLowerCase() === lower) return color
+  }
+  return undefined
+}
 const OP_ACCENT: Record<SqlGraphOpKind, string> = {
   filter: '#0d9488',
 }
@@ -137,6 +164,8 @@ function layoutGraph(graph: SqlGraph): { nodes: Node[]; edges: Edge[] } {
 type SqlNodeData = SqlGraphNode & {
   accent: string
   highlightedCols?: Set<string>
+  /** Per-column branch colors on the selected field path (columns-mode parity). */
+  fieldPathColumnColors?: Map<string, string>
   selectedCol?: string | null
   columnKinds?: Map<string, TransformationType>
   filterSelected?: boolean
@@ -162,9 +191,18 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
   const isJoin = d.kind === 'join'
   const isAgg = d.transforms?.includes('aggregate')
   const isCte = d.kind === 'cte'
-  const hasFilterOps = isCte && cteFilterOps(d).length > 0
+  const filterOps = cteFilterOps(d)
+  const hasFilterOps = isCte && filterOps.length > 0
   // Join cards activate the join panel; filters only via the FILT badge (avoid nested buttons).
   const clickable = isJoin
+  // Show the actual predicate on the collapsed card, not just that a filter exists.
+  const filterPreview = (() => {
+    if (!hasFilterOps) return null
+    const where = filterOps.find(o => o.label === 'where') ?? filterOps[0]
+    const expr = where?.expression?.replace(/\s+/g, ' ').trim()
+    if (!expr) return null
+    return expr.length > 48 ? `${expr.slice(0, 46)}…` : expr
+  })()
   const subtitle = isJoin
     ? (d.join_keys?.map(k => `${k.left_column}=${k.right_column}`).join(', ') || d.join_type || '')
     : isAgg
@@ -175,14 +213,34 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
           ? 'output'
           : d.transforms?.includes('window')
             ? 'cte · window'
-            : hasFilterOps
-              ? 'cte · filtered'
-              : 'cte'
+            : filterPreview
+              ? `where ${filterPreview}`
+              : hasFilterOps
+                ? 'cte · filtered'
+                : 'cte'
 
-  const cols = d.columns ?? []
-  const overflow = cols.length > MAX_VISIBLE_COLS
-  const visibleCols = overflow ? cols.slice(0, MAX_VISIBLE_COLS - 1) : cols
+  const rawCols = d.columns ?? []
+  const cols = useMemo(
+    () =>
+      orderDagNodeColumns(rawCols, d.highlightedCols, {
+        isSelectedNode: Boolean(d.selectedCol),
+        maxVisible: MAX_VISIBLE_COLS,
+      }),
+    [rawCols, d.highlightedCols, d.selectedCol],
+  )
   const width = nodeWidth(d)
+  const columnsContainerRef = useRef<HTMLDivElement>(null)
+  const isSelectedNode = Boolean(d.selectedCol)
+
+  // Parent / intermediate nodes: scroll a highlighted field into view. Never jump
+  // scroll on the node the user is clicking in (same as DagNode).
+  useEffect(() => {
+    if (isSelectedNode || !d.highlightedCols?.size) return
+    const root = columnsContainerRef.current
+    if (!root) return
+    const firstHot = root.querySelector('[data-col-hot="1"]') as HTMLElement | null
+    firstHot?.scrollIntoView({ block: 'nearest' })
+  }, [isSelectedNode, d.highlightedCols])
 
   const handleActivate = (e: { stopPropagation: () => void; preventDefault?: () => void }) => {
     e.stopPropagation()
@@ -327,13 +385,27 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
             </div>
           </div>
         </div>
-        {!isJoin && visibleCols.length > 0 && (
-          <div style={{ borderTop: '1px solid var(--border, #e2e8f0)', padding: '2px 0' }}>
-            {visibleCols.map(col => {
-              const active = d.highlightedCols?.has(col)
+        {!isJoin && cols.length > 0 && (
+          <div
+            ref={columnsContainerRef}
+            className="nowheel nodrag"
+            style={{
+              borderTop: '1px solid var(--border, #e2e8f0)',
+              padding: '2px 0',
+              maxHeight: MAX_VISIBLE_COLS * COL_ROW_H + 4,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+            }}
+          >
+            {cols.map(col => {
+              const active = setHasColumn(d.highlightedCols, col)
               const selected = d.selectedCol === col
               const joinHl = d.joinHighlightCols?.has(col)
               const filterHl = d.filterHighlightCols?.has(col)
+              const pathColor = colorForColumn(d.fieldPathColumnColors, col)
+              const highlightColor = selected
+                ? PATH_COLOR
+                : (pathColor ?? (active ? PATH_COLOR : undefined))
               const kind = d.columnKinds?.get(col)
               const agg = d.column_agg?.[col]
               const glyph = columnTag(col, d.column_agg, kind)
@@ -345,7 +417,7 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                 <button
                   key={col}
                   type="button"
-                  data-cte-col={col}
+                  data-col-hot={active || selected ? '1' : undefined}
                   onClick={e => {
                     e.stopPropagation()
                     d.onColumnClick?.(id, col)
@@ -356,26 +428,26 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     alignItems: 'center',
                     gap: 4,
                     width: '100%',
+                    height: COL_ROW_H,
                     textAlign: 'left',
                     border: 'none',
                     background: selected
                       ? `${PATH_COLOR}33`
-                      : joinHl
+                      : joinHl && !active
                         ? `${JOIN_HL_COLOR}22`
-                        : filterHl
-                          ? `${FILT_COLOR}22`
-                          : active
-                            ? `${PATH_COLOR}18`
+                        : highlightColor
+                          ? `${highlightColor}18`
+                          : filterHl
+                            ? `${FILT_COLOR}22`
                             : 'transparent',
-                    color:
-                      active || selected || joinHl || filterHl
-                        ? joinHl && !selected && !active
-                          ? '#1e40af'
-                          : filterHl && !selected && !active && !joinHl
-                            ? '#0f766e'
-                            : '#92400e'
-                        : 'var(--text, #0f172a)',
-                    fontWeight: selected || joinHl || filterHl ? 700 : active ? 600 : 400,
+                    color: highlightColor
+                      ? highlightColor
+                      : joinHl
+                        ? '#1e40af'
+                        : filterHl
+                          ? '#0f766e'
+                          : 'var(--text, #0f172a)',
+                    fontWeight: selected || joinHl || active || filterHl ? 700 : 400,
                     fontSize: 10,
                     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
                     padding: '2px 10px 2px 12px',
@@ -383,8 +455,8 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     whiteSpace: 'nowrap',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
-                    borderLeft: selected || active
-                      ? `2px solid ${PATH_COLOR}`
+                    borderLeft: highlightColor
+                      ? `2px solid ${highlightColor}`
                       : joinHl
                         ? `2px solid ${JOIN_HL_COLOR}`
                         : filterHl
@@ -396,10 +468,12 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                     <span
                       style={{
                         flexShrink: 0,
-                        color: '#b45309',
+                        color: highlightColor ?? '#b45309',
                         fontWeight: 700,
-                        fontSize: agg ? 8 : 10,
-                        letterSpacing: agg ? '0.02em' : undefined,
+                        // Compact text tags (SUM / LIT) sit beside the column name.
+                        fontSize: agg || kind === 'constant' ? 8 : 10,
+                        letterSpacing:
+                          agg || kind === 'constant' ? '0.02em' : undefined,
                       }}
                     >
                       {glyph}
@@ -409,17 +483,6 @@ function SqlGraphNodeView({ id, data }: NodeProps) {
                 </button>
               )
             })}
-            {overflow && (
-              <div
-                style={{
-                  fontSize: 9,
-                  color: 'var(--text-muted, #64748b)',
-                  padding: '2px 12px',
-                }}
-              >
-                +{cols.length - (MAX_VISIBLE_COLS - 1)} more
-              </div>
-            )}
           </div>
         )}
       </div>
@@ -500,19 +563,29 @@ export function CteFlow({ graph }: CteFlowProps) {
 
   const selectedAggFn = selectedNode?.column_agg?.[selected?.column ?? ''] ?? null
 
-  const selectedUpstream = useMemo(() => {
+  const selectedDirectDeps = useMemo(() => {
     if (!selected || !viewGraph.column_lineage) return []
     return viewGraph.column_lineage[selected.nodeId]?.[selected.column] ?? []
+  }, [selected, viewGraph.column_lineage])
+
+  /** Recursive upstream for the panel (through passthrough CTEs to parents). */
+  const selectedUpstream = useMemo(() => {
+    if (!selected) return []
+    return collectColumnUpstream(
+      viewGraph.column_lineage,
+      selected.nodeId,
+      selected.column,
+    )
   }, [selected, viewGraph.column_lineage])
 
   /** old → new when this CTE field is a rename at the selected node */
   const selectedRename = useMemo(() => {
     if (!selected) return null
-    const renameDep = selectedUpstream.find(d => d.transformation === 'rename' && d.source_column)
+    const renameDep = selectedDirectDeps.find(d => d.transformation === 'rename' && d.source_column)
     if (!renameDep?.source_column) return null
     if (renameDep.source_column === selected.column) return null
     return { oldName: renameDep.source_column, newName: selected.column }
-  }, [selected, selectedUpstream])
+  }, [selected, selectedDirectDeps])
 
   const selectedDownstream = useMemo(() => {
     if (!selected) return []
@@ -545,6 +618,9 @@ export function CteFlow({ graph }: CteFlowProps) {
 
   const highlighted = path?.keys ?? new Set<string>()
   const pathEdges = path?.edgeKeys ?? new Set<string>()
+  const pathColumnColors = path?.columnColors
+  const pathEdgeColors = path?.edgeColors
+  const pathColumnEdges = path?.columnEdges ?? []
 
   const onColumnClick = useCallback(
     (nodeId: string, column: string) => {
@@ -577,12 +653,20 @@ export function CteFlow({ graph }: CteFlowProps) {
     [viewGraph],
   )
 
+  const layoutNodeIds = useMemo(
+    () => new Set(layout.nodes.map(n => n.id)),
+    [layout.nodes],
+  )
+
   const nodes = useMemo(
     () =>
       layout.nodes.map(n => {
         const colsOnNode = new Set<string>()
         for (const key of highlighted) {
-          const [nid, col] = key.split('\0')
+          const sep = key.indexOf('\0')
+          if (sep < 0) continue
+          const nid = key.slice(0, sep)
+          const col = key.slice(sep + 1)
           if (nid === n.id && col) colsOnNode.add(col)
         }
         const selCol = selected?.nodeId === n.id ? selected.column : null
@@ -593,6 +677,7 @@ export function CteFlow({ graph }: CteFlowProps) {
           data: {
             ...n.data,
             highlightedCols: colsOnNode,
+            fieldPathColumnColors: pathColumnColors?.get(n.id),
             selectedCol: selCol,
             columnKinds: columnKindsForNode(viewGraph.column_lineage, n.id),
             filterSelected: selectedFilter?.cteId === n.id,
@@ -607,6 +692,7 @@ export function CteFlow({ graph }: CteFlowProps) {
     [
       layout.nodes,
       highlighted,
+      pathColumnColors,
       selected,
       onColumnClick,
       onFilterClick,
@@ -617,32 +703,85 @@ export function CteFlow({ graph }: CteFlowProps) {
     ],
   )
 
-  const edges = useMemo(
-    () =>
-      layout.edges.map(e => {
-        const onPath = pathEdges.has(`${e.source}\0${e.target}`)
-        const onJoin =
-          Boolean(joinHl)
-          && joinHl!.nodeIds.has(e.source)
-          && joinHl!.nodeIds.has(e.target)
-        return {
-          ...e,
-          label: e.source.startsWith('join:') ? undefined : e.label,
-          style: {
-            stroke: onPath ? PATH_COLOR : onJoin ? JOIN_HL_COLOR : '#94a3b8',
-            strokeWidth: onPath || onJoin ? 2.5 : 1.5,
-          },
-          markerEnd: {
-            type: MarkerType.ArrowClosed,
-            width: 14,
-            height: 14,
-            color: onPath ? PATH_COLOR : onJoin ? JOIN_HL_COLOR : '#94a3b8',
-          },
-          animated: onPath,
-        }
-      }),
-    [layout.edges, pathEdges, joinHl],
-  )
+  const edges = useMemo(() => {
+    const hasColumnPath = pathColumnEdges.length > 0
+    const structural: Edge[] = layout.edges.map(e => {
+      const onPath = pathEdges.has(`${e.source}\0${e.target}`)
+      const onJoin =
+        Boolean(joinHl)
+        && joinHl!.nodeIds.has(e.source)
+        && joinHl!.nodeIds.has(e.target)
+      // When column-level path edges are drawn, keep structural edges muted.
+      const stroke = onJoin
+        ? JOIN_HL_COLOR
+        : onPath && !hasColumnPath
+          ? PATH_COLOR
+          : '#94a3b8'
+      return {
+        ...e,
+        label: e.source.startsWith('join:') ? undefined : e.label,
+        style: {
+          stroke,
+          strokeWidth: onJoin || (onPath && !hasColumnPath) ? 2.5 : 1.5,
+          opacity: onPath && hasColumnPath ? 0.25 : 1,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color: stroke,
+        },
+        animated: onPath && !hasColumnPath,
+      }
+    })
+
+    if (!hasColumnPath) return structural
+
+    const colEdges: Edge[] = []
+    let offset = 0
+    for (const ce of pathColumnEdges) {
+      if (!layoutNodeIds.has(ce.sourceModel) || !layoutNodeIds.has(ce.targetModel)) continue
+      const color = pathEdgeColors?.get(columnEdgeKey(ce)) ?? PATH_COLOR
+      const showLabel =
+        ce.transformation === 'derived'
+        || ce.transformation === 'aggregated'
+        || ce.transformation === 'rename'
+      const glyph = transformationGlyph(ce.transformation)
+      colEdges.push({
+        id: `col__${columnEdgeKey(ce)}`,
+        source: ce.sourceModel,
+        target: ce.targetModel,
+        type: 'smoothstep',
+        animated: true,
+        label: showLabel ? (glyph ?? ce.transformation) : undefined,
+        labelStyle: showLabel
+          ? { fontSize: 10, fontWeight: 700, fill: color }
+          : undefined,
+        labelBgStyle: showLabel
+          ? { fill: 'var(--bg, #fff)', fillOpacity: 0.9 }
+          : undefined,
+        labelBgPadding: showLabel ? ([3, 2] as [number, number]) : undefined,
+        // Fan multi-branch edges so they do not fully overlap.
+        pathOptions: { offset: ((offset++ % 5) - 2) * 14 },
+        style: {
+          stroke: color,
+          strokeWidth:
+            ce.transformation === 'passthrough' || ce.transformation === 'rename' ? 1.75 : 2.25,
+          strokeDasharray:
+            ce.transformation === 'passthrough' || ce.transformation === 'rename'
+              ? undefined
+              : '6 3',
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color,
+        },
+      } as Edge)
+    }
+    return [...structural, ...colEdges]
+  }, [layout.edges, pathEdges, pathColumnEdges, pathEdgeColors, layoutNodeIds, joinHl])
 
   const labelOf = useCallback(
     (nodeId: string) =>
@@ -1036,29 +1175,42 @@ export function CteFlow({ graph }: CteFlowProps) {
                 Upstream
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {selectedUpstream.map((dep, i) => (
-                  <div
-                    key={`${dep.source_node}-${dep.source_column}-${i}`}
-                    style={{
-                      fontSize: 12,
-                      background: 'var(--bg-surface, #f1f5f9)',
-                      borderRadius: 6,
-                      padding: '8px 10px',
-                    }}
-                  >
-                    <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
-                      {dep.source_node ? labelOf(dep.source_node) : '—'}
-                    </div>
-                    <div
+                {selectedUpstream.map((hop, i) => {
+                  const hopColor =
+                    colorForColumn(pathColumnColors?.get(hop.nodeId), hop.column) ?? PATH_COLOR
+                  return (
+                    <button
+                      key={`${hop.nodeId}-${hop.column}-${i}`}
+                      type="button"
+                      onClick={() => setSelected({ nodeId: hop.nodeId, column: hop.column })}
+                      title={`Select ${labelOf(hop.nodeId)}.${hop.column}`}
                       style={{
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                        color: 'var(--text, #0f172a)',
+                        fontSize: 12,
+                        background: `${hopColor}14`,
+                        borderRadius: 6,
+                        padding: '8px 10px',
+                        border: `1px solid ${hopColor}44`,
+                        borderLeft: `3px solid ${hopColor}`,
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        width: '100%',
                       }}
                     >
-                      {dep.source_column || '—'}
-                    </div>
-                  </div>
-                ))}
+                      <div style={{ color: 'var(--text-muted, #64748b)', fontSize: 10, marginBottom: 2 }}>
+                        {labelOf(hop.nodeId)}
+                      </div>
+                      <div
+                        style={{
+                          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                          color: hopColor,
+                          fontWeight: 600,
+                        }}
+                      >
+                        {hop.column}
+                      </div>
+                    </button>
+                  )
+                })}
               </div>
             </div>
           )}

@@ -14,8 +14,11 @@ import { QuestionsTab } from '../components/models/QuestionsTab'
 import { TestsTab } from '../components/tests/TestsTab'
 import {
   ColumnExpandControls,
+  lineageViewModeSuffix,
+  parseLineageViewMode,
   type LineageViewMode,
 } from '../components/lineage/ColumnExpandControls'
+import { FieldPathOnlyControl } from '../components/lineage/FieldPathOnlyControl'
 import { ErdCanvas } from '../components/erd/ErdCanvas'
 import { FilterDropdown } from '../components/ui/FilterDropdown'
 import type { FilterState } from '../components/ui/FilterDropdown'
@@ -25,9 +28,11 @@ import { formatFqn } from '../utils/formatting'
 import { getSubgraph, getDescendants, type LineageDirection } from '../utils/graph'
 import { applyFilters, useFilterState, computeSubgraphOptions } from '../utils/lineageFilters'
 import { buildModelColumnsMap } from '../utils/modelColumns'
+import { buildColumnsModeSubgraph } from '../utils/applyFieldPathFilter'
 import { buildDownstreamMap, getColumnLineageCandidateIds } from '../utils/columnLineageGraph'
 import { getModelErdSubgraph } from '../utils/erdSubgraph'
 import { buildResourcePath } from '../utils/resourceRoutes'
+import { useColumnHighlightStore } from '../stores/columnHighlightStore'
 import type { DocglowModel } from '../types'
 
 const RESOURCE_TYPE_META: Record<string, { label: string; color: string; bg: string }> = {
@@ -139,13 +144,22 @@ function parseTab(raw: string | undefined, customSlugs: readonly string[]): stri
 }
 
 export function ModelPage() {
-  const { id, tab: tabParam } = useParams<{ id: string; tab?: string }>()
+  const { id, tab: tabParam, view: viewParam } = useParams<{
+    id: string
+    tab?: string
+    view?: string
+  }>()
   const navigate = useNavigate()
   const location = useLocation()
   const { data, getModel, getColumnLineage } = useProjectStore()
   const [activeTab, setActiveTab] = useState<string>(() => parseTab(tabParam, []))
   const [pendingDocAnchor, setPendingDocAnchor] = useState<string | null>(null)
   const [sqlMode, setSqlMode] = useState<'compiled' | 'raw'>('compiled')
+  // Lineage Table/Columns/CTEs — deep-linked as /model/:id/lineage/:view
+  // (table omitted). Only honor :view when the lineage tab is active.
+  const [lineageViewMode, setLineageViewModeState] = useState<LineageViewMode>(() =>
+    tabParam === 'lineage' ? parseLineageViewMode(viewParam) : 'table',
+  )
 
   const decodedId = id ? decodeURIComponent(id) : ''
   const model = decodedId ? getModel(decodedId) : undefined
@@ -174,6 +188,18 @@ export function ModelPage() {
     navigate(location.pathname + location.hash, { replace: true, state: {} })
   }, [location.state, location.pathname, location.hash, navigate])
 
+  useEffect(() => {
+    if (tabParam !== 'lineage') return
+    setLineageViewModeState(parseLineageViewMode(viewParam))
+  }, [tabParam, viewParam])
+
+  const selectLineageViewMode = useCallback((mode: LineageViewMode) => {
+    setLineageViewModeState(mode)
+    if (!decodedId) return
+    const encoded = encodeURIComponent(decodedId)
+    navigate(`/model/${encoded}/lineage${lineageViewModeSuffix(mode)}`, { replace: true })
+  }, [navigate, decodedId])
+
   // State → URL: update the path on every tab click so the address bar is
   // shareable.  Uses replace so a user clicking through five tabs doesn't
   // pile five history entries onto the back button.  `columns` is the
@@ -188,7 +214,14 @@ export function ModelPage() {
     }
     if (!decodedId) return
     const encoded = encodeURIComponent(decodedId)
-    const path = tab === 'columns' ? `/model/${encoded}` : `/model/${encoded}/${tab}`
+    let path: string
+    if (tab === 'columns') {
+      path = `/model/${encoded}`
+    } else if (tab === 'lineage') {
+      path = `/model/${encoded}/lineage${lineageViewModeSuffix(lineageViewMode)}`
+    } else {
+      path = `/model/${encoded}/${tab}`
+    }
     // Column anchors (#col-*) only apply on the columns tab; carrying them
     // into other tab URLs would re-trigger the scroll effect below and snap
     // back to columns (e.g. Statistics → Columns).
@@ -196,7 +229,7 @@ export function ModelPage() {
       ? location.hash
       : ''
     navigate(path + colAnchor, { replace: true })
-  }, [navigate, decodedId, location.hash])
+  }, [navigate, decodedId, location.hash, lineageViewMode])
 
   const navigateToCustomDoc = useCallback((slug: string, anchor?: string) => {
     selectTab(slug, { docAnchor: anchor ?? null })
@@ -239,8 +272,9 @@ export function ModelPage() {
     window.localStorage.setItem('dg-lineage-layout', layoutMode)
   }, [layoutMode])
   const [showParentSiblings, setShowParentSiblings] = useState(false)
+  const [fieldPathOnly, setFieldPathOnly] = useState(false)
   const [lineageFullscreen, setLineageFullscreen] = useState(false)
-  const [lineageViewMode, setLineageViewMode] = useState<LineageViewMode>('table')
+  const selectedColumn = useColumnHighlightStore((s) => s.selectedColumn)
   const [typeFilter, toggleType, setTypeMode, clearTypes] = useFilterState()
   const { selected: globalTagSelected, mode: globalTagMode, toggle: toggleTag, setMode: setTagMode, clear: clearTags } = useTagFilterStore()
   const tagFilter: FilterState = useMemo(() => ({ mode: globalTagMode, selected: new Set(globalTagSelected) }), [globalTagSelected, globalTagMode])
@@ -297,9 +331,32 @@ export function ModelPage() {
     }
   }, [rawSubgraph, typeFilter, tagFilter, folderFilter, layerFilter, modelFilter, decodedId])
 
+  const displaySubgraph = useMemo(() => {
+    if (lineageViewMode !== 'columns') return filteredSubgraph
+    return buildColumnsModeSubgraph(filteredSubgraph.nodes, filteredSubgraph.edges, {
+      allNodes: data?.lineage.nodes ?? [],
+      allEdges: data?.lineage.edges ?? [],
+      columnLineage: data?.column_lineage,
+      fieldPathOnly,
+      selectedColumn,
+      direction,
+      alwaysKeep: decodedId ? [decodedId] : [],
+    })
+  }, [
+    filteredSubgraph,
+    lineageViewMode,
+    fieldPathOnly,
+    selectedColumn,
+    data?.column_lineage,
+    data?.lineage.nodes,
+    data?.lineage.edges,
+    direction,
+    decodedId,
+  ])
+
   const columnLineageCandidateIds = useMemo(
-    () => getColumnLineageCandidateIds(filteredSubgraph.nodes, data?.column_lineage),
-    [filteredSubgraph, data?.column_lineage],
+    () => getColumnLineageCandidateIds(displaySubgraph.nodes, data?.column_lineage),
+    [displaySubgraph, data?.column_lineage],
   )
 
   const subgraphOptions = useMemo(() => {
@@ -624,7 +681,7 @@ export function ModelPage() {
               candidateIds={columnLineageCandidateIds}
               hasSqlGraph={Boolean(decodedId && data?.sql_graphs?.[decodedId])}
               mode={lineageViewMode}
-              onModeChange={setLineageViewMode}
+              onModeChange={selectLineageViewMode}
             />
 
             <div className="h-4 w-px bg-[var(--border)]" />
@@ -642,6 +699,13 @@ export function ModelPage() {
               />
               Parent outputs
             </label>
+
+            <FieldPathOnlyControl
+              mode={lineageViewMode}
+              checked={fieldPathOnly}
+              onChange={setFieldPathOnly}
+              hasSelection={selectedColumn != null}
+            />
 
             <div className="h-4 w-px bg-[var(--border)]" />
 
@@ -715,7 +779,7 @@ export function ModelPage() {
             )}
 
             <span className="text-xs text-[var(--text-muted)] ml-auto">
-              {filteredSubgraph.nodes.length} nodes · {filteredSubgraph.edges.length} edges
+              {displaySubgraph.nodes.length} nodes · {displaySubgraph.edges.length} edges
             </span>
 
             {/* Fullscreen toggle */}
@@ -748,10 +812,10 @@ export function ModelPage() {
               <LineageFlow
                 nodes={
                   layoutMode === 'dag'
-                    ? filteredSubgraph.nodes.map(n => ({ ...n, layer: undefined }))
-                    : filteredSubgraph.nodes
+                    ? displaySubgraph.nodes.map(n => ({ ...n, layer: undefined }))
+                    : displaySubgraph.nodes
                 }
-                edges={filteredSubgraph.edges}
+                edges={displaySubgraph.edges}
                 pinnedIds={new Set([decodedId])}
                 layerConfig={layoutMode === 'dag' ? [] : data?.lineage.layer_config}
                 onNavigateAway={() => setLineageFullscreen(false)}
@@ -760,6 +824,8 @@ export function ModelPage() {
                 joinBasesData={data?.join_bases}
                 joinIndirectData={data?.join_indirect}
                 modelColumns={modelColumnsMap}
+                fieldPathOnly={fieldPathOnly}
+                direction={direction}
                 autoExpandColumns={lineageViewMode === 'columns'}
               />
             )}

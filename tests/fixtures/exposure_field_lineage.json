@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "exposures": {
+    "weekly_executive_dashboard": {
+      "fields": [
+        {
+          "name": "Total Revenue",
+          "kind": "measure",
+          "description": "Sum of order totals",
+          "expression": "SUM(orders[order_total])",
+          "depends_on": [
+            {
+              "model": "fct_orders",
+              "column": "amount",
+              "transformation": "aggregated"
+            }
+          ]
+        },
+        {
+          "name": "Order Count",
+          "kind": "measure",
+          "depends_on": [
+            {
+              "model": "fct_orders",
+              "column": "order_id",
+              "transformation": "aggregated"
+            }
+          ]
+        },
+        {
+          "name": "Revenue + Orders",
+          "kind": "measure",
+          "expression": "[Total Revenue] + [Order Count]",
+          "depends_on": [],
+          "components": ["Total Revenue", "Order Count"]
+        }
+      ]
+    }
+  }
+}

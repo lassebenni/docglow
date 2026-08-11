@@ -41,6 +41,44 @@ def _extract_single_arg(raw: str) -> str:
 
 
 @_register(
+    # SQL string wrapping a var default: '{{ var("x", "2023-01-01") }}' → '2023-01-01'
+    r"(['\"])\{\{\s*var\s*\(\s*['\"][^'\"]+['\"]\s*,\s*['\"]([^'\"]*)['\"]\s*\)\s*\}\}\1"
+)
+def _var_inside_sql_string(match: re.Match[str]) -> str:
+    """Preserve the outer SQL quotes; substitute the var default value."""
+    quote = match.group(1)
+    value = match.group(2)
+    return f"{quote}{value}{quote}"
+
+
+@_register(r"\{\{\s*var\s*\(\s*['\"][^'\"]+['\"]\s*,\s*['\"]([^'\"]*)['\"]\s*\)\s*\}\}")
+def _var_string_default(match: re.Match[str]) -> str:
+    """{{ var('name', 'default') }} → 'default' (bare, not already SQL-quoted)."""
+    return f"'{match.group(1)}'"
+
+
+@_register(
+    r"\{\{\s*var\s*\(\s*['\"][^'\"]+['\"]\s*,\s*"
+    r"(True|False|true|false|None|none|null|NULL|\d+(?:\.\d+)?)\s*\)\s*\}\}"
+)
+def _var_literal_default(match: re.Match[str]) -> str:
+    """{{ var('name', true|123|None) }} → SQL literal."""
+    raw = match.group(1)
+    lower = raw.lower()
+    if lower in ("true", "false"):
+        return lower.upper()
+    if lower in ("none", "null"):
+        return "NULL"
+    return raw
+
+
+@_register(r"\{\{\s*var\s*\(\s*['\"][^'\"]+['\"]\s*\)\s*\}\}")
+def _var_no_default(match: re.Match[str]) -> str:
+    """{{ var('name') }} with no default → NULL placeholder."""
+    return "NULL"
+
+
+@_register(
     r"\{\{\s*dbt_utils\.surrogate_key\s*\(\s*(\[.*?\])\s*\)\s*\}\}",
     re.DOTALL,
 )
@@ -154,6 +192,117 @@ def _type_numeric(match: re.Match[str]) -> str:
 def _type_boolean(match: re.Match[str]) -> str:
     """{{ type_boolean() }} -> BOOLEAN"""
     return "BOOLEAN"
+
+
+@_register(
+    r"\{\{\s*dbt_utils\.union_relations\s*\(\s*relations\s*=\s*\[(.*?)\]"
+    r"\s*(?:,\s*[^)]*)?\s*\)\s*\}\}",
+    re.DOTALL,
+)
+def _union_relations(match: re.Match[str]) -> str:
+    """dbt_utils.union_relations(relations=[ref('a'), ref('b')]) -> UNION ALL of SELECT *."""
+    body = match.group(1)
+    parts: list[str] = []
+    for name in re.findall(r"""ref\s*\(\s*['\"]([^'\"]+)['\"]\s*\)""", body):
+        parts.append(f"SELECT * FROM {name}")
+    for src, table in re.findall(
+        r"""source\s*\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)""",
+        body,
+    ):
+        parts.append(f"SELECT * FROM {src}.{table}")
+    if not parts:
+        # After ref()/source() stripping: bare identifiers in the list.
+        for name in re.findall(r"\b([A-Za-z_][\w]+)\b", body):
+            if name.lower() in {"relations", "source_column_name", "include", "exclude"}:
+                continue
+            parts.append(f"SELECT * FROM {name}")
+    if not parts:
+        return "NULL"
+    return "\nUNION ALL\n".join(parts)
+
+
+# String literals that are almost never column refs (types, date parts, etc.).
+_NON_COLUMN_STRINGS = frozenset(
+    {
+        "day",
+        "month",
+        "year",
+        "week",
+        "hour",
+        "minute",
+        "second",
+        "true",
+        "false",
+        "null",
+        "integer",
+        "int",
+        "bigint",
+        "varchar",
+        "string",
+        "text",
+        "timestamp",
+        "boolean",
+        "float",
+        "double",
+        "numeric",
+        "decimal",
+        "date",
+        "time",
+    }
+)
+_DATE_LIKE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_COLUMN_LIKE = re.compile(r"^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)?$")
+
+
+# Builtins / dbt helpers that must not be rewritten by the column-arg fallback.
+_SKIP_COLUMN_ARG_MACROS = frozenset(
+    {
+        "ref",
+        "source",
+        "config",
+        "var",
+        "return",
+        "log",
+        "exceptions",
+        "adapter",
+        "api",
+        "builtins",
+        "modules",
+        "run_query",
+        "statement",
+    }
+)
+
+
+@_register(r"\{\{\s*([A-Za-z_][\w.]*)\s*\((.*?)\)\s*\}\}", re.DOTALL)
+def _preserve_macro_column_args(match: re.Match[str]) -> str:
+    """Last-resort: keep quoted column-like args so lineage can continue.
+
+    Project helpers like ``{{ is_discount("pos_trans_line.line_type") }}`` would
+    otherwise become NULL and dead-end field paths at that column.
+    """
+    name = match.group(1)
+    args = match.group(2)
+    base = name.split(".")[-1].lower()
+    root = name.split(".", 1)[0].lower()
+    if base in _SKIP_COLUMN_ARG_MACROS or root in _SKIP_COLUMN_ARG_MACROS:
+        return match.group(0)
+    if root in {"dbt", "dbt_utils", "dbt_artifacts"}:
+        return match.group(0)
+    if re.search(r"\b(?:ref|source)\s*\(", args):
+        return match.group(0)
+    cols: list[str] = []
+    for tok in re.findall(r"""['\"]([^'\"]+)['\"]""", args):
+        if _DATE_LIKE.match(tok) or tok.lower() in _NON_COLUMN_STRINGS:
+            continue
+        if not _COLUMN_LIKE.match(tok):
+            continue
+        cols.append(tok)
+    if not cols:
+        return match.group(0)
+    if len(cols) == 1:
+        return cols[0]
+    return "(" + " AND ".join(cols) + ")"
 
 
 def expand_macros(sql: str) -> str:

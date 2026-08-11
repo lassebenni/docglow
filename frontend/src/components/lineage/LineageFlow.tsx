@@ -18,19 +18,32 @@ import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
 import { useNavigate } from 'react-router-dom'
 import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData, JoinKeysData } from '../../types'
+import type { LineageDirection } from '../../utils/graph'
 import { getUnionChain } from '../../utils/graphTraversal'
 import { useColumnHighlightStore } from '../../stores/columnHighlightStore'
-import { buildReverseIndex, getColumnTraceResult } from '../../utils/columnLineageGraph'
+import {
+  buildReverseIndex,
+  columnEdgeKey,
+  getColumnTraceResult,
+  getFieldPathColumnTrace,
+} from '../../utils/columnLineageGraph'
 import {
   columnExpression,
   columnKindMapForModel,
+  FIELD_LINEAGE_EDGE_COLOR,
   strongestTransformation,
   transformationGlyph,
   upstreamSourceDeps,
 } from '../../utils/columnTransforms'
 import { getJoinKeysForEdge } from '../../utils/joinKeys'
+import { pinLayoutAnchor, type LayoutAnchor } from '../../utils/pinLayoutAnchor'
 import { buildResourcePath } from '../../utils/resourceRoutes'
 import { ColumnDetailPanel } from './ColumnDetailPanel'
+import {
+  buildMeasureColumnMap,
+  extractFormulaLeafSources,
+  resolveMeasureRefsInFormula,
+} from '../../utils/measureFormulaResolve'
 import { DagNode } from './DagNode'
 import { FolderNode } from './FolderNode'
 import { JoinKeysPanel, PanelRow } from './LineagePanels'
@@ -118,17 +131,61 @@ interface LayoutResult {
 const COLUMN_ROW_HEIGHT = 22
 const MAX_VISIBLE_COLUMNS_LAYOUT = 20
 
+/** Group dagre ranks by similar X and stack nodes vertically without overlap. */
+function packLayoutRanks(layoutNodes: LayoutItem[], gap: number): void {
+  if (layoutNodes.length <= 1) return
+  const sorted = [...layoutNodes].sort((a, b) => a.x - b.x || a.y - b.y)
+  const ranks: LayoutItem[][] = []
+  const RANK_X_TOLERANCE = NODE_WIDTH * 0.55
+
+  for (const node of sorted) {
+    const last = ranks[ranks.length - 1]
+    if (last && Math.abs(node.x - last[0]!.x) < RANK_X_TOLERANCE) {
+      last.push(node)
+    } else {
+      ranks.push([node])
+    }
+  }
+
+  for (const rank of ranks) {
+    rank.sort((a, b) => a.y - b.y)
+    const rankX = Math.min(...rank.map((n) => n.x))
+    let y = Math.min(...rank.map((n) => n.y))
+    for (const node of rank) {
+      node.x = rankX
+      node.y = y
+      y += node.height + gap
+    }
+  }
+}
+
+interface LayoutOptions {
+  /** Extra vertical gap between nodes in the same rank (field-path graphs). */
+  nodesep?: number
+  /** Horizontal gap between ranks. */
+  ranksep?: number
+  /**
+   * When true, pack each rank into a clean vertical stack so edges are less
+   * likely to thread through sibling nodes.
+   */
+  packRanks?: boolean
+}
+
 function computeLayout(
   nodes: LineageNode[],
   edges: LineageEdge[],
   folderNodeIds: Set<string>,
   expandedNodeIds?: Set<string>,
   modelColumns?: Record<string, string[]>,
+  options: LayoutOptions = {},
 ): LayoutResult {
   if (nodes.length === 0) return { nodes: [], edges: [] }
 
+  const nodesep = options.nodesep ?? 20
+  const ranksep = options.ranksep ?? 60
+
   const g = new dagre.graphlib.Graph()
-  g.setGraph({ rankdir: 'LR', nodesep: 20, ranksep: 60, marginx: 20, marginy: 20 })
+  g.setGraph({ rankdir: 'LR', nodesep, ranksep, marginx: 20, marginy: 20, align: 'UL' })
   g.setDefaultEdgeLabel(() => ({}))
 
   for (const node of nodes) {
@@ -170,6 +227,10 @@ function computeLayout(
       isFolder,
     }
   })
+
+  if (options.packRanks) {
+    packLayoutRanks(layoutNodes, nodesep)
+  }
 
   // Post-layout: align nodes by layer rank into consistent vertical columns.
   // Only apply when multiple distinct layers are visible — if all nodes share
@@ -379,10 +440,19 @@ export interface LineageFlowProps {
   /** Map of model ID → list of column names (for DagNode expansion) */
   modelColumns?: Record<string, string[]>
   /**
+   * When true, column-trace edges/highlights stay at depth 1 (selected field →
+   * direct upstream columns) so Field path only stays readable for PBI measures.
+   */
+  fieldPathOnly?: boolean
+  /**
+   * Toolbar Up/Down/Both — kept in sync with field-path subgraph filtering so
+   * column chips/edges match which models remain on the canvas.
+   */
+  direction?: LineageDirection
+  /**
    * When false, skip the small-graph auto-expand of column lists.
-   * Model Lineage passes this from the Table/Columns toggle (default Table)
-   * so the button state matches what is rendered. Global Lineage keeps the
-   * default true.
+   * Model / Exposure / Lineage pages pass this from the Table/Columns toggle
+   * (default Table) so the button state matches what is rendered.
    */
   autoExpandColumns?: boolean
 }
@@ -403,6 +473,8 @@ function LineageFlowInner({
   joinBasesData,
   joinIndirectData,
   modelColumns,
+  fieldPathOnly = false,
+  direction = 'both',
   autoExpandColumns = true,
 }: LineageFlowProps) {
   const navigate = useNavigate()
@@ -418,6 +490,7 @@ function LineageFlowInner({
   const clearColumnSelection = useColumnHighlightStore(s => s.clearSelection)
   const resetExpandState = useColumnHighlightStore(s => s.resetExpandState)
   const expandAll = useColumnHighlightStore(s => s.expandAll)
+  const ensureExpanded = useColumnHighlightStore(s => s.ensureExpanded)
 
   // Make bulk expand/collapse state ephemeral per LineageFlow mount: when the
   // user navigates between pages and back, expand state from prior views does
@@ -444,13 +517,35 @@ function LineageFlowInner({
   // Compute column trace when a column is selected
   const columnTrace = useMemo(() => {
     if (!selectedColumn || !columnLineageData) return null
+    // Field path / exposure: measure→mart leaves, then SQL upstream of those
+    // leaves only (not every table parent of the exposure).
+    const useFieldPath =
+      fieldPathOnly || selectedColumn.modelId.startsWith('exposure.')
+    if (useFieldPath) {
+      return getFieldPathColumnTrace(
+        selectedColumn.modelId,
+        selectedColumn.columnName,
+        columnLineageData,
+        reverseIndex,
+        {
+          includeUpstream: direction !== 'downstream',
+          includeDownstream: direction !== 'upstream',
+        },
+      )
+    }
     return getColumnTraceResult(
       selectedColumn.modelId,
       selectedColumn.columnName,
       columnLineageData,
       reverseIndex,
     )
-  }, [selectedColumn, columnLineageData, reverseIndex])
+  }, [selectedColumn, columnLineageData, reverseIndex, fieldPathOnly, direction])
+
+  // Expand every model on the selected field's path so parent columns are visible
+  useEffect(() => {
+    if (!columnTrace) return
+    ensureExpanded([...columnTrace.highlightedColumns.keys()])
+  }, [columnTrace, ensureExpanded])
 
   // Column click clears join-edge selection (panel exclusivity)
   useEffect(() => {
@@ -535,10 +630,50 @@ function LineageFlowInner({
     return set
   }, [expandedNodeIds, autoExpandNodeIds, manuallyCollapsedIds])
 
-  const layout = useMemo(
-    () => computeLayout(nodes, edges, folderNodeIds, layoutExpandedIds, modelColumns),
-    [nodes, edges, folderNodeIds, layoutExpandedIds, modelColumns],
-  )
+  // Field-path mode: rank by column-lineage connectivity (not sparse table edges),
+  // so mart siblings sit in one column and edges don't snake through neighbors.
+  const layoutEdges = useMemo((): LineageEdge[] => {
+    if (!fieldPathOnly || !columnTrace || columnTrace.edges.length === 0) return edges
+    const seen = new Set<string>()
+    const out: LineageEdge[] = []
+    for (const ce of columnTrace.edges) {
+      const key = `${ce.sourceModel}\0${ce.targetModel}`
+      if (seen.has(key) || ce.sourceModel === ce.targetModel) continue
+      seen.add(key)
+      out.push({ source: ce.sourceModel, target: ce.targetModel })
+    }
+    return out.length > 0 ? out : edges
+  }, [fieldPathOnly, columnTrace, edges])
+
+  // Node whose screen position should stay put when switching fields under
+  // Field path only (the model you are clicking columns in).
+  const fieldPathAnchorId = useMemo(() => {
+    if (!fieldPathOnly) return null
+    if (selectedColumn?.modelId) return selectedColumn.modelId
+    if (pinnedIds && pinnedIds.size > 0) return [...pinnedIds][0] ?? null
+    return null
+  }, [fieldPathOnly, selectedColumn?.modelId, pinnedIds])
+
+  const fieldPathAnchorRef = useRef<LayoutAnchor | null>(null)
+
+  const layout = useMemo(() => {
+    const raw = computeLayout(nodes, layoutEdges, folderNodeIds, layoutExpandedIds, modelColumns, {
+      nodesep: fieldPathOnly ? 48 : 20,
+      ranksep: fieldPathOnly ? 110 : 60,
+      packRanks: fieldPathOnly,
+    })
+    if (!fieldPathOnly || !fieldPathAnchorId) {
+      fieldPathAnchorRef.current = null
+      return raw
+    }
+    const { nodes: pinnedNodes, anchor } = pinLayoutAnchor(
+      raw.nodes,
+      fieldPathAnchorId,
+      fieldPathAnchorRef.current,
+    )
+    fieldPathAnchorRef.current = anchor
+    return { nodes: pinnedNodes, edges: raw.edges }
+  }, [nodes, layoutEdges, folderNodeIds, layoutExpandedIds, modelColumns, fieldPathOnly, fieldPathAnchorId])
 
   // Highlighting — depth-capped chain for all pinned nodes
   const pinnedArray = useMemo(() => Array.from(pinnedIds ?? []), [pinnedIds])
@@ -645,13 +780,17 @@ function LineageFlowInner({
       const traceCols = columnTrace?.highlightedColumns.get(ln.id)
       const selectedJoinCols = selectedEdgeJoin?.highlights.get(ln.id)
       const ambientJoinColors = connectedJoinHighlights?.get(ln.id)
+      // While a field path is active, only that path paints columns (amber).
+      // Join-key palette blues/teals would otherwise compete on the same chips.
       let nodeHighlightedCols = traceCols
-      if (selectedJoinCols && selectedJoinCols.size > 0) {
+      if (columnTrace == null && selectedJoinCols && selectedJoinCols.size > 0) {
         nodeHighlightedCols = new Set([...(traceCols ?? []), ...selectedJoinCols])
       }
       const hasAmbientJoinColors = ambientJoinColors != null && ambientJoinColors.size > 0
+      const showJoinKeyColors = columnTrace == null && hasAmbientJoinColors
       const inColumnTrace =
-        (nodeHighlightedCols != null && nodeHighlightedCols.size > 0) || hasAmbientJoinColors
+        (nodeHighlightedCols != null && nodeHighlightedCols.size > 0)
+        || showJoinKeyColors
 
       // When column trace is active, dim nodes not involved
       const dimmedByColumnTrace = columnTrace != null && !inColumnTrace
@@ -675,7 +814,8 @@ function LineageFlowInner({
           hasColumnLineage,
           autoExpanded: autoExpandNodeIds.has(ln.id),
           highlightedColumns: nodeHighlightedCols,
-          joinKeyColors: hasAmbientJoinColors ? ambientJoinColors : undefined,
+          fieldPathColumnColors: columnTrace?.columnColors.get(ln.id),
+          joinKeyColors: showJoinKeyColors ? ambientJoinColors : undefined,
           columnKinds: columnKindMapForModel(columnLineageData, ln.id),
           isJoinBase: joinBaseNodeIds.has(ln.id),
           joinTypeBadge: joinBaseNodeIds.has(ln.id) ? undefined : joinTypeBadges.get(ln.id),
@@ -781,7 +921,7 @@ function LineageFlowInner({
 
   const MARKER_COLUMN = useMemo(() => ({
     type: MarkerType.ArrowClosed as const,
-    color: '#f59e0b',
+    color: FIELD_LINEAGE_EDGE_COLOR,
     width: 14,
     height: 10,
   }), [])
@@ -808,21 +948,15 @@ function LineageFlowInner({
       }
     })
 
-    // Column-level edges
+    // Column-level edges — one color per immediate upstream leaf chain (amber
+    // when there is only one). Transform type stays on labels/glyphs / dash.
     if (!columnTrace) return modelEdges
-
-    const COLUMN_EDGE_COLORS: Record<string, string> = {
-      direct: '#16a34a',
-      passthrough: '#16a34a',
-      rename: '#0d9488',
-      derived: '#f59e0b',
-      aggregated: '#7c3aed',
-    }
 
     const columnEdges: Edge[] = columnTrace.edges.map((ce) => {
       const sourceExpanded = effectiveExpandedIds.has(ce.sourceModel)
       const targetExpanded = effectiveExpandedIds.has(ce.targetModel)
-      const edgeColor = COLUMN_EDGE_COLORS[ce.transformation] ?? '#f59e0b'
+      const edgeColor =
+        columnTrace.edgeColors.get(columnEdgeKey(ce)) ?? FIELD_LINEAGE_EDGE_COLOR
       const showLabel =
         ce.transformation === 'derived'
         || ce.transformation === 'aggregated'
@@ -864,7 +998,12 @@ function LineageFlowInner({
               : '6 3',
           opacity: 0.9,
         },
-        markerEnd: MARKER_COLUMN,
+        markerEnd: {
+          type: MarkerType.ArrowClosed as const,
+          color: edgeColor,
+          width: 14,
+          height: 10,
+        },
         zIndex: 10,
       }
     })
@@ -923,12 +1062,20 @@ function LineageFlowInner({
     })
   }, [rfEdgesBase, highlightedSet, columnTrace, selectedEdgeId, selectedEdgeJoin, MARKER_HIGHLIGHTED, MARKER_DEFAULT])
 
-  // Fit view when data changes
+  // Fit view when the graph identity changes. Under Field path only, keep the
+  // camera still when only the selected column (same model) changes — parents
+  // reflow around the pinned focus node instead of recentering the viewport.
+  const fieldPathFitKeyRef = useRef<string | null>(null)
   useEffect(() => {
-    if (layout.nodes.length > 0) {
-      requestAnimationFrame(() => fitView({ padding: 0.1 }))
+    if (layout.nodes.length === 0) return
+    if (fieldPathOnly && fieldPathAnchorId) {
+      if (fieldPathFitKeyRef.current === fieldPathAnchorId) return
+      fieldPathFitKeyRef.current = fieldPathAnchorId
+    } else {
+      fieldPathFitKeyRef.current = null
     }
-  }, [layout.nodes.length, layout.edges.length, fitView])
+    requestAnimationFrame(() => fitView({ padding: 0.1 }))
+  }, [layout.nodes.length, layout.edges.length, fitView, fieldPathOnly, fieldPathAnchorId])
 
   const handleNodeDragStart = useCallback(() => {
     isDraggingRef.current = true
@@ -1019,15 +1166,28 @@ function LineageFlowInner({
   const selectedColumnDetail = useMemo(() => {
     if (!selectedColumn || !columnLineageData) return null
     const deps = columnLineageData[selectedColumn.modelId]?.[selectedColumn.columnName] ?? []
+    const expression = columnExpression(deps)
+    const fieldLineage = columnLineageData[selectedColumn.modelId]
+    const measureMap = fieldLineage ? buildMeasureColumnMap(fieldLineage, nameOf) : {}
+    const resolvedExpression =
+      expression && fieldLineage
+        ? resolveMeasureRefsInFormula(expression, measureMap)
+        : null
+    const formulaSources =
+      expression && fieldLineage
+        ? extractFormulaLeafSources(expression, fieldLineage)
+        : []
     return {
       modelId: selectedColumn.modelId,
       columnName: selectedColumn.columnName,
       kind: strongestTransformation(deps),
-      expression: columnExpression(deps),
+      expression,
+      resolvedExpression,
       deps,
       upstreamDeps: upstreamSourceDeps(deps),
+      formulaSources,
     }
-  }, [selectedColumn, columnLineageData])
+  }, [selectedColumn, columnLineageData, nameOf])
 
   if (nodes.length === 0) {
     return <div className="text-[var(--text-muted)] text-sm">No lineage data available.</div>

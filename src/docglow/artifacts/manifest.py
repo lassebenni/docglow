@@ -136,6 +136,12 @@ class ManifestExposure(BaseModel):
     tags: list[str] = Field(default_factory=list)
     meta: dict[str, object] = Field(default_factory=dict)
 
+    @field_validator("type", "description", "url", "label", "maturity", mode="before")
+    @classmethod
+    def _none_str_to_empty(cls, value: object) -> object:
+        # dbt may serialize omitted optional strings as null.
+        return "" if value is None else value
+
     @field_validator("owner", mode="before")
     @classmethod
     def _drop_null_owner_fields(cls, value: object) -> object:

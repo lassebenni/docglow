@@ -268,6 +268,34 @@ class TestParseColumnLineage:
         assert any(d.expression and d.expression.upper() == "NULL" for d in result["tax_paid"])
         assert all(not d.source_table for d in result["tax_paid"])
 
+    def test_union_sentinel_does_not_override_real_column_path(self) -> None:
+        """UNION ALL 'UNKNOWN' sentinel must not classify the column as constant."""
+        sql = """
+        WITH enriched AS (
+            SELECT customer_no FROM upstream_customers
+        ),
+        unioned AS (
+            SELECT customer_no FROM enriched
+            UNION ALL
+            SELECT CAST('UNKNOWN' AS VARCHAR) AS customer_no
+        )
+        SELECT * FROM unioned
+        """
+        result = parse_column_lineage(
+            sql,
+            schema={"upstream_customers": {"customer_no": "varchar"}},
+            known_columns=["customer_no"],
+        )
+        assert "customer_no" in result
+        deps = result["customer_no"]
+        assert deps
+        assert all(d.transformation != "constant" for d in deps)
+        assert any(
+            d.source_table.lower().endswith("upstream_customers")
+            and d.source_column.lower() == "customer_no"
+            for d in deps
+        )
+
     def test_select_star_cte_classifies_inner_derived_expression(self) -> None:
         """Outer SELECT * must not mask CTE-defining coalesce as passthrough."""
         sql = """
@@ -392,3 +420,47 @@ class TestBuildSchemaMapping:
         }
         schema = build_schema_mapping(models, {})
         assert "public.empty" not in schema
+
+
+class TestSupplementDepsFromExpression:
+    def test_case_sign_flip_lists_all_expression_columns(self) -> None:
+        """CASE over same-named amount + flags should list every referenced col."""
+        sql = """
+        SELECT
+            case
+                when transaction_source = 'CREDIT_MEMO' then amt_sales_excl_vat * -1
+                when transaction_source = 'POS' and is_item_discount then 0
+                else amt_sales_excl_vat
+            end as amt_sales_excl_vat
+        FROM int_sales_txn_line_enriched src
+        """
+        result = parse_column_lineage(sql, dialect="postgres")
+        deps = result["amt_sales_excl_vat"]
+        cols = {d.source_column for d in deps}
+        assert "amt_sales_excl_vat" in cols
+        assert "transaction_source" in cols
+        assert "is_item_discount" in cols
+
+    def test_supplement_fills_sqlglot_gaps(self) -> None:
+        """When lineage only kept one leaf, expression scan adds the rest."""
+        from docglow.lineage.column_parser import (
+            ColumnDependency,
+            _supplement_deps_from_expression,
+        )
+
+        expr = (
+            "CASE WHEN transaction_source = 'CREDIT_MEMO' THEN amt_sales_excl_vat * -1 "
+            "WHEN transaction_source = 'POS' AND src.is_item_discount THEN 0 "
+            "ELSE amt_sales_excl_vat END"
+        )
+        incomplete = [
+            ColumnDependency(
+                source_table="int_sales_txn_line_enriched",
+                source_column="is_item_discount",
+                transformation="derived",
+                expression=expr,
+            )
+        ]
+        filled = _supplement_deps_from_expression(incomplete, dialect="postgres")
+        cols = {d.source_column for d in filled}
+        assert cols == {"is_item_discount", "amt_sales_excl_vat", "transaction_source"}

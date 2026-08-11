@@ -6,10 +6,26 @@ export const OVER_CAP_DETAIL_TEXT = 'Narrow the graph with filters or pinning to
 
 export type LineageViewMode = 'table' | 'columns' | 'ctes'
 
+export const LINEAGE_VIEW_MODES = ['table', 'columns', 'ctes'] as const satisfies readonly LineageViewMode[]
+
 /**
  * Pure helpers — exported for direct unit testing.
  * The component below is a thin render wrapper over these + the store.
  */
+
+/** Parse a URL path segment into a lineage view mode; unknown → table. */
+export function parseLineageViewMode(raw: string | undefined): LineageViewMode {
+  if (raw === 'columns' || raw === 'ctes' || raw === 'table') return raw
+  return 'table'
+}
+
+/**
+ * Path suffix for a lineage view mode. ``table`` is omitted so the canonical
+ * default URL stays short (e.g. ``/exposure/:id`` vs ``/exposure/:id/columns``).
+ */
+export function lineageViewModeSuffix(mode: LineageViewMode): string {
+  return mode === 'table' ? '' : `/${mode}`
+}
 
 export function columnsModeTooltip(candidateCount: number): string | undefined {
   return candidateCount === 0 ? 'No column lineage data in this graph' : 'Show columns on nodes'

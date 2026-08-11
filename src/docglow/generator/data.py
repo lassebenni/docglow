@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Literal, TypedDict
 
 from docglow.artifacts.loader import LoadedArtifacts
 from docglow.config import UiConfig
 from docglow.generator.layers import LineageLayerConfig
+
+logger = logging.getLogger(__name__)
 
 
 # DOC-214: Wire-shape TypedDicts for the ERD relationship contract.
@@ -227,6 +230,7 @@ def build_docglow_data(
     exclude_packages: bool = True,
     slim: bool = False,
     enable_erd: bool = False,
+    exposure_field_lineage_path: Any | None = None,
 ) -> dict[str, Any]:
     """Transform loaded artifacts into the unified DocglowData payload.
 
@@ -256,6 +260,7 @@ def build_docglow_data(
         exclude_packages=exclude_packages,
         slim=slim,
         enable_erd=enable_erd,
+        exposure_field_lineage_path=exposure_field_lineage_path,
     )
 
     stages = default_stages(ctx)
@@ -275,6 +280,7 @@ def _build_column_lineage(
     seeds: dict[str, Any],
     snapshots: dict[str, Any],
     max_workers: int | None = None,
+    exposure_field_lineage_path: Any | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, list[dict[str, str]]] | None,
@@ -293,15 +299,13 @@ def _build_column_lineage(
 
     from pathlib import Path as _Path
 
-    from docglow.lineage.analyzer import analyze_column_lineage
+    from docglow.lineage.analyzer import analyze_column_lineage, compute_column_lineage_subset
     from docglow.lineage.column_parser import detect_dialect
 
     dialect = detect_dialect(manifest.metadata.adapter_type)
 
     subset = None
     if select:
-        from docglow.lineage.analyzer import compute_column_lineage_subset
-
         subset = compute_column_lineage_subset(
             pattern=select,
             models=models,
@@ -310,6 +314,36 @@ def _build_column_lineage(
             snapshots=snapshots,
             max_depth=depth,
         )
+
+    # Marts that only appear via exposure field lineage (e.g. Power BI measures)
+    # must be analyzed too — otherwise Field path stops at those leaves.
+    if subset is not None and exposure_field_lineage_path is not None:
+        from docglow.lineage.exposure_field_lineage import (
+            collect_mart_model_names,
+            try_load_exposure_field_lineage,
+        )
+
+        sidecar = try_load_exposure_field_lineage(_Path(exposure_field_lineage_path))
+        if sidecar is not None:
+            mart_names = collect_mart_model_names(sidecar)
+            if mart_names:
+                before = len(subset)
+                for name in sorted(mart_names):
+                    subset |= compute_column_lineage_subset(
+                        pattern=name,
+                        models=models,
+                        sources=sources,
+                        seeds=seeds,
+                        snapshots=snapshots,
+                        max_depth=depth,
+                    )
+                logger.info(
+                    "Expanded column lineage subset with %d exposure field lineage "
+                    "mart model(s): %d → %d unique_ids",
+                    len(mart_names),
+                    before,
+                    len(subset),
+                )
 
     result = analyze_column_lineage(
         models=models,
@@ -362,30 +396,48 @@ def _backfill_columns_from_lineage(
     column_lineage: dict[str, dict[str, list[dict[str, str]]]],
     *collections: dict[str, Any],
 ) -> None:
-    """Add placeholder column entries for models that have lineage but no columns.
+    """Ensure models expose every column that column lineage references.
 
-    Dynamic Tables and uncompiled models often have no catalog or manifest
-    column data, but column lineage analysis can still resolve their output
-    columns from CTE definitions. This backfills the model's ``columns``
-    list so the frontend can display them.
+    Dynamic Tables and uncompiled models often have no catalog/manifest
+    columns; incremental models may also omit columns that still appear in
+    compiled SQL. Backfill placeholder entries so the frontend can render
+    field-path rows (and sort matched fields to the top of scrollable nodes).
     """
+    needed: dict[str, set[str]] = {}
+    for uid, cols in column_lineage.items():
+        bucket = needed.setdefault(uid, set())
+        bucket.update(cols.keys())
+        for deps in cols.values():
+            for dep in deps:
+                source_model = dep.get("source_model")
+                source_column = dep.get("source_column")
+                if (
+                    isinstance(source_model, str)
+                    and source_model
+                    and isinstance(source_column, str)
+                    and source_column
+                ):
+                    needed.setdefault(source_model, set()).add(source_column)
+
+    placeholder: dict[str, Any] = {
+        "description": "",
+        "data_type": "",
+        "meta": {},
+        "tags": [],
+        "tests": [],
+        "profile": None,
+    }
+
     for collection in collections:
         for uid, model_data in collection.items():
-            if uid not in column_lineage:
+            want = needed.get(uid)
+            if not want:
                 continue
-            if model_data.get("columns"):
-                continue  # Already has columns
-
-            lineage_cols = column_lineage[uid]
-            model_data["columns"] = [
-                {
-                    "name": col_name,
-                    "description": "",
-                    "data_type": "",
-                    "meta": {},
-                    "tags": [],
-                    "tests": [],
-                    "profile": None,
-                }
-                for col_name in sorted(lineage_cols.keys())
-            ]
+            columns = list(model_data.get("columns") or [])
+            existing = {c.get("name") for c in columns if isinstance(c.get("name"), str)}
+            missing = sorted(name for name in want if name not in existing)
+            if not missing:
+                continue
+            for name in missing:
+                columns.append({"name": name, **placeholder})
+            model_data["columns"] = columns

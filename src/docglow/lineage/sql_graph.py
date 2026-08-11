@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from docglow.lineage.sql_ast import (
@@ -24,6 +25,15 @@ _MAX_OPS_PER_CTE = 12
 
 # Normalized agg tags for UI glyphs (SUM / CNT / GRP / …).
 _AGG_FN_KEYS = frozenset({"sum", "count", "avg", "min", "max"})
+
+_SQL_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_SQL_LINE_COMMENT = re.compile(r"--[^\n]*")
+_SQL_WS = re.compile(r"\s+")
+# CAST('NULL' AS DATE) / CAST('_batch_start' AS DATE) from unresolved Jinja
+_CAST_IDENT_AS_DATE = re.compile(
+    r"CAST\(\s*'([A-Za-z_][A-Za-z0-9_]*)'\s+AS\s+DATE\s*\)",
+    re.IGNORECASE,
+)
 
 
 def build_sql_graph(
@@ -287,7 +297,11 @@ def build_sql_graph(
 
     outer = None
     for select in tree.find_all(exp.Select):
-        if select.parent is None or isinstance(select.parent, exp.With) or type(select.parent).__name__ == "With":
+        if (
+            select.parent is None
+            or isinstance(select.parent, exp.With)
+            or type(select.parent).__name__ == "With"
+        ):
             outer = select
             break
     if outer is None and tree.find_all(exp.Select):
@@ -403,6 +417,10 @@ def _column_agg_map(select: Any, exp: Any) -> dict[str, str]:
             if agg is not None:
                 out[out_name] = _agg_fn_key(agg)
                 continue
+            # Literals / CAST(0) etc. are not group keys — leave untagged so the
+            # UI can show Constant instead of GRP.
+            if not any(True for _ in inner.find_all(exp.Column)):
+                continue
 
         # Non-aggregated projection in an aggregate SELECT = group key
         out[out_name] = "group"
@@ -418,6 +436,18 @@ def _select_has_window(select: Any, exp: Any) -> bool:
     return False
 
 
+def _clean_op_expression(sql: str | None) -> str | None:
+    """Normalize filter SQL for the CTE panel (drop comments, collapse whitespace)."""
+    if not sql:
+        return None
+    out = _SQL_BLOCK_COMMENT.sub("", sql)
+    out = _SQL_LINE_COMMENT.sub("", out)
+    # Prefer readable tokens over CAST('nullish_ident' AS DATE) from strip_jinja.
+    out = _CAST_IDENT_AS_DATE.sub(r"\1", out)
+    out = _SQL_WS.sub(" ", out).strip()
+    return out or None
+
+
 def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, Any]]:
     """Extract WHERE / HAVING as filter metadata on the CTE (panel + FILT badge).
 
@@ -427,9 +457,12 @@ def _extract_cte_ops(select: Any, exp: Any, *, cte_id: str) -> list[dict[str, An
     ops: list[dict[str, Any]] = []
     seen_expr: set[str] = set()
 
-    def add(kind: str, label: str, expression: str | None, columns: list[str] | None = None) -> None:
+    def add(
+        kind: str, label: str, expression: str | None, columns: list[str] | None = None
+    ) -> None:
         if len(ops) >= _MAX_OPS_PER_CTE:
             return
+        expression = _clean_op_expression(expression)
         key = f"{kind}:{expression or ''}:{','.join(columns or [])}"
         if key in seen_expr:
             return
@@ -482,6 +515,47 @@ def _schema_columns(
         if kl == cleaned or kl.endswith("." + short) or kl == short:
             return list(cols.keys())
     return []
+
+
+def _select_alias_map(select: Any, exp: Any) -> dict[str, str]:
+    """Map FROM/JOIN aliases (and bare table names) → table refs for one SELECT.
+
+    Needed so ``COALESCE(sc.sales_channel_code, 'UNKNOWN')`` resolves ``sc`` to
+    ``dim_sales_channel`` instead of ``parent:unresolved:sc``.
+
+    Do not collapse passthrough CTE names through ``cte_sources`` here — column
+    lineage should keep edges to ``cte:…`` nodes when those CTEs exist.
+    """
+    alias_map: dict[str, str] = {}
+
+    def add_relation(node: Any) -> None:
+        if node is None:
+            return
+        alias: str | None = None
+        table = node
+        if isinstance(table, exp.Alias):
+            alias = str(table.alias) if table.alias else None
+            table = table.this
+        if not isinstance(table, exp.Table):
+            raw = table_ref(node, exp)
+            if raw and alias:
+                alias_map[alias.lower()] = raw
+            return
+        raw = table_ref(table, exp)
+        if not raw:
+            return
+        table_alias = alias or (str(table.alias) if table.alias else None)
+        if table_alias:
+            alias_map[table_alias.lower()] = raw
+        if table.name:
+            alias_map.setdefault(str(table.name).lower(), raw)
+
+    from_ = select.args.get("from_")
+    if from_ is not None:
+        add_relation(from_.this)
+    for join in select.args.get("joins") or []:
+        add_relation(join.this)
+    return alias_map
 
 
 def _build_column_lineage(
@@ -542,10 +616,20 @@ def _build_column_lineage(
             entry["expression"] = expression
         deps.append(entry)
 
-    def resolve_rel(alias_or_ref: str | None) -> str | None:
+    def resolve_rel(
+        alias_or_ref: str | None,
+        alias_map: dict[str, str] | None = None,
+    ) -> str | None:
         if not alias_or_ref:
             return None
-        return relation_node_id(alias_or_ref)
+        key = alias_or_ref.lower().replace('"', "")
+        if alias_map:
+            mapped = alias_map.get(key) or alias_map.get(key.rsplit(".", 1)[-1])
+            if mapped:
+                via_alias: str | None = relation_node_id(mapped)
+                return via_alias
+        direct: str | None = relation_node_id(alias_or_ref)
+        return direct
 
     for cte in cte_list:
         alias = getattr(cte, "alias", None)
@@ -556,6 +640,7 @@ def _build_column_lineage(
         if cte_id not in nodes:
             continue
 
+        alias_map = _select_alias_map(select, exp)
         projections = _project_columns(select, exp)
         out_cols: list[str] = []
         is_agg = select_is_aggregate(select, exp)
@@ -563,11 +648,11 @@ def _build_column_lineage(
         for proj in projections:
             if proj["kind"] == "star":
                 src_rel = proj.get("table")
-                src_id = resolve_rel(src_rel) if src_rel else None
+                src_id = resolve_rel(src_rel, alias_map) if src_rel else None
                 if src_id is None:
                     from_ = select.args.get("from_")
                     from_raw = table_ref(from_.this, exp) if from_ else None
-                    src_id = resolve_rel(from_raw) if from_raw else None
+                    src_id = resolve_rel(from_raw, alias_map) if from_raw else None
                 src_cols = node_columns(src_id) if src_id else []
                 for col in src_cols:
                     out_cols.append(col)
@@ -577,11 +662,11 @@ def _build_column_lineage(
                 out_name = proj["out"]
                 src_rel = proj.get("table")
                 src_col = proj.get("source_col") or out_name
-                src_id = resolve_rel(src_rel) if src_rel else None
+                src_id = resolve_rel(src_rel, alias_map) if src_rel else None
                 if src_id is None:
                     from_ = select.args.get("from_")
                     from_raw = table_ref(from_.this, exp) if from_ else None
-                    src_id = resolve_rel(from_raw) if from_raw else None
+                    src_id = resolve_rel(from_raw, alias_map) if from_raw else None
                 out_cols.append(out_name)
                 if src_id and src_col:
                     xform = "rename" if src_col != out_name else "passthrough"
@@ -592,7 +677,7 @@ def _build_column_lineage(
                 expr_sql = proj.get("expression")
                 from_ = select.args.get("from_")
                 from_raw = table_ref(from_.this, exp) if from_ else None
-                default_src = resolve_rel(from_raw) if from_raw else None
+                default_src = resolve_rel(from_raw, alias_map) if from_raw else None
                 xform = "aggregated" if is_agg or proj.get("aggregated") else "derived"
 
                 sources = proj.get("sources") or []
@@ -600,10 +685,13 @@ def _build_column_lineage(
                     sources = [{"table": proj.get("table"), "column": proj["source_col"]}]
 
                 if proj.get("constant") or not sources:
+                    # Pure literals have no field upstream — do not attach the
+                    # FROM relation as a phantom source (empty source_column),
+                    # or the UI draws a path edge with nothing to highlight.
                     add_dep(
                         cte_id,
                         out_name,
-                        default_src or "",
+                        "",
                         "",
                         "constant" if proj.get("constant") else xform,
                         expression=expr_sql,
@@ -614,7 +702,7 @@ def _build_column_lineage(
                         if not src_col:
                             continue
                         src_rel = src.get("table")
-                        src_id = resolve_rel(src_rel) if src_rel else None
+                        src_id = resolve_rel(src_rel, alias_map) if src_rel else None
                         if src_id is None:
                             src_id = default_src
                         if not src_id:
@@ -722,7 +810,9 @@ def _project_columns(select: Any, exp: Any) -> list[dict[str, Any]]:
         # bare expression without alias
         sources = expr_sources(expression)
         src = sources[0] if sources else None
-        aggregated = expression.find(exp.AggFunc) is not None if hasattr(expression, "find") else False
+        aggregated = (
+            expression.find(exp.AggFunc) is not None if hasattr(expression, "find") else False
+        )
         out.append(
             {
                 "kind": "expr",

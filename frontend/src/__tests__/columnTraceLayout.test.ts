@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildTraceLayout } from '../utils/columnTraceLayout'
+import { FIELD_LINEAGE_EDGE_COLOR } from '../utils/columnTransforms'
 import type { ColumnEdge } from '../types'
 
 function makeEdge(
@@ -61,11 +62,10 @@ describe('buildTraceLayout', () => {
     expect(result.nodes).toHaveLength(4)
     expect(result.edges).toHaveLength(3)
 
-    // Each edge should have the correct transformation color
-    const derivedEdge = result.edges.find(
-      (e) => e.target === 'model.events',
+    // Field path uses one stroke color regardless of transformation type
+    expect(new Set(result.edges.map((e) => e.style?.stroke))).toEqual(
+      new Set([FIELD_LINEAGE_EDGE_COLOR]),
     )
-    expect(derivedEdge?.style?.stroke).toBe('#d97706') // derived = amber
   })
 
   it('handles fan-in (multiple sources → one target)', () => {

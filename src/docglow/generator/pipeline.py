@@ -39,6 +39,7 @@ class PipelineContext:
     column_lineage_depth: int | None = None
     column_lineage_cache_dir: Any | None = None
     column_lineage_workers: int | None = None
+    exposure_field_lineage_path: Any | None = None
     exclude_packages: bool = True
     slim: bool = False
     enable_erd: bool = False
@@ -246,6 +247,8 @@ def stage_transform_exposures_metrics(ctx: PipelineContext) -> None:
             "depends_on": exposure.depends_on.nodes,
             "owner": dict(exposure.owner),
             "tags": list(exposure.tags),
+            "meta": dict(exposure.meta),
+            "columns": [],
         }
 
     for unique_id, metric in manifest.metrics.items():
@@ -365,6 +368,7 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
         ctx.seeds,
         ctx.snapshots,
         max_workers=ctx.column_lineage_workers,
+        exposure_field_lineage_path=ctx.exposure_field_lineage_path,
     )
     ctx.column_lineage = column_lineage
     ctx.join_keys = join_keys
@@ -373,6 +377,40 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     ctx.sql_graphs = sql_graphs
     # Join keys live only on the top-level join_keys map (canonical). Edge
     # embedding was removed to avoid dual half-shaped payloads.
+
+
+def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
+    """Merge external exposure field lineage (measures → mart columns) into the payload."""
+    path = ctx.exposure_field_lineage_path
+    if path is None:
+        return
+
+    from pathlib import Path
+
+    from docglow.lineage.exposure_field_lineage import (
+        apply_exposure_field_lineage,
+        try_load_exposure_field_lineage,
+    )
+
+    resolved = Path(path)
+    logger.info("Loading exposure field lineage from %s", resolved)
+    sidecar = try_load_exposure_field_lineage(resolved)
+    if sidecar is None:
+        return
+    ctx.column_lineage = apply_exposure_field_lineage(
+        sidecar=sidecar,
+        exposures=ctx.exposures,
+        models=ctx.models,
+        seeds=ctx.seeds,
+        snapshots=ctx.snapshots,
+        sources=ctx.sources,
+        column_lineage=ctx.column_lineage,
+    )
+
+    # Rebuild search so exposure measure/field names are indexed.
+    from docglow.generator.search_index import refresh_exposure_search_entries
+
+    ctx.search_index = refresh_exposure_search_entries(ctx.search_index, ctx.exposures)
 
 
 def stage_strip_sql(ctx: PipelineContext) -> None:
@@ -482,6 +520,11 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
             "build_column_lineage",
             stage_build_column_lineage,
             enabled=ctx.column_lineage_enabled,
+        ),
+        PipelineStage(
+            "merge_exposure_field_lineage",
+            stage_merge_exposure_field_lineage,
+            enabled=ctx.exposure_field_lineage_path is not None,
         ),
         PipelineStage("strip_sql", stage_strip_sql, enabled=ctx.slim),
         PipelineStage(

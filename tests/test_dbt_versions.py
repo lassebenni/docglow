@@ -146,6 +146,12 @@ class TestDataTransformation:
             # Fork-only — the frontend uses this map to augment parent-children
             # lineage when the layered subgraph drops sibling edges.
             "manifest_child_map",
+            # Column-lineage side maps (join badges, FROM-base parents, and the
+            # intra-model CTE graph) shipped alongside ``column_lineage``.
+            "join_keys",
+            "join_bases",
+            "join_indirect",
+            "sql_graphs",
         }
         assert set(versioned_data.keys()) == expected
 

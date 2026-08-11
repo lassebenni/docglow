@@ -232,6 +232,123 @@ class TestBuildSqlGraph:
         assert "jaffle" in deps[0]["expression"].lower()
         assert "coalesce" in deps[0]["expression"].lower()
 
+    def test_agg_constant_has_no_phantom_upstream(self) -> None:
+        """CAST(0) in an aggregate CTE is constant — not a path into FROM."""
+        sql = """
+        with
+        pos_lines as (
+            select document_no, amt_cogs_excl_vat from analytics.fct_lines
+        ),
+        line_rollup as (
+            select
+                document_no,
+                sum(amt_cogs_excl_vat) as amt_cogs_excl_vat,
+                cast(0 as decimal(18, 2)) as amt_employee_discount_excl_vat
+            from pos_lines
+            group by 1
+        )
+        select * from line_rollup
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.agg_doc",
+            model_name="agg_doc",
+            resolver=TableResolver(
+                models={
+                    "model.proj.fct_lines": {"name": "fct_lines", "schema": "analytics"},
+                    "model.proj.agg_doc": {"name": "agg_doc", "schema": "analytics"},
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.fct_lines": {
+                    "document_no": "varchar",
+                    "amt_cogs_excl_vat": "decimal",
+                },
+            },
+            output_columns=[
+                "document_no",
+                "amt_cogs_excl_vat",
+                "amt_employee_discount_excl_vat",
+            ],
+        )
+        assert graph is not None
+        const_deps = graph["column_lineage"]["cte:line_rollup"]["amt_employee_discount_excl_vat"]
+        assert const_deps
+        assert all(d["transformation"] == "constant" for d in const_deps)
+        assert all(not d.get("source_node") for d in const_deps)
+        assert all(not d.get("source_column") for d in const_deps)
+        # Real aggregates still point at the upstream column
+        cogs = graph["column_lineage"]["cte:line_rollup"]["amt_cogs_excl_vat"]
+        assert any(
+            d["source_node"] == "cte:pos_lines" and d["source_column"] == "amt_cogs_excl_vat"
+            for d in cogs
+        )
+        # Constant must not be tagged as a group-key in column_agg
+        agg_map = next(n for n in graph["nodes"] if n["id"] == "cte:line_rollup").get(
+            "column_agg", {}
+        )
+        assert "amt_employee_discount_excl_vat" not in agg_map
+        assert agg_map.get("amt_cogs_excl_vat") == "sum"
+
+    def test_join_alias_resolves_in_column_lineage(self) -> None:
+        """COALESCE(sc.col, 'UNKNOWN') must trace to the joined parent, not unresolved:sc."""
+        sql = """
+        with
+        line_rollup as (
+            select document_key, sales_channel_key from analytics.fct_lines
+        ),
+        final as (
+            select
+                lr.document_key,
+                coalesce(sc.sales_channel_code, 'UNKNOWN') as sales_channel_code
+            from line_rollup lr
+            left join analytics.dim_sales_channel sc
+                on lr.sales_channel_key = sc.sales_channel_key
+        )
+        select * from final
+        """
+        graph = build_sql_graph(
+            sql,
+            model_uid="model.proj.agg_by_document",
+            model_name="agg_by_document",
+            resolver=TableResolver(
+                models={
+                    "model.proj.fct_lines": {"name": "fct_lines", "schema": "analytics"},
+                    "model.proj.dim_sales_channel": {
+                        "name": "dim_sales_channel",
+                        "schema": "analytics",
+                    },
+                    "model.proj.agg_by_document": {
+                        "name": "agg_by_document",
+                        "schema": "analytics",
+                    },
+                },
+                sources={},
+            ),
+            schema={
+                "analytics.fct_lines": {
+                    "document_key": "varchar",
+                    "sales_channel_key": "varchar",
+                },
+                "analytics.dim_sales_channel": {
+                    "sales_channel_key": "varchar",
+                    "sales_channel_code": "varchar",
+                },
+            },
+            output_columns=["document_key", "sales_channel_code"],
+        )
+        assert graph is not None
+        deps = graph["column_lineage"]["cte:final"]["sales_channel_code"]
+        assert deps
+        assert all(d["transformation"] == "derived" for d in deps)
+        assert any(
+            d["source_node"] == "parent:model.proj.dim_sales_channel"
+            and d["source_column"] == "sales_channel_code"
+            for d in deps
+        )
+        assert not any("unresolved:sc" in d.get("source_node", "") for d in deps)
+
     def test_cte_ops_filter_only_window_on_column(self) -> None:
         sql = """
         with
@@ -500,4 +617,3 @@ class TestBuildSqlGraph:
         edge_set = {(e["source"], e["target"]) for e in graph["edges"]}
         assert ("parent:model.proj.order_items", "cte:order_items") in edge_set
         assert ("cte:order_items", "cte:order_items_summary") in edge_set
-

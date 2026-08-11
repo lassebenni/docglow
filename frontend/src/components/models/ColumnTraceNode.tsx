@@ -69,6 +69,7 @@ function ColumnTraceNodeComponent({ data }: NodeProps) {
 
         {/* Column list */}
         <div
+          className="nowheel nodrag"
           style={{
             borderTop: '1px solid var(--border, #e2e8f0)',
             maxHeight: 200,
