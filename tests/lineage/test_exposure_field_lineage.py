@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from docglow.lineage.exposure_field_lineage import (
+    _field_expression,
+    _strip_formula_narrative,
     apply_exposure_field_lineage,
     collect_mart_model_names,
     load_exposure_field_lineage,
@@ -356,6 +358,88 @@ class TestApplyExposureFieldLineage:
         assert "when" not in cols
         assert "then" not in cols
         assert "end" not in cols
+
+
+class TestFormulaNarrativeStripping:
+    def test_strips_sourced_from_tail(self) -> None:
+        raw = """Brutowinst excl. BTW = SUM(amt_sales_excl_vat) − SUM(amt_cogs_excl_vat)
+
+where amt_cogs_excl_vat is sourced from
+  XPRT Value Entry → Cost Amount (Actual)
+joined per (Document Type, Document No_, Line No_)."""
+        assert _strip_formula_narrative(raw) == (
+            "Brutowinst excl. BTW = SUM(amt_sales_excl_vat) − SUM(amt_cogs_excl_vat)"
+        )
+
+    def test_strips_waarbij_section(self) -> None:
+        raw = """Brutomarge % = Brutowinst excl. BTW / Artikelverkoopomzet excl. BTW
+
+waarbij:
+  Brutowinst excl. BTW = SUM(amt_sales_excl_vat − amt_cogs_excl_vat)"""
+        assert _strip_formula_narrative(raw) == (
+            "Brutomarge % = Brutowinst excl. BTW / Artikelverkoopomzet excl. BTW"
+        )
+
+    def test_keeps_multiline_dax_and_filter_hints(self) -> None:
+        raw = """Bonkortingsbedrag = SUM(amt_discount_excl_vat)
+                   filtered: is_txn_discount = TRUE"""
+        assert _strip_formula_narrative(raw) == raw
+
+        dax = """Waardebonomzet facturen excl. BTW
+  = CALCULATE(
+      SUM(fct_sales_txn_line[amt_sales_excl_vat]),
+      fct_sales_txn_line[is_voucher] = TRUE
+    )"""
+        assert _strip_formula_narrative(dax) == dax
+
+    def test_field_expression_applies_strip_to_formula_md(self) -> None:
+        assert _field_expression(
+            {
+                "formula_md": (
+                    "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)\n\n"
+                    "where amt_cogs_excl_vat is sourced from XPRT."
+                )
+            }
+        ) == "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)"
+
+    def test_merge_attaches_stripped_formula(self) -> None:
+        exposures, models, _ = _base_payload()
+        sidecar = {
+            "version": 1,
+            "exposures": {
+                "weekly_executive_dashboard": {
+                    "fields": [
+                        {
+                            "name": "Gross Profit",
+                            "kind": "measure",
+                            "formula_md": (
+                                "Gross Profit = SUM(revenue) - SUM(cogs)\n\n"
+                                "where cogs is sourced from ledger."
+                            ),
+                            "depends_on": [
+                                {
+                                    "model": "fct_orders",
+                                    "column": "amount",
+                                    "transformation": "aggregated",
+                                }
+                            ],
+                        }
+                    ]
+                }
+            },
+        }
+        lineage = apply_exposure_field_lineage(
+            sidecar=sidecar,
+            exposures=exposures,
+            models=models,
+            seeds={},
+            snapshots={},
+            sources={},
+            column_lineage={},
+        )
+        assert lineage is not None
+        deps = lineage["exposure.jaffle.weekly_executive_dashboard"]["Gross Profit"]
+        assert deps[0]["expression"] == "Gross Profit = SUM(revenue) - SUM(cogs)"
 
 
 class TestSearchIndexExposureFields:

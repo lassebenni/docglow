@@ -285,12 +285,42 @@ def _expand_field_deps(
     return deps
 
 
+# kpi_lineage ``formula_md`` may append hand-written lineage notes after the formula.
+_FORMULA_NARRATIVE_START = re.compile(
+    r"^\s*(?:"
+    r"where\b.+\bis sourced from\b"
+    r"|waarbij\s*:"
+    r"|joined per\b"
+    r"|note\s*:"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_formula_narrative(text: str) -> str:
+    """Drop narrative tails from kpi_lineage ``formula_md`` (keep the real formula)."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and (
+            _FORMULA_NARRATIVE_START.match(line)
+            or re.match(r"where\b.+\bis sourced from\b", stripped, re.IGNORECASE)
+        ):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
 def _field_expression(field: dict[str, Any]) -> str | None:
-    """Prefer explicit expression, then formula_md (kpi_lineage)."""
+    """Prefer explicit expression, then formula_md (kpi_lineage).
+
+    Narrative notes appended to ``formula_md`` (e.g. "where … is sourced from")
+    are stripped so the Formula panel shows only the evaluable formula.
+    """
     for key in ("expression", "formula", "formula_md"):
         value = field.get(key)
         if isinstance(value, str):
-            text = value.strip()
+            text = _strip_formula_narrative(value.strip())
             if text:
                 return text
     return None
