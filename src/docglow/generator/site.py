@@ -40,6 +40,7 @@ def generate_site(
     sample_data_dir: Path | None = None,
     docs_dir: Path | None = None,
     exposure_field_lineage_path: Path | None = None,
+    term_aliases_path: Path | None = None,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
 
@@ -88,6 +89,7 @@ def generate_site(
         slim=slim,
         enable_erd=enable_erd,
         exposure_field_lineage_path=exposure_field_lineage_path,
+        term_aliases_path=term_aliases_path,
     )
 
     # Run column insights if enabled

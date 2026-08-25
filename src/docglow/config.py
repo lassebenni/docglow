@@ -98,6 +98,11 @@ class LineageBadgeConfig:
 
 
 @dataclass(frozen=True)
+class SearchConfig:
+    term_aliases: Path | None = None
+
+
+@dataclass(frozen=True)
 class UiConfig:
     lineage_badge: LineageBadgeConfig = field(default_factory=LineageBadgeConfig)
 
@@ -111,6 +116,7 @@ class DocglowConfig:
     health: HealthConfig = field(default_factory=HealthConfig)
     ai: AiConfig = field(default_factory=AiConfig)
     insights: InsightsConfig = field(default_factory=InsightsConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
     ui: UiConfig = field(default_factory=UiConfig)
     slim: bool = False
     column_lineage: bool = True
@@ -276,6 +282,15 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
 
     ui = _build_ui_config(raw.get("ui", {}))
 
+    search_raw = raw.get("search", {})
+    search = (
+        SearchConfig(
+            term_aliases=_resolve_optional_path(search_raw.get("term_aliases")),
+        )
+        if search_raw
+        else SearchConfig()
+    )
+
     telemetry = resolve_telemetry_config(raw.get("telemetry"))
 
     return DocglowConfig(
@@ -290,6 +305,7 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
         health=HealthConfig(weights=weights, naming_rules=naming_rules, complexity=complexity),
         ai=ai,
         insights=insights,
+        search=search,
         ui=ui,
         lineage_layers=lineage_layers,
         telemetry=telemetry,

@@ -60,4 +60,6 @@ export interface SearchEntry {
   readonly column_name?: string;
   /** Present only on column entries — the parent model/source name. */
   readonly model_name?: string;
+  /** Dutch/English business aliases (from bc_term_aliases.yaml). */
+  readonly aliases?: string;
 }

@@ -53,16 +53,16 @@ export const useSearchStore = create<SearchState>((set) => ({
 
     resourceIndex = buildIndex(
       resources,
-      ['name', 'description', 'tags'],
-      ['id', 'unique_id', 'name', 'resource_type', 'description', 'tags'],
-      { name: 2 },
+      ['name', 'description', 'tags', 'aliases'],
+      ['id', 'unique_id', 'name', 'resource_type', 'description', 'tags', 'aliases'],
+      { name: 2, aliases: 2 },
     )
 
     columnIndex = buildIndex(
       columns,
-      ['name', 'description', 'model_name'],
-      ['id', 'unique_id', 'name', 'resource_type', 'column_name', 'model_name', 'description'],
-      { name: 2 },
+      ['name', 'description', 'model_name', 'aliases'],
+      ['id', 'unique_id', 'name', 'resource_type', 'column_name', 'model_name', 'description', 'aliases'],
+      { name: 2, aliases: 2 },
     )
   },
 
