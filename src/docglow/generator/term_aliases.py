@@ -41,31 +41,31 @@ def _collect_entry_tokens(eid: str, entry: dict[str, Any]) -> list[str]:
     return list(dict.fromkeys(t.strip() for t in tokens if t and str(t).strip()))
 
 
-# Common Dutch analyst query forms → BC table ids (beyond explicit yaml aliases).
-_TABLE_QUERY_EXTRAS: dict[str, list[str]] = {
-    "turnover_entry": [
-        "omzet",
-        "omzetposten",
-        "omzetpost",
-        "verkoopomzet",
-        "waardebon",
-        "tegoedbon",
-        "waardecheque",
-    ],
-    "sales_cr_memo_header": ["retouren", "retour", "returns", "creditnota"],
-    "sales_cr_memo_line": ["retouren", "retour", "returns", "creditnota"],
-    "pos_trans_header": ["retouren", "retour", "kassaretour", "kassabon"],
-    "pos_trans_line": [
-        "retouren",
-        "retour",
-        "kassaretour",
-        "kassabon",
-        "waardebon",
-        "tegoedbon",
-        "cadeaubon",
-        "voucher",
-    ],
-}
+def _bare_model_name(name: str) -> str:
+    bare = name
+    for prefix in _MODEL_PREFIXES:
+        if bare.startswith(prefix):
+            return bare[len(prefix) :]
+    return bare
+
+
+def _table_suffix(name: str) -> str | None:
+    bare = _bare_model_name(name)
+    if "__" in bare:
+        return bare.rsplit("__", 1)[-1]
+    if bare != name:
+        return bare
+    return None
+
+
+def _model_matches_table(model_key: str, table_id: str) -> bool:
+    """True when *model_key* is the dbt model/source for BC table *table_id*."""
+    if model_key == table_id:
+        return True
+    if model_key.endswith(f"__{table_id}"):
+        return True
+    suffix = _table_suffix(model_key)
+    return suffix == table_id
 
 
 @dataclass
@@ -87,23 +87,15 @@ class TermAliasIndex:
         tokens |= self.by_source.get(name, set())
         tokens |= self.by_source.get(lowered, set())
 
-        if "__" in name:
-            suffix = name.rsplit("__", 1)[-1]
+        suffix = _table_suffix(name)
+        if suffix:
             tokens |= self.by_table_id.get(suffix, set())
             tokens |= self.by_source.get(suffix, set())
 
-        bare = name
-        for prefix in _MODEL_PREFIXES:
-            if bare.startswith(prefix):
-                bare = bare[len(prefix) :]
-                break
+        bare = _bare_model_name(name)
         if bare != name:
             tokens |= self.by_table_id.get(bare, set())
             tokens |= self.by_source.get(bare, set())
-
-        # stg_xprt__turnover_entry → turnover_entry
-        if "__" in bare:
-            tokens |= self.by_table_id.get(bare.rsplit("__", 1)[-1], set())
 
         return " ".join(sorted(tokens))
 
@@ -165,13 +157,10 @@ def load_term_alias_index(path: Path | None) -> TermAliasIndex | None:
             for related_id in _as_str_list(concept.get("related_tables")):
                 table_tokens.setdefault(related_id, set()).update(concept_tokens)
 
-    for table_id, extras in _TABLE_QUERY_EXTRAS.items():
-        table_tokens.setdefault(table_id, set()).update(extras)
-
     for table_id, tokens in table_tokens.items():
         index.register(table_id, sorted(tokens))
         for model_key, model_tokens in list(index.by_model.items()):
-            if table_id in model_key or model_key.endswith(f"__{table_id}"):
+            if _model_matches_table(model_key, table_id):
                 model_tokens.update(tokens)
         index.by_source.setdefault(table_id, set()).update(tokens)
 

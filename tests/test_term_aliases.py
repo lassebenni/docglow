@@ -49,6 +49,12 @@ def _write_aliases(path: Path) -> None:
                 "dutch_aliases": ["tegoedbon", "cadeaubon", "waardebon"],
                 "related_tables": ["turnover_entry"],
             },
+            "retouren": {
+                "english": "returns",
+                "dutch_primary": "Retouren",
+                "dutch_aliases": ["retour", "creditnota"],
+                "related_tables": ["sales_cr_memo_line", "sales_cr_memo_header"],
+            },
         },
     }
     path.write_text(yaml.dump(payload), encoding="utf-8")
@@ -90,6 +96,32 @@ class TestTermAliasIndex:
         enriched = enrich_search_entries(entries, index)
         assert "aliases" in enriched[0]
         assert "omzet" in enriched[0]["aliases"]
+
+    def test_short_table_id_does_not_bleed_via_substring(self, tmp_path: Path) -> None:
+        alias_path = tmp_path / "bc_term_aliases.yaml"
+        payload = {
+            "bc_tables": {
+                "item": {
+                    "dutch_primary": "Artikel",
+                    "dutch_aliases": ["artikelstam"],
+                    "dbt": {"model": "stg_xprt__item", "source": "item"},
+                },
+                "item_ledger_entry": {
+                    "dutch_primary": "Artikelposten",
+                    "dutch_aliases": ["voorraadmutatie"],
+                    "dbt": {
+                        "model": "stg_xprt__item_ledger_entry",
+                        "source": "item_ledger_entry",
+                    },
+                },
+            }
+        }
+        alias_path.write_text(yaml.dump(payload), encoding="utf-8")
+        index = load_term_alias_index(alias_path)
+        assert index is not None
+        ile_aliases = index.aliases_for_name("stg_xprt__item_ledger_entry").lower()
+        assert "artikelstam" not in ile_aliases
+        assert "voorraadmutatie" in ile_aliases
 
     def test_column_entries_inherit_parent_model_aliases(self) -> None:
         index = TermAliasIndex(
