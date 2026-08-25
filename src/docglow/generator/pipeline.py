@@ -43,6 +43,7 @@ class PipelineContext:
     exclude_packages: bool = True
     slim: bool = False
     enable_erd: bool = False
+    term_aliases_path: Any | None = None
 
     # Lookup maps (populated by build_lookups stage)
     run_results_by_id: dict[str, Any] = field(default_factory=dict)
@@ -413,6 +414,22 @@ def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
     ctx.search_index = refresh_exposure_search_entries(ctx.search_index, ctx.exposures)
 
 
+def stage_enrich_search_aliases(ctx: PipelineContext) -> None:
+    """Attach Dutch/English business aliases to search entries (optional)."""
+    if ctx.term_aliases_path is None:
+        return
+
+    from pathlib import Path
+
+    from docglow.generator.term_aliases import enrich_search_entries, load_term_alias_index
+
+    path = Path(ctx.term_aliases_path) if not isinstance(ctx.term_aliases_path, Path) else ctx.term_aliases_path
+    index = load_term_alias_index(path)
+    if index is None:
+        return
+    ctx.search_index = enrich_search_entries(ctx.search_index, index)
+
+
 def stage_strip_sql(ctx: PipelineContext) -> None:
     """Strip raw_sql and compiled_sql from all nodes when --slim is enabled.
 
@@ -525,6 +542,11 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
             "merge_exposure_field_lineage",
             stage_merge_exposure_field_lineage,
             enabled=ctx.exposure_field_lineage_path is not None,
+        ),
+        PipelineStage(
+            "enrich_search_aliases",
+            stage_enrich_search_aliases,
+            enabled=ctx.term_aliases_path is not None,
         ),
         PipelineStage("strip_sql", stage_strip_sql, enabled=ctx.slim),
         PipelineStage(

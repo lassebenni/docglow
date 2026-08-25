@@ -231,6 +231,7 @@ def build_docglow_data(
     slim: bool = False,
     enable_erd: bool = False,
     exposure_field_lineage_path: Any | None = None,
+    term_aliases_path: Any | None = None,
 ) -> dict[str, Any]:
     """Transform loaded artifacts into the unified DocglowData payload.
 
@@ -261,6 +262,7 @@ def build_docglow_data(
         slim=slim,
         enable_erd=enable_erd,
         exposure_field_lineage_path=exposure_field_lineage_path,
+        term_aliases_path=term_aliases_path,
     )
 
     stages = default_stages(ctx)

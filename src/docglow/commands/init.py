@@ -46,6 +46,9 @@ INIT_TEMPLATE = """\
 #   enabled: true
 #   descriptions: append  # append | replace | skip
 
+# search:
+#   term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml  # Dutch/English BC business terms
+
 # lineage_layers:
 #   layers:
 #     - name: source

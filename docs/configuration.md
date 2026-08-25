@@ -79,7 +79,28 @@ ui:
     abbreviation: smart           # smart | truncate | middle | none
     max_model_chars: 30           # Max chars before the model name is shortened
     max_column_chars: 22          # Max chars before the column name is shortened
+
+search:
+  # term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml
 ```
+
+## Dutch business terms (Van Tilburg / BC)
+
+For Dutch-speaking analysts searching terms like `omzet`, `waardebon`, or `retouren`, point docglow at the shared BC vocabulary file from [vt-business-docs](https://github.com/vantilburg/vt-business-docs):
+
+```yaml
+search:
+  term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml
+```
+
+Or via CLI:
+
+```bash
+docglow generate \
+  --term-aliases ../vt-business-docs/reference/bc_term_aliases.yaml
+```
+
+At generate time, docglow attaches Dutch and English alias tokens to each model/source search entry. Cmd+K matches those aliases lexically via MiniSearch — no separate multilingual model is required for exact Dutch terms.
 
 ## Theme
 

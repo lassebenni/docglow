@@ -178,6 +178,7 @@ declare module "@docglow/shared-types" {
     readonly id: string;
     readonly column_name?: string;
     readonly model_name?: string;
+    readonly aliases?: string;
   }
 }
 

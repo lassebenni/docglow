@@ -118,6 +118,12 @@ from docglow.cloud_hint import maybe_show_hint
     help="Path to exposure_field_lineage.json mapping exposure fields "
     "(e.g. Power BI measures) to dbt model columns for column-level lineage.",
 )
+@click.option(
+    "--term-aliases",
+    type=click.Path(exists=True, path_type=Path),
+    default=None,
+    help="Path to bc_term_aliases.yaml for Dutch/English business term search enrichment.",
+)
 def generate(
     project_dir: Path,
     target_dir: Path | None,
@@ -147,6 +153,7 @@ def generate(
     sample_data_dir: Path | None,
     docs_dir: Path | None,
     exposure_field_lineage: Path | None,
+    term_aliases: Path | None,
 ) -> None:
     """Generate the documentation site."""
     from docglow.cli import _parse_connection, _setup_logging, console
@@ -173,6 +180,9 @@ def generate(
         enable_erd = True
     if docs_dir is None and config.docs_dir is not None:
         docs_dir = config.docs_dir
+    term_aliases_path = term_aliases or config.search.term_aliases
+    if term_aliases_path is not None and not term_aliases_path.is_absolute():
+        term_aliases_path = project_dir / term_aliases_path
 
     # Resolve column lineage: on by default, off via --skip-column-lineage or config
     column_lineage = not skip_column_lineage
@@ -220,6 +230,8 @@ def generate(
         telemetry_features.append("static")
     if slim:
         telemetry_features.append("slim")
+    if term_aliases_path is not None:
+        telemetry_features.append("term_aliases")
     telemetry_resolved_target = target_dir or (project_dir / "target")
 
     with telemetry.record(
@@ -256,6 +268,7 @@ def generate(
                 sample_data_dir=sample_data_dir,
                 docs_dir=docs_dir,
                 exposure_field_lineage_path=exposure_field_lineage,
+                term_aliases_path=term_aliases_path,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")
             if static:
