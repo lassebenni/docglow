@@ -372,6 +372,8 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
         ctx.snapshots,
         max_workers=ctx.column_lineage_workers,
         exposure_field_lineage_path=ctx.exposure_field_lineage_path,
+        powerbi_model_path=ctx.powerbi_model_path,
+        known_model_names=_known_model_names(ctx),
     )
     ctx.column_lineage = column_lineage
     ctx.join_keys = join_keys
@@ -380,6 +382,17 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     ctx.sql_graphs = sql_graphs
     # Join keys live only on the top-level join_keys map (canonical). Edge
     # embedding was removed to avoid dual half-shaped payloads.
+
+
+def _known_model_names(ctx: PipelineContext) -> set[str]:
+    """Every dbt name a Power BI table could resolve to."""
+    known: set[str] = set()
+    for collection in (ctx.models, ctx.seeds, ctx.snapshots):
+        for data in collection.values():
+            name = data.get("name")
+            if isinstance(name, str) and name:
+                known.add(name)
+    return known
 
 
 def _powerbi_sidecar(ctx: PipelineContext) -> dict[str, Any] | None:
@@ -392,19 +405,10 @@ def _powerbi_sidecar(ctx: PipelineContext) -> dict[str, Any] | None:
 
     from docglow.lineage.powerbi_model import sidecar_from_model_dir
 
-    # Power BI tables are resolved to dbt models by name, so the resolver needs
-    # every name a `depends_on` entry could legitimately carry.
-    known: set[str] = set()
-    for collection in (ctx.models, ctx.seeds, ctx.snapshots):
-        for data in collection.values():
-            name = data.get("name")
-            if isinstance(name, str) and name:
-                known.add(name)
-
     return sidecar_from_model_dir(
         ctx.powerbi_model_path,
         exposure_name=ctx.powerbi_exposure,
-        known_models=known,
+        known_models=_known_model_names(ctx),
     )
 
 
@@ -578,7 +582,9 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
         PipelineStage(
             "merge_exposure_field_lineage",
             stage_merge_exposure_field_lineage,
-            enabled=ctx.exposure_field_lineage_path is not None,
+            enabled=(
+                ctx.exposure_field_lineage_path is not None or ctx.powerbi_model_path is not None
+            ),
         ),
         PipelineStage(
             "enrich_search_aliases",

@@ -213,8 +213,16 @@ class DocglowData:
     relationships: list[ErdRelationship] = field(default_factory=list)
 
 
-def _powerbi_table_names(path: Any) -> set[str]:
-    """Table names in a TMDL model, for widening the column lineage subset.
+def _powerbi_mart_names(path: Any, known_model_names: set[str]) -> set[str]:
+    """dbt models a TMDL model reads, for widening the column lineage subset.
+
+    Table names are enough here and cost only a file read; parsing every
+    measure's DAX to learn the same names would repeat the expensive half of
+    the work the merge stage does later.
+
+    Only names that are actually dbt models are returned: a semantic model is
+    mostly slicer, helper and field-parameter tables, and feeding those to the
+    subset builder produces one "no models matched" warning apiece.
 
     Fail-soft: an unreadable model must not abort a docs build, it just means
     the subset is not widened.
@@ -224,10 +232,11 @@ def _powerbi_table_names(path: Any) -> set[str]:
     from docglow.lineage.powerbi_tmdl import read_model
 
     try:
-        return set(read_model(Path(path)).tables)
+        tables = read_model(Path(path)).tables
     except (OSError, ValueError) as exc:
         logger.warning("Power BI model: cannot read %s (%s)", path, exc)
         return set()
+    return tables & known_model_names
 
 
 def build_docglow_data(
@@ -305,7 +314,7 @@ def _build_column_lineage(
     max_workers: int | None = None,
     exposure_field_lineage_path: Any | None = None,
     powerbi_model_path: Any | None = None,
-    powerbi_exposure: str | None = None,
+    known_model_names: set[str] | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, list[dict[str, str]]] | None,
@@ -356,10 +365,7 @@ def _build_column_lineage(
             if sidecar is not None:
                 mart_names |= collect_mart_model_names(sidecar)
         if powerbi_model_path is not None:
-            # Table names are enough to widen the subset and cost a file read;
-            # parsing every measure's DAX here just to learn the same names
-            # would repeat the expensive half of the work the pipeline does.
-            mart_names |= _powerbi_table_names(powerbi_model_path)
+            mart_names |= _powerbi_mart_names(powerbi_model_path, known_model_names or set())
         if mart_names:
             before = len(subset)
             for name in sorted(mart_names):

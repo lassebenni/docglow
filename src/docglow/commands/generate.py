@@ -45,7 +45,7 @@ from docglow.cloud_hint import maybe_show_hint
     default=None,
     help="Only analyze column lineage for these models and their dependencies "
     "(e.g. fct_orders, +fct_orders, fct_orders+). Multiple patterns may be "
-    "comma- or space-separated. When --exposure-field-lineage is set, mart "
+    "comma- or space-separated. When --exposure-field-lineage or --powerbi-model "
     "models referenced by that sidecar are included automatically.",
 )
 @click.option(
@@ -172,6 +172,14 @@ def generate(
     term_aliases: Path | None,
 ) -> None:
     """Generate the documentation site."""
+    # The two Power BI options are a pair: a model with no exposure has nothing
+    # to attach to, an exposure with no model has nothing to attach. Fail here
+    # rather than warning halfway through a build that then produces nothing.
+    if powerbi_model and not powerbi_exposure:
+        raise click.UsageError("--powerbi-model requires --powerbi-exposure")
+    if powerbi_exposure and not powerbi_model:
+        raise click.UsageError("--powerbi-exposure requires --powerbi-model")
+
     from docglow.cli import _parse_connection, _setup_logging, console
 
     _setup_logging(verbose)

@@ -113,6 +113,15 @@ class TestModelDirectory:
         (model / "definition" / "tables").mkdir(parents=True)
         assert find_model_directory(tmp_path) == model
 
+    def test_ignores_report_folders_beside_the_model(self, tmp_path) -> None:
+        # A PBIP project always ships at least one .Report next to the model,
+        # and reports carry a definition/ too — matching on that alone makes
+        # every real project look ambiguous.
+        model = tmp_path / "Sales.SemanticModel"
+        (model / "definition" / "tables").mkdir(parents=True)
+        (tmp_path / "Sales.Report" / "definition").mkdir(parents=True)
+        assert find_model_directory(tmp_path) == model
+
     def test_refuses_to_guess_between_two_models(self, tmp_path) -> None:
         for name in ("A.SemanticModel", "B.SemanticModel"):
             (tmp_path / name / "definition" / "tables").mkdir(parents=True)

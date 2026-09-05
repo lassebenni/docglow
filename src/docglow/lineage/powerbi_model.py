@@ -23,7 +23,9 @@ from docglow.lineage.powerbi_tmdl import TmdlModel, read_model
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
-# Every measure lands on its column through an aggregation (SUM/COUNT/...).
+# Most measures reach their column through an aggregation, and DAX does not
+# name the transformation, so this is a default rather than a derived value:
+# LOOKUPVALUE and bare column reads land here too.
 DEFAULT_TRANSFORMATION = "aggregated"
 
 

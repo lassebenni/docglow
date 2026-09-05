@@ -79,10 +79,14 @@ def find_model_directory(path: Path) -> Path:
     holding a ``.pbip`` file.
     """
     path = Path(path)
-    if (path / "definition").is_dir():
+    if (path / "definition" / "tables").is_dir():
         return path
+    # A PBIP project holds report folders beside the model, and those carry a
+    # `definition/` of their own — only the semantic model has definition/tables.
     candidates = sorted(
-        child for child in path.iterdir() if child.is_dir() and (child / "definition").is_dir()
+        child
+        for child in path.iterdir()
+        if child.is_dir() and (child / "definition" / "tables").is_dir()
     )
     if len(candidates) == 1:
         return candidates[0]
@@ -225,15 +229,16 @@ def read_model(path: Path) -> TmdlModel:
 
     model = TmdlModel()
     for tmdl in sorted(tables_dir.glob("*.tmdl")):
-        text = tmdl.read_text(encoding="utf-8")
+        # Power BI Desktop writes a BOM; utf-8 would leave it on the first line
+        # and the `table` header would silently fail to match.
+        text = tmdl.read_text(encoding="utf-8-sig")
         measures, table = parse_tmdl_file(text)
         if table:
             model.tables.add(table)
-            # `partition X = calculated` and inline `source = {(...)}` lists are
-            # computed inside the model, so they have no upstream dbt table.
-            if re.search(r"^\s*partition\s+.*=\s*calculated\s*$", text, re.MULTILINE):
-                model.tables_without_source.add(table)
-            elif not re.search(r"^\s*partition\s+.*=\s*m\s*$", text, re.MULTILINE):
+            # Only an `= m` partition queries a warehouse. Anything else — a
+            # calculated table, an inline VALUES list, no partition at all — is
+            # computed inside the model and has no upstream dbt table.
+            if not re.search(r"^\s*partition\s+.*=\s*m\s*$", text, re.MULTILINE):
                 model.tables_without_source.add(table)
         model.measures.extend(measures)
 
