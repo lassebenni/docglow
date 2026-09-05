@@ -40,6 +40,8 @@ def generate_site(
     sample_data_dir: Path | None = None,
     docs_dir: Path | None = None,
     exposure_field_lineage_path: Path | None = None,
+    powerbi_model_path: Path | None = None,
+    powerbi_exposure: str | None = None,
     term_aliases_path: Path | None = None,
 ) -> tuple[Path, float]:
     """Generate the docglow static site.
@@ -89,6 +91,8 @@ def generate_site(
         slim=slim,
         enable_erd=enable_erd,
         exposure_field_lineage_path=exposure_field_lineage_path,
+        powerbi_model_path=powerbi_model_path,
+        powerbi_exposure=powerbi_exposure,
         term_aliases_path=term_aliases_path,
     )
 

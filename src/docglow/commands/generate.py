@@ -119,6 +119,20 @@ from docglow.cloud_hint import maybe_show_hint
     "(e.g. Power BI measures) to dbt model columns for column-level lineage.",
 )
 @click.option(
+    "--powerbi-model",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Path to a Power BI TMDL semantic model folder (PBIP). Measures and "
+    "their column lineage are read from the DAX, no sidecar needed. "
+    "Needs --powerbi-exposure and pip install 'docglow[powerbi]'.",
+)
+@click.option(
+    "--powerbi-exposure",
+    type=str,
+    default=None,
+    help="Name of the dbt exposure the --powerbi-model measures belong to.",
+)
+@click.option(
     "--term-aliases",
     type=click.Path(exists=True, path_type=Path),
     default=None,
@@ -153,6 +167,8 @@ def generate(
     sample_data_dir: Path | None,
     docs_dir: Path | None,
     exposure_field_lineage: Path | None,
+    powerbi_model: Path | None,
+    powerbi_exposure: str | None,
     term_aliases: Path | None,
 ) -> None:
     """Generate the documentation site."""
@@ -268,6 +284,8 @@ def generate(
                 sample_data_dir=sample_data_dir,
                 docs_dir=docs_dir,
                 exposure_field_lineage_path=exposure_field_lineage,
+                powerbi_model_path=powerbi_model,
+                powerbi_exposure=powerbi_exposure,
                 term_aliases_path=term_aliases_path,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")

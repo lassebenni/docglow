@@ -27,6 +27,8 @@ docglow generate [OPTIONS]
 | `--column-lineage-select` | all | Only analyze column lineage for this model |
 | `--column-lineage-depth` | unlimited | Max hops from the selected model |
 | `--exposure-field-lineage` | none | Path to `exposure_field_lineage.json` sidecar mapping exposure fields (e.g. Power BI measures) to mart columns; merged into column lineage at generate time |
+| `--powerbi-model` | none | Path to a Power BI TMDL semantic model folder (PBIP). Reads measures and their column lineage straight from the DAX — no sidecar to maintain. Needs `--powerbi-exposure` and `pip install 'docglow[powerbi]'` |
+| `--powerbi-exposure` | none | Name of the dbt exposure that `--powerbi-model`'s measures belong to |
 | `--include-packages` | off | Include dbt package models in lineage |
 | `--profile` | off | Enable column profiling |
 | `--profile-adapter` | none | Database adapter (`duckdb`, `postgres`, `snowflake`) |
@@ -156,3 +158,41 @@ Remove stored Docglow Cloud credentials.
 ```bash
 docglow logout
 ```
+
+
+## Power BI measure lineage
+
+A Power BI dashboard is usually the last hop of a dbt lineage graph, and the hop
+Docglow cannot infer from SQL: the logic lives in DAX inside the model. Two ways
+to supply it, both landing in the same place — the exposure's measures become
+columns, and their dependencies merge into column-level lineage.
+
+**From the semantic model** (no sidecar to maintain):
+
+```bash
+pip install 'docglow[powerbi]'
+docglow generate \
+  --powerbi-model path/to/Sales.SemanticModel \
+  --powerbi-exposure powerbi_sales_dashboard
+```
+
+Docglow reads `definition/tables/*.tmdl`, parses each measure's DAX, and records
+the columns it aggregates. A Power BI table is matched to a dbt model **by name**
+— which is how imported marts normally appear — so `SUM(fct_orders[amount])`
+becomes an edge to `fct_orders.amount`. Tables matching no dbt model are reported
+once and skipped.
+
+Columns used only to *filter* are not recorded as lineage: in
+`CALCULATE(SUM(fct_orders[amount]), fct_orders[is_service] = TRUE)` the measure
+reads `amount` and filters on `is_service`. Dimension tables (`dim_*`) and
+disconnected helper tables (`_*`) are always filter context.
+
+What DAX cannot express stays out: `COUNTROWS(agg_orders)` names no column, so a
+measure counting rows records no lineage. Use the sidecar for those.
+
+**From a sidecar** — `--exposure-field-lineage`, for hand-curated mappings or a
+model Docglow cannot read. The schema is documented in
+`docglow.lineage.exposure_field_lineage`.
+
+The DAX parser needs Python 3.11+ (Docglow itself supports 3.10). Without the
+extra, `--powerbi-model` warns and is skipped rather than failing the build.

@@ -51,6 +51,11 @@ ai = [
 cloud = [
     "httpx>=0.27",
 ]
+# DAX parsing for --powerbi-model. pbi-parsers needs Python 3.11+, so this is
+# an extra rather than a core dependency; Docglow itself still supports 3.10.
+powerbi = [
+    "pbi-parsers>=0.9.5 ; python_version >= '3.11'",
+]
 column-lineage = [
     # sqlglot is now a core dependency — this extra is kept for backwards
     # compatibility so `pip install docglow[column-lineage]` still works.
@@ -113,5 +118,7 @@ module = [
     "httpx",
     "duckdb",
     "duckdb_engine",
+    "pbi_parsers",
+    "pbi_parsers.*",
 ]
 ignore_missing_imports = true

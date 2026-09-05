@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Lineage node panel** — "View details" opens the resource page in a new tab instead of navigating away from the current lineage view.
 
 ### Added
+- **Power BI measure lineage from the semantic model** — `docglow generate --powerbi-model <TMDL folder> --powerbi-exposure <name>` reads a PBIP/TMDL semantic model, parses each measure's DAX, and merges measure → mart column edges into column-level lineage. Removes the need to hand-maintain an `exposure_field_lineage.json` sidecar for Power BI dashboards. Columns used only as filters (and all `dim_*` / `_*` tables) are recorded as filter context, not lineage. Needs `pip install 'docglow[powerbi]'` (Python 3.11+); without it the flag warns and is skipped rather than failing the build.
 - **Seed Data tab** — `docglow generate` embeds each project seed's CSV (configurable row limit, default 1,000) as `sample_data` so seed pages show the same interactive Data tab as models. Columns with `meta.pii: true` or PII-like names are withheld. Disable via `seed_data.enabled: false` in `docglow.yml` or omit with `--slim`.
 
 ### Fixed
