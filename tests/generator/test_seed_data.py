@@ -84,6 +84,54 @@ def test_attach_withholds_pii_columns(tmp_path: Path) -> None:
     assert payload["excluded_columns"] == {"pii_meta": ["email"], "name_flagged": []}
 
 
+def test_attach_withholds_name_flagged_columns(tmp_path: Path) -> None:
+    seeds_dir = tmp_path / "seeds"
+    seeds_dir.mkdir()
+    (seeds_dir / "contacts.csv").write_text(
+        "id,customer_email\n1,a@b.nl\n",
+        encoding="utf-8",
+    )
+
+    seeds = {
+        "seed.proj.contacts": _seed_dict(
+            "contacts",
+            "seeds/contacts.csv",
+            columns=[
+                {"name": "id", "meta": {}},
+                {"name": "customer_email", "meta": {}},
+            ],
+        ),
+    }
+    attach_seed_data(seeds, tmp_path)
+
+    payload = seeds["seed.proj.contacts"]["sample_data"]
+    assert payload["columns"] == ["id"]
+    assert payload["rows"] == [["1"]]
+    assert payload["excluded_columns"] == {"pii_meta": [], "name_flagged": ["customer_email"]}
+
+
+def test_attach_respects_csv_delimiter(tmp_path: Path) -> None:
+    seeds_dir = tmp_path / "seeds"
+    seeds_dir.mkdir()
+    (seeds_dir / "eu.csv").write_text(
+        "code;label\nA01;Alpha\n",
+        encoding="utf-8",
+    )
+
+    seeds = {
+        "seed.proj.eu": _seed_dict(
+            "eu",
+            "seeds/eu.csv",
+            csv_delimiter=";",
+        ),
+    }
+    attach_seed_data(seeds, tmp_path)
+
+    payload = seeds["seed.proj.eu"]["sample_data"]
+    assert payload["columns"] == ["code", "label"]
+    assert payload["rows"] == [["A01", "Alpha"]]
+
+
 def test_attach_parses_quoted_multiline_cells(tmp_path: Path) -> None:
     seeds_dir = tmp_path / "seeds"
     seeds_dir.mkdir()

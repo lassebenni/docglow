@@ -78,7 +78,7 @@ def transform_model(
         ref for ref in reverse_deps.get(node.unique_id, []) if not ref.startswith("test.")
     ]
 
-    return {
+    data: dict[str, Any] = {
         "unique_id": node.unique_id,
         "name": node.name,
         "description": node.description,
@@ -104,6 +104,12 @@ def transform_model(
         "last_run": last_run,
         "catalog_stats": catalog_stats,
     }
+    if node.resource_type == "seed":
+        raw_delimiter = (node.config.model_extra or {}).get("delimiter", ",")
+        data["csv_delimiter"] = (
+            raw_delimiter if isinstance(raw_delimiter, str) and len(raw_delimiter) == 1 else ","
+        )
+    return data
 
 
 def _get_folder(path: str) -> str:
