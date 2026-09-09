@@ -156,7 +156,7 @@ export function ExposurePage() {
     const hash = location.hash
     if (!hash.startsWith('#col-') || !decodedId) return
 
-    const columnName = hash.slice(5)
+    const columnName = decodeURIComponent(hash.slice(5))
     if (!columnName) return
 
     setLineageViewModeState('columns')
