@@ -15,9 +15,11 @@ into a directory, named ``<model_name>.json`` with this shape::
     }
 
 At site-generation time, docglow reads any matching file and attaches the
-parsed payload to the model's ``sample_data`` field; the frontend renders it
-as an interactive "Data" tab (sortable headers, substring search, horizontal
-scroll).
+parsed payload to the resource's ``sample_data`` field; the frontend renders
+it as an interactive "Data" tab (sortable headers, substring search,
+horizontal scroll).  Seeds normally get ``sample_data`` from their project
+CSV via :func:`docglow.generator.seed_data.attach_seed_data`; this directory
+is a fallback when a seed CSV is unavailable.
 
 The sample data is intentionally a static artifact, not a live query — the
 generated site is a static HTML bundle and must not depend on warehouse
@@ -56,12 +58,14 @@ def _validate_payload(payload: Any, path: Path) -> dict[str, Any] | None:
 
 
 def attach_sample_data(
-    models: dict[str, dict[str, Any]],
+    resources: dict[str, dict[str, Any]],
     sample_data_dir: Path | None,
+    *,
+    skip_existing: bool = False,
 ) -> None:
-    """Attach ``sample_data`` to each model dict from <dir>/<name>.json.
+    """Attach ``sample_data`` to each resource dict from <dir>/<name>.json.
 
-    Mutates ``models`` in place.  No-op when ``sample_data_dir`` is ``None``
+    Mutates ``resources`` in place.  No-op when ``sample_data_dir`` is ``None``
     or does not exist.  Read / parse / validation errors are logged and
     skipped — the site still generates.
     """
@@ -74,8 +78,10 @@ def attach_sample_data(
         return
 
     attached = 0
-    for model in models.values():
-        name = model.get("name")
+    for resource in resources.values():
+        if skip_existing and resource.get("sample_data"):
+            continue
+        name = resource.get("name")
         if not name:
             continue
         path = sample_data_dir / f"{name}.json"
@@ -94,7 +100,7 @@ def attach_sample_data(
         validated = _validate_payload(payload, path)
         if validated is None:
             continue
-        model["sample_data"] = validated
+        resource["sample_data"] = validated
         attached += 1
 
-    logger.info("Attached sample_data to %d model(s) from %s", attached, sample_data_dir)
+    logger.info("Attached sample_data to %d resource(s) from %s", attached, sample_data_dir)

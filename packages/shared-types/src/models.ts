@@ -152,9 +152,11 @@ export interface DocglowModel {
    */
   readonly relationships_summary?: RelationshipSummary[];
   /**
-   * Structured sample of warehouse rows for this model. Attached at
+   * Structured row sample for the Data tab. For models, attached at
    * site-generation time when `--sample-data-dir` contains a matching
-   * `<model_name>.json` file. Omitted entirely when no file exists.
+   * `<model_name>.json` warehouse dump. For seeds, attached automatically
+   * from the seed CSV in the dbt project (or from `--sample-data-dir` when
+   * no CSV is available). Omitted entirely when no source exists.
    *
    * Rendered by the frontend as an interactive "Data" tab with sortable
    * headers, substring search, and a horizontal-scroll container.
@@ -239,7 +241,7 @@ export interface SampleData {
   readonly rows: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   readonly row_count: number;
   readonly limit: number;
-  /** ISO-8601 UTC timestamp from the dump tool. */
+  /** ISO-8601 UTC timestamp from the warehouse dump or seed CSV reader. */
   readonly generated_at: string;
   /**
    * Full warehouse column list in ordinal order, including withheld PII columns.
@@ -248,8 +250,8 @@ export interface SampleData {
    */
   readonly all_columns?: readonly string[];
   /**
-   * Columns the dump tool refused to sample, surfaced so reviewers can see
-   * what was withheld. Two buckets:
+   * Columns withheld from the sample payload (warehouse dump or seed CSV
+   * reader), surfaced so reviewers can see what was omitted. Two buckets:
    * - `pii_meta`: dbt YAML carried `meta.pii: true` on the column.
    * - `name_flagged`: the column name matched a built-in PII heuristic
    *   (email, phone, iban, bsn, dob, …).

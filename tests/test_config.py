@@ -243,3 +243,29 @@ class TestUiConfig:
         for strategy in ("smart", "truncate", "middle", "none"):
             config = _build_config_from_dict({"ui": {"lineage_badge": {"abbreviation": strategy}}})
             assert config.ui.lineage_badge.abbreviation == strategy
+
+
+class TestSeedDataConfig:
+    def test_defaults_when_section_absent(self):
+        config = _build_config_from_dict({})
+        assert config.seed_data.enabled is True
+        assert config.seed_data.row_limit == 1000
+
+    def test_custom_row_limit(self):
+        config = _build_config_from_dict({"seed_data": {"row_limit": 500}})
+        assert config.seed_data.row_limit == 500
+
+    def test_enabled_false(self):
+        config = _build_config_from_dict({"seed_data": {"enabled": False}})
+        assert config.seed_data.enabled is False
+        assert config.seed_data.row_limit == 1000
+
+    def test_non_integer_row_limit_uses_default(self):
+        config = _build_config_from_dict({"seed_data": {"row_limit": "bad"}})
+        assert config.seed_data.row_limit == 1000
+
+    def test_non_positive_row_limit_uses_default(self):
+        config = _build_config_from_dict({"seed_data": {"row_limit": 0}})
+        assert config.seed_data.row_limit == 1000
+        config = _build_config_from_dict({"seed_data": {"row_limit": -5}})
+        assert config.seed_data.row_limit == 1000

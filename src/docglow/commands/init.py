@@ -49,6 +49,10 @@ INIT_TEMPLATE = """\
 # search:
 #   term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml  # Dutch/English BC business terms
 
+# seed_data:
+#   enabled: true
+#   row_limit: 1000
+
 # lineage_layers:
 #   layers:
 #     - name: source

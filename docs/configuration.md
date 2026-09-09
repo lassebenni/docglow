@@ -80,6 +80,10 @@ ui:
     max_model_chars: 30           # Max chars before the model name is shortened
     max_column_chars: 22          # Max chars before the column name is shortened
 
+# seed_data:
+#   enabled: true
+#   row_limit: 1000
+
 search:
   # term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml
 ```
@@ -101,6 +105,18 @@ docglow generate \
 ```
 
 At generate time, docglow attaches Dutch and English alias tokens to each model/source search entry. Cmd+K matches those aliases lexically via MiniSearch — no separate multilingual model is required for exact Dutch terms.
+
+## Seed Data tab
+
+By default, `docglow generate` embeds each project seed's CSV (up to 1,000 rows) as `sample_data` so the SPA can render a **Data** tab on seed pages — same interactive table as warehouse-sampled models. Columns flagged `meta.pii: true` or matching a built-in name heuristic are withheld (`••••` in the UI). PII name heuristics live in `docglow.generator.pii` (shared with warehouse dump scripts when vendored).
+
+```yaml
+seed_data:
+  enabled: true    # set false to skip embedding seed CSVs
+  row_limit: 1000  # max rows embedded per seed
+```
+
+`--slim` disables seed embedding (along with SQL stripping). Project CSV wins over `--sample-data-dir` when both are present.
 
 ## Theme
 

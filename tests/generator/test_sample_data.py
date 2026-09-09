@@ -86,6 +86,17 @@ def test_attach_noop_on_none_dir():
     assert "sample_data" not in models["model.x.m"]
 
 
+def test_attach_skips_existing_sample_data(tmp_path):
+    payload = _sample_payload()
+    (tmp_path / "my_seed.json").write_text(json.dumps(payload), encoding="utf-8")
+    existing = {"schema": "raw", "table": "my_seed", "columns": ["id"], "rows": [["9"]]}
+    seeds = {"seed.x.my_seed": {"name": "my_seed", "sample_data": existing}}
+
+    attach_sample_data(seeds, tmp_path, skip_existing=True)
+
+    assert seeds["seed.x.my_seed"]["sample_data"] == existing
+
+
 def test_jaffle_sample_data_fixtures_attach():
     """Committed demo fixtures must stay attachable for scripts/dev_demo.sh."""
     from pathlib import Path
