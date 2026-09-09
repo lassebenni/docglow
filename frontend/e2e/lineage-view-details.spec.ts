@@ -52,4 +52,28 @@ test.describe('Lineage View details', () => {
       })
     }
   })
+
+  test('View details on global lineage opens model in a new tab', async ({ page, context }) => {
+    await page.goto('/#/lineage')
+    await page.waitForURL(/#\/lineage/)
+
+    const main = page.locator('main')
+    await expect(main.getByRole('heading', { name: 'Lineage' })).toBeVisible()
+
+    await main.locator('.react-flow__node').filter({ hasText: 'stg_orders' }).first().click()
+    const viewDetails = page.getByTestId('lineage-view-details-link')
+    await expect(viewDetails).toBeVisible()
+    await expect(viewDetails).toHaveAttribute('target', '_blank')
+
+    const originalUrl = page.url()
+    const [newPage] = await Promise.all([
+      context.waitForEvent('page'),
+      viewDetails.click(),
+    ])
+
+    await expect(newPage).toHaveURL(
+      new RegExp(`#/model/${encodeURIComponent(UPSTREAM_ID).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    )
+    await expect(page).toHaveURL(originalUrl)
+  })
 })
