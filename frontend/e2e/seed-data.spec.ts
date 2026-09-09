@@ -131,9 +131,11 @@ test.describe('Seed Data tab', () => {
     await expect(dataTab.getByText('Van Tilburg NL')).toBeVisible()
     await expect(dataTab.getByText('example.com')).toBeVisible()
 
-    await page.screenshot({
-      path: path.join(repoRoot, 'assets/verify-seed-data-tab.png'),
-    })
+    if (process.env.VERIFY_SCREENSHOT === '1') {
+      await page.screenshot({
+        path: path.join(repoRoot, 'assets/verify-seed-data-tab.png'),
+      })
+    }
   })
 
   test('seed Data tab deep link opens data view', async ({ page }) => {

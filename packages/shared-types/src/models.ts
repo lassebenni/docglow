@@ -241,7 +241,7 @@ export interface SampleData {
   readonly rows: ReadonlyArray<ReadonlyArray<string | number | boolean | null>>;
   readonly row_count: number;
   readonly limit: number;
-  /** ISO-8601 UTC timestamp from the dump tool. */
+  /** ISO-8601 UTC timestamp from the warehouse dump or seed CSV reader. */
   readonly generated_at: string;
   /**
    * Full warehouse column list in ordinal order, including withheld PII columns.
@@ -250,8 +250,8 @@ export interface SampleData {
    */
   readonly all_columns?: readonly string[];
   /**
-   * Columns the dump tool refused to sample, surfaced so reviewers can see
-   * what was withheld. Two buckets:
+   * Columns withheld from the sample payload (warehouse dump or seed CSV
+   * reader), surfaced so reviewers can see what was omitted. Two buckets:
    * - `pii_meta`: dbt YAML carried `meta.pii: true` on the column.
    * - `name_flagged`: the column name matched a built-in PII heuristic
    *   (email, phone, iban, bsn, dob, …).
