@@ -302,7 +302,11 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
     seed_data = (
         SeedDataConfig(
             enabled=bool(seed_data_raw.get("enabled", True)),
-            row_limit=int(seed_data_raw.get("row_limit", 1000)),
+            row_limit=_coerce_positive_int(
+                seed_data_raw.get("row_limit"),
+                default=1000,
+                name="seed_data.row_limit",
+            ),
         )
         if seed_data_raw
         else SeedDataConfig()
