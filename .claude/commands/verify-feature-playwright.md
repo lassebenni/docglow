@@ -1,6 +1,6 @@
 # Verify feature with Playwright (local browser)
 
-Run a **local, browser-level check** of a Docglow UI change using Playwright — the same stack as CI-style e2e tests, but scoped to the feature you just built.
+Run a **local, browser-level check** of a Docglow UI change using Playwright — the same stack as the repo's e2e suite (also runs on PRs via CI), scoped to the feature you just built.
 
 ## Input
 
@@ -29,7 +29,7 @@ Docglow ships a pre-built SPA under `src/docglow/static/`. For fork verification
 cd frontend && npm run build:sync
 ```
 
-Playwright in this repo uses **Vite preview** (`frontend/dist/`), not the Python static tree — still run `npm run build` before e2e (see step 3).
+Playwright in this repo uses **Vite preview** (`frontend/dist/`), not the Python static tree. `playwright.config.ts` copies `e2e/fixtures/docglow-data.json` into `public/` and runs `npm run build` before starting preview — you normally only need `npx playwright test` (see step 3).
 
 ### 2. Install browsers once per machine (if missing)
 
@@ -46,7 +46,6 @@ If the sandbox blocks browser binaries, retry with full permissions.
 From `frontend/`:
 
 ```bash
-npm run build
 npx playwright test <spec-or-pattern> --reporter=line
 ```
 
