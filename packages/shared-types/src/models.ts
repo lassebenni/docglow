@@ -152,9 +152,11 @@ export interface DocglowModel {
    */
   readonly relationships_summary?: RelationshipSummary[];
   /**
-   * Structured sample of warehouse rows for this model. Attached at
+   * Structured row sample for the Data tab. For models, attached at
    * site-generation time when `--sample-data-dir` contains a matching
-   * `<model_name>.json` file. Omitted entirely when no file exists.
+   * `<model_name>.json` warehouse dump. For seeds, attached automatically
+   * from the seed CSV in the dbt project (or from `--sample-data-dir` when
+   * no CSV is available). Omitted entirely when no source exists.
    *
    * Rendered by the frontend as an interactive "Data" tab with sortable
    * headers, substring search, and a horizontal-scroll container.

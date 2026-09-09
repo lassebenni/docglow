@@ -96,11 +96,11 @@ from docglow.cloud_hint import maybe_show_hint
     "--sample-data-dir",
     type=click.Path(path_type=Path),
     default=None,
-    help="Directory of <model_name>.json sample-data files. Each matching file is "
-    "attached to its model and rendered as an interactive 'Data' tab (sortable "
-    "headers, substring search, horizontal scroll). The site stays fully static — "
-    "generate the JSON out-of-band (e.g. dbt + SQL → JSON dump tool). See "
-    "docglow.generator.sample_data for the expected payload shape.",
+    help="Directory of <resource_name>.json sample-data files. Each matching file is "
+    "attached to its model (or seed when no project CSV exists) and rendered as an "
+    "interactive 'Data' tab (sortable headers, substring search, horizontal scroll). "
+    "Seeds normally embed their CSV automatically; this flag is for warehouse dumps. "
+    "See docglow.generator.sample_data for the expected payload shape.",
 )
 @click.option(
     "--docs-dir",

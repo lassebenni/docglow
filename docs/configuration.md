@@ -102,6 +102,18 @@ docglow generate \
 
 At generate time, docglow attaches Dutch and English alias tokens to each model/source search entry. Cmd+K matches those aliases lexically via MiniSearch — no separate multilingual model is required for exact Dutch terms.
 
+## Seed Data tab
+
+By default, `docglow generate` embeds each project seed's CSV (up to 1,000 rows) as `sample_data` so the SPA can render a **Data** tab on seed pages — same interactive table as warehouse-sampled models. Columns flagged `meta.pii: true` or matching a built-in name heuristic are withheld (`••••` in the UI).
+
+```yaml
+seed_data:
+  enabled: true    # set false to skip embedding seed CSVs
+  row_limit: 1000  # max rows embedded per seed
+```
+
+`--slim` disables seed embedding (along with SQL stripping). Project CSV wins over `--sample-data-dir` when both are present.
+
 ## Theme
 
 Docglow supports three themes: `auto` (follows system preference), `light`, and `dark`.

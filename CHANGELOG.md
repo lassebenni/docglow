@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Seed Data tab** — `docglow generate` embeds each project seed's CSV (configurable row limit, default 1,000) as `sample_data` so seed pages show the same interactive Data tab as models. Columns with `meta.pii: true` or PII-like names are withheld. Disable via `seed_data.enabled: false` in `docglow.yml` or omit with `--slim`.
+
 ## [0.8.3] - 2026-05-20
 
 ### Added

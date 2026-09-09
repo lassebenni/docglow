@@ -103,6 +103,12 @@ class SearchConfig:
 
 
 @dataclass(frozen=True)
+class SeedDataConfig:
+    enabled: bool = True
+    row_limit: int = 1000
+
+
+@dataclass(frozen=True)
 class UiConfig:
     lineage_badge: LineageBadgeConfig = field(default_factory=LineageBadgeConfig)
 
@@ -117,6 +123,7 @@ class DocglowConfig:
     ai: AiConfig = field(default_factory=AiConfig)
     insights: InsightsConfig = field(default_factory=InsightsConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
+    seed_data: SeedDataConfig = field(default_factory=SeedDataConfig)
     ui: UiConfig = field(default_factory=UiConfig)
     slim: bool = False
     column_lineage: bool = True
@@ -291,6 +298,16 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
         else SearchConfig()
     )
 
+    seed_data_raw = raw.get("seed_data", {})
+    seed_data = (
+        SeedDataConfig(
+            enabled=bool(seed_data_raw.get("enabled", True)),
+            row_limit=int(seed_data_raw.get("row_limit", 1000)),
+        )
+        if seed_data_raw
+        else SeedDataConfig()
+    )
+
     telemetry = resolve_telemetry_config(raw.get("telemetry"))
 
     return DocglowConfig(
@@ -306,6 +323,7 @@ def _build_config_from_dict(raw: dict[str, Any]) -> DocglowConfig:
         ai=ai,
         insights=insights,
         search=search,
+        seed_data=seed_data,
         ui=ui,
         lineage_layers=lineage_layers,
         telemetry=telemetry,

@@ -117,10 +117,22 @@ def generate_site(
     if title:
         docglow_data["metadata"]["project_name"] = title
 
+    from docglow.generator.seed_data import attach_seed_data
+
+    # Project CSV wins over --sample-data-dir for seeds (skip_existing below).
+    seed_data_enabled = config.seed_data.enabled and not slim
+    attach_seed_data(
+        docglow_data["seeds"],
+        project_dir,
+        row_limit=config.seed_data.row_limit,
+        enabled=seed_data_enabled,
+    )
+
     if sample_data_dir is not None:
         from docglow.generator.sample_data import attach_sample_data
 
         attach_sample_data(docglow_data["models"], sample_data_dir)
+        attach_sample_data(docglow_data["seeds"], sample_data_dir, skip_existing=True)
 
     from docglow.generator.custom_docs import attach_custom_docs
 
