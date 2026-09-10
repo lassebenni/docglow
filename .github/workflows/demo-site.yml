@@ -24,6 +24,10 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Build shared-types
+        working-directory: packages/shared-types
+        run: npm ci && npm run build
+
       - name: Build frontend
         working-directory: frontend
         run: npm ci && npm run build
