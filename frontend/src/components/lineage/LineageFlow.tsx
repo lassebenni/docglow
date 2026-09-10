@@ -16,7 +16,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import dagre from 'dagre'
-import { useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import type { LineageNode, LineageEdge, LayerDefinition, ColumnLineageData, JoinKeysData } from '../../types'
 import type { LineageDirection } from '../../utils/graph'
 import { getUnionChain } from '../../utils/graphTraversal'
@@ -1296,20 +1296,21 @@ function LineageFlowInner({
               </div>
             )}
           </div>
-          <button
-            onClick={() => {
-              onNavigateAway?.()
-              navigate(buildResourcePath(selectedNodeData.id))
-            }}
+          <Link
+            to={buildResourcePath(selectedNodeData.id)}
+            target="_blank"
+            rel="noreferrer"
+            data-testid="lineage-view-details-link"
             style={{
               marginTop: 16, width: '100%', padding: '6px 0', fontSize: 12, fontWeight: 600,
               border: '1px solid var(--border, #e2e8f0)', borderRadius: 6,
               background: 'var(--bg-surface, #f1f5f9)', color: 'var(--text, #0f172a)',
-              cursor: 'pointer',
+              cursor: 'pointer', textDecoration: 'none', textAlign: 'center', display: 'block',
+              boxSizing: 'border-box',
             }}
           >
             View details →
-          </button>
+          </Link>
         </div>
       )}
       {!selectedNodeData && !selectedEdgeJoin && selectedColumnDetail && (

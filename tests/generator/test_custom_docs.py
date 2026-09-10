@@ -40,8 +40,10 @@ def test_attach_from_meta(tmp_path):
             "source_file": "docs/my_model.html",
         }
     ]
-    assert (output / "docs" / "my_model" / "guide.html").read_text(encoding="utf-8").startswith(
-        "<html>"
+    assert (
+        (output / "docs" / "my_model" / "guide.html")
+        .read_text(encoding="utf-8")
+        .startswith("<html>")
     )
 
 
@@ -71,11 +73,7 @@ def test_meta_takes_precedence_over_convention(tmp_path):
     models = {
         "model.x.orders": {
             "name": "orders",
-            "meta": {
-                "docglow": {
-                    "docs": [{"label": "Guide", "file": "meta.html"}]
-                }
-            },
+            "meta": {"docglow": {"docs": [{"label": "Guide", "file": "meta.html"}]}},
         }
     }
 
@@ -84,7 +82,8 @@ def test_meta_takes_precedence_over_convention(tmp_path):
     docs = models["model.x.orders"]["custom_docs"]
     assert len(docs) == 1
     assert docs[0]["slug"] == "guide"
-    assert (output / "docs" / "orders" / "guide.html").read_text(encoding="utf-8") == "<html>meta</html>"
+    guide_html = (output / "docs" / "orders" / "guide.html").read_text(encoding="utf-8")
+    assert guide_html == "<html>meta</html>"
 
 
 def test_skips_missing_file(tmp_path, caplog):

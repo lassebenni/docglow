@@ -454,14 +454,17 @@ waarbij:
         assert _strip_formula_narrative(dax) == dax
 
     def test_field_expression_applies_strip_to_formula_md(self) -> None:
-        assert _field_expression(
-            {
-                "formula_md": (
-                    "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)\n\n"
-                    "where amt_cogs_excl_vat is sourced from XPRT."
-                )
-            }
-        ) == "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)"
+        assert (
+            _field_expression(
+                {
+                    "formula_md": (
+                        "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)\n\n"
+                        "where amt_cogs_excl_vat is sourced from XPRT."
+                    )
+                }
+            )
+            == "Brutowinst excl. BTW = SUM(amt_sales_excl_vat)"
+        )
 
     def test_merge_attaches_stripped_formula(self) -> None:
         exposures, models, _ = _base_payload()

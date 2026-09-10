@@ -18,7 +18,8 @@ test.describe('Exposure Detail Page', () => {
   })
 
   test('shows the maturity badge', async ({ page }) => {
-    await expect(page.getByTitle('Exposure maturity')).toContainText('high')
+    const main = page.locator('main')
+    await expect(main.locator('h1').locator('..').getByText('high', { exact: true })).toBeVisible()
   })
 
   test('shows type and owner metadata', async ({ page }) => {

@@ -123,7 +123,7 @@ def expression_sql(expression: Any) -> str | None:
 
     inner = expression.this if isinstance(expression, exp.Alias) else expression
     try:
-        return inner.sql()
+        return str(inner.sql())
     except Exception:  # noqa: BLE001
         return str(inner) if inner is not None else None
 

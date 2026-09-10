@@ -19,7 +19,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm run preview',
+    command:
+      'cp e2e/fixtures/docglow-data.json public/docglow-data.json && npm run build && npm run preview',
     url: 'http://localhost:4173',
     reuseExistingServer: !process.env.CI,
   },

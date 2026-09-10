@@ -19,8 +19,8 @@ from docglow.profiler.queries import (
     build_histogram_query,
     build_row_count_query,
     build_stats_query,
-    build_top_values_query,
     build_temporal_distribution_query,
+    build_top_values_query,
 )
 from docglow.profiler.stats import (
     parse_histogram_rows,
@@ -238,9 +238,7 @@ def profile_models(
 
                     total_row_count = row_count
                     if sample_size is not None or total_row_count is None:
-                        fetched_total = _fetch_total_row_count(
-                            conn, schema, table_name, adapter
-                        )
+                        fetched_total = _fetch_total_row_count(conn, schema, table_name, adapter)
                         if fetched_total is not None:
                             total_row_count = fetched_total
 
@@ -328,7 +326,7 @@ def profile_models(
                                         e,
                                     )
 
-                        # Fetch temporal distribution for date/timestamp columns and YYYYMMDD integer keys
+                        # Fetch temporal distribution for date/timestamp and YYYYMMDD keys
                         if col_spec.category in ("date", "date_key"):
                             temporal_sql = build_temporal_distribution_query(
                                 schema,

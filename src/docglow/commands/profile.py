@@ -79,7 +79,5 @@ def profile(
 
     # Write profiles to standalone file
     profiles_path = output_dir / "profiles.json"
-    profiles_path.write_text(
-        json.dumps({"columns": profiles, "meta": model_meta}, indent=2)
-    )
+    profiles_path.write_text(json.dumps({"columns": profiles, "meta": model_meta}, indent=2))
     console.print(f"  Profiles saved to {profiles_path}")

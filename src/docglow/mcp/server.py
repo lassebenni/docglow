@@ -136,7 +136,7 @@ def run_server(project_dir: Path, target_dir: Path | None = None) -> None:
 
     data = build_docglow_data(artifacts)
 
-    from docglow.generator.questions import attach_questions, attach_question_verification
+    from docglow.generator.questions import attach_question_verification, attach_questions
 
     attach_questions(data["models"])
     attach_question_verification(data["models"], artifacts.manifest, artifacts.run_results)

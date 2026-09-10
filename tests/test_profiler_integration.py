@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from docglow.profiler.engine import apply_profiles, build_profiling_meta, profile_models
+from docglow.profiler.engine import apply_profiles, profile_models
 
 pytest.importorskip("sqlalchemy")
 pytest.importorskip("duckdb")

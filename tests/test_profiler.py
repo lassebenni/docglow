@@ -11,6 +11,7 @@ from docglow.profiler.cache import (
     save_cache,
     update_cache,
 )
+from docglow.profiler.engine import build_profiling_meta
 from docglow.profiler.queries import (
     ColumnSpec,
     build_column_specs,
@@ -20,7 +21,6 @@ from docglow.profiler.queries import (
     classify_column,
 )
 from docglow.profiler.stats import parse_stats_row, parse_top_values_rows
-from docglow.profiler.engine import build_profiling_meta
 
 
 class TestColumnClassification:

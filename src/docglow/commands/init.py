@@ -47,7 +47,7 @@ INIT_TEMPLATE = """\
 #   descriptions: append  # append | replace | skip
 
 # search:
-#   term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml  # Dutch/English BC business terms
+#   term_aliases: ../vt-business-docs/reference/bc_term_aliases.yaml  # BC business terms
 
 # seed_data:
 #   enabled: true
