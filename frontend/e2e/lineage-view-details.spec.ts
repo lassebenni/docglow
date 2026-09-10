@@ -54,13 +54,15 @@ test.describe('Lineage View details', () => {
   })
 
   test('View details on global lineage opens model in a new tab', async ({ page, context }) => {
-    await page.goto('/#/lineage')
+    const pins = encodeURIComponent(MODEL_ID)
+    await page.goto(`/#/lineage?pins=${pins}&depth=2&dir=both`)
     await page.waitForURL(/#\/lineage/)
 
     const main = page.locator('main')
-    await expect(main.getByRole('heading', { name: 'Lineage' })).toBeVisible()
+    const stgOrdersNode = main.locator('.react-flow__node').filter({ hasText: 'stg_orders' }).first()
+    await expect(stgOrdersNode).toBeVisible()
 
-    await main.locator('.react-flow__node').filter({ hasText: 'stg_orders' }).first().click()
+    await stgOrdersNode.click()
     const viewDetails = page.getByTestId('lineage-view-details-link')
     await expect(viewDetails).toBeVisible()
     await expect(viewDetails).toHaveAttribute('target', '_blank')
