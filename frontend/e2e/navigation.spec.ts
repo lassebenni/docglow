@@ -32,8 +32,8 @@ test.describe('Sidebar Navigation', () => {
   })
 
   test('clicking sidebar model navigates to model detail', async ({ page }) => {
-    // Click a known model leaf from the tree (e.g., "customers" under marts)
     const sidebar = page.locator('aside')
+    await sidebar.getByRole('button', { name: 'Expand All' }).click()
     await sidebar.getByRole('button', { name: 'customers', exact: true }).click()
     await expect(page).toHaveURL(/#\/model\//)
   })
@@ -47,7 +47,7 @@ test.describe('Header', () => {
   test('displays project name and logo', async ({ page }) => {
     const header = page.locator('header')
     await expect(header).toBeVisible()
-    await expect(header.getByText('d++')).toBeVisible()
+    await expect(header.getByText('Docglow')).toBeVisible()
     await expect(header.getByText('jaffle_shop')).toBeVisible()
   })
 

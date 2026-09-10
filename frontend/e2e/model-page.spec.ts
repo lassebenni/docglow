@@ -59,7 +59,7 @@ test.describe('Model Detail Page', () => {
   test('can switch to lineage tab', async ({ page }) => {
     const main = page.locator(mainSelector)
     await main.getByRole('button', { name: 'Lineage', exact: true }).click()
-    await expect(page.locator('.h-96').first()).toBeVisible()
+    await expect(page.locator('main .react-flow').first()).toBeVisible()
   })
 
   test('can switch to tests tab', async ({ page }) => {

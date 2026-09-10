@@ -35,7 +35,7 @@ test.describe('Health Page', () => {
   test('can switch to complexity tab', async ({ page }) => {
     await page.getByRole('button', { name: 'Complexity' }).click()
     const hasTable = await page.locator('table').count()
-    const hasEmpty = await page.getByText('No high-complexity').count()
+    const hasEmpty = await page.getByText('No models exceed any of these thresholds').count()
     expect(hasTable + hasEmpty).toBeGreaterThan(0)
   })
 
