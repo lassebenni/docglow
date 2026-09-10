@@ -51,7 +51,12 @@ def test_strips_whitespace_and_omits_blank_proof():
             "meta": {
                 "docglow": {
                     "questions": [
-                        {"question": "  Q?  ", "answer": "  A.  ", "proof": "   ", "verified_by": ""},
+                        {
+                            "question": "  Q?  ",
+                            "answer": "  A.  ",
+                            "proof": "   ",
+                            "verified_by": "",
+                        },
                     ]
                 }
             },

@@ -7,7 +7,7 @@ Per-model ``meta.docglow.questions`` entries::
         questions:
           - question: "Hoe komt SKU-niveau verkoop op serie-niveau?"
             answer: "Optellen via `dim_sku.item_series_code`."
-            proof: "workbook#cte-sku_bridge"  # optional; "<custom-doc slug>#<anchor>" or "self#<anchor>"
+            proof: "workbook#cte-sku_bridge"  # optional; "<slug>#<anchor>" or "self#<anchor>"
             verified_by: "assert_sku_bridge"  # optional; dbt test name proving the answer
 
 Pure data — no files to copy.  Each valid entry is attached to the model as
@@ -96,11 +96,7 @@ def attach_questions(models: dict[str, dict[str, Any]]) -> None:
 
 
 def _tests_by_name(manifest: Manifest) -> dict[str, Any]:
-    return {
-        node.name: node
-        for node in manifest.nodes.values()
-        if node.resource_type == "test"
-    }
+    return {node.name: node for node in manifest.nodes.values() if node.resource_type == "test"}
 
 
 def _sql_fields(test_node: Any | None, run_result: Any | None) -> dict[str, str | None]:

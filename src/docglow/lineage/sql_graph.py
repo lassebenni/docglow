@@ -375,7 +375,7 @@ def _select_sql(select: Any) -> str | None:
         sql = expression_sql(select)
     if not sql:
         return None
-    return sql.strip()
+    return str(sql).strip()
 
 
 def _agg_fn_key(agg: Any) -> str:
@@ -601,11 +601,14 @@ def _build_column_lineage(
             column_lineage[target_node] = {}
         deps = column_lineage[target_node].setdefault(target_col, [])
         marker = f"{source_node}\0{source_col}\0{transformation}\0{expression or ''}"
-        if any(
-            f"{d.get('source_node')}\0{d.get('source_column')}\0{d.get('transformation')}\0{d.get('expression') or ''}"
-            == marker
-            for d in deps
-        ):
+
+        def _dep_marker(d: dict[str, str]) -> str:
+            return (
+                f"{d.get('source_node')}\0{d.get('source_column')}"
+                f"\0{d.get('transformation')}\0{d.get('expression') or ''}"
+            )
+
+        if any(_dep_marker(d) == marker for d in deps):
             return
         entry: dict[str, str] = {
             "source_node": source_node,

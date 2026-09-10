@@ -177,12 +177,14 @@ def attach_custom_docs(
             except OSError as e:
                 logger.warning("Failed to copy custom doc %s for model %s: %s", source, name, e)
                 continue
-            entries.append({
-                "slug": slug,
-                "label": spec["label"],
-                "url": url,
-                "source_file": _source_file_field(source, project_dir),
-            })
+            entries.append(
+                {
+                    "slug": slug,
+                    "label": spec["label"],
+                    "url": url,
+                    "source_file": _source_file_field(source, project_dir),
+                }
+            )
             seen_slugs.add(slug)
 
         if resolved_docs_dir is not None:
@@ -204,12 +206,14 @@ def attach_custom_docs(
                         e,
                     )
                     continue
-                entries.append({
-                    "slug": slug,
-                    "label": "Guide",
-                    "url": url,
-                    "source_file": _source_file_field(source, project_dir),
-                })
+                entries.append(
+                    {
+                        "slug": slug,
+                        "label": "Guide",
+                        "url": url,
+                        "source_file": _source_file_field(source, project_dir),
+                    }
+                )
                 seen_slugs.add(slug)
 
         if entries:

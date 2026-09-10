@@ -53,9 +53,7 @@ def resolve_selection(
 
         names = {
             ln.strip()
-            for ln in (
-                Path(pattern[1:]).expanduser().read_text(encoding="utf-8").splitlines()
-            )
+            for ln in (Path(pattern[1:]).expanduser().read_text(encoding="utf-8").splitlines())
             if ln.strip()
         }
         return {uid for uid, data in resources.items() if data.get("name") in names}

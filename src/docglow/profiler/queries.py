@@ -190,22 +190,39 @@ def build_stats_query(
         elif col.category == "date_key":
             # Cast YYYYMMDD integer to ISO date string — guard against non-8-digit values
             if adapter in ("postgres", "postgresql"):
+
                 def _pg_date_key(agg: str) -> str:
                     val = f"CAST({agg}({cn}) AS TEXT)"
-                    return f"CASE WHEN LENGTH({val}) = 8 THEN TO_CHAR(TO_DATE({val}, 'YYYYMMDD'), 'YYYY-MM-DD') ELSE NULL END"
+                    return (
+                        f"CASE WHEN LENGTH({val}) = 8"
+                        f" THEN TO_CHAR(TO_DATE({val}, 'YYYYMMDD'), 'YYYY-MM-DD')"
+                        " ELSE NULL END"
+                    )
+
                 min_expr = _pg_date_key("MIN")
                 max_expr = _pg_date_key("MAX")
             elif adapter == "bigquery":
+
                 def _bq_date_key(agg: str) -> str:
                     val = f"CAST({agg}({cn}) AS STRING)"
-                    return f"CASE WHEN LENGTH({val}) = 8 THEN CAST(PARSE_DATE('%Y%m%d', {val}) AS STRING) ELSE NULL END"
+                    return (
+                        f"CASE WHEN LENGTH({val}) = 8"
+                        f" THEN CAST(PARSE_DATE('%Y%m%d', {val}) AS STRING)"
+                        " ELSE NULL END"
+                    )
+
                 min_expr = _bq_date_key("MIN")
                 max_expr = _bq_date_key("MAX")
             else:
                 # DuckDB / Snowflake
                 def _duck_date_key(agg: str) -> str:
                     val = f"CAST({agg}({cn}) AS VARCHAR)"
-                    return f"CASE WHEN LENGTH({val}) = 8 THEN STRFTIME(STRPTIME({val}, '%Y%m%d'), '%Y-%m-%d') ELSE NULL END"
+                    return (
+                        f"CASE WHEN LENGTH({val}) = 8"
+                        f" THEN STRFTIME(STRPTIME({val}, '%Y%m%d'), '%Y-%m-%d')"
+                        " ELSE NULL END"
+                    )
+
                 min_expr = _duck_date_key("MIN")
                 max_expr = _duck_date_key("MAX")
             parts.append(f'  , {min_expr} AS {prefix}__min"')
@@ -332,9 +349,15 @@ def build_temporal_distribution_query(
     if is_date_key:
         # Cast YYYYMMDD integer to DATE — guard against non-8-digit values
         if adapter in ("postgres", "postgresql"):
-            date_expr = f"CASE WHEN LENGTH(CAST({cn} AS TEXT)) = 8 THEN TO_DATE(CAST({cn} AS TEXT), 'YYYYMMDD') ELSE NULL END"
+            date_expr = (
+                f"CASE WHEN LENGTH(CAST({cn} AS TEXT)) = 8"
+                f" THEN TO_DATE(CAST({cn} AS TEXT), 'YYYYMMDD') ELSE NULL END"
+            )
         else:
-            date_expr = f"CASE WHEN LENGTH(CAST({cn} AS VARCHAR)) = 8 THEN STRPTIME(CAST({cn} AS VARCHAR), '%Y%m%d')::DATE ELSE NULL END"
+            date_expr = (
+                f"CASE WHEN LENGTH(CAST({cn} AS VARCHAR)) = 8"
+                f" THEN STRPTIME(CAST({cn} AS VARCHAR), '%Y%m%d')::DATE ELSE NULL END"
+            )
     else:
         date_expr = f"CAST({cn} AS DATE)"
 
@@ -345,4 +368,3 @@ def build_temporal_distribution_query(
         f"GROUP BY 1\n"
         f"ORDER BY 1;"
     )
-

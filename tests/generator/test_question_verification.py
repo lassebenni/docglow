@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from docglow.artifacts.manifest import Manifest, ManifestNode
+from docglow.artifacts.manifest import Manifest
 from docglow.artifacts.run_results import RunResult, RunResults, RunResultsMetadata
 from docglow.generator.questions import attach_question_verification, attach_questions
 

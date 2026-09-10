@@ -423,7 +423,8 @@ def stage_enrich_search_aliases(ctx: PipelineContext) -> None:
 
     from docglow.generator.term_aliases import enrich_search_entries, load_term_alias_index
 
-    path = Path(ctx.term_aliases_path) if not isinstance(ctx.term_aliases_path, Path) else ctx.term_aliases_path
+    aliases_path = ctx.term_aliases_path
+    path = Path(aliases_path) if not isinstance(aliases_path, Path) else aliases_path
     index = load_term_alias_index(path)
     if index is None:
         return

@@ -44,8 +44,10 @@ def build_test_map(
     # dbt 1.8+ unit tests live on manifest.unit_tests (not manifest.nodes); the
     # Manifest model exposes them via pydantic extras when the field is unknown.
     unit_tests_raw = getattr(manifest, "unit_tests", None)
-    if unit_tests_raw is None and getattr(manifest, "__pydantic_extra__", None):
-        unit_tests_raw = manifest.__pydantic_extra__.get("unit_tests")
+    if unit_tests_raw is None:
+        extra = getattr(manifest, "__pydantic_extra__", None)
+        if extra is not None:
+            unit_tests_raw = extra.get("unit_tests")
     if unit_tests_raw:
         for ut_data in unit_tests_raw.values():
             ut_node = ManifestNode.model_validate(ut_data)

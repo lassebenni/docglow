@@ -563,7 +563,6 @@ class TestHealthPackageExclusion:
         assert health["coverage"]["models_tested"]["total"] == 1
         assert health["coverage"]["models_tested"]["covered"] == 1
 
-
     def test_context_to_dict_excludes_packages(self) -> None:
         """context_to_dict should filter package models from output."""
         from unittest.mock import MagicMock

@@ -157,12 +157,12 @@ def load_term_alias_index(path: Path | None) -> TermAliasIndex | None:
             for related_id in _as_str_list(concept.get("related_tables")):
                 table_tokens.setdefault(related_id, set()).update(concept_tokens)
 
-    for table_id, tokens in table_tokens.items():
-        index.register(table_id, sorted(tokens))
+    for table_id, token_set in table_tokens.items():
+        index.register(table_id, sorted(token_set))
         for model_key, model_tokens in list(index.by_model.items()):
             if _model_matches_table(model_key, table_id):
-                model_tokens.update(tokens)
-        index.by_source.setdefault(table_id, set()).update(tokens)
+                model_tokens.update(token_set)
+        index.by_source.setdefault(table_id, set()).update(token_set)
 
     logger.info(
         "Loaded term aliases from %s (%d models, %d sources, %d tables)",
