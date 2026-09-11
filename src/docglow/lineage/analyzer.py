@@ -18,6 +18,7 @@ from typing import Any
 from docglow import __version__
 from docglow.lineage.column_parser import (
     ColumnDependency,
+    NestedSchema,
     build_schema_mapping,
     parse_column_lineage,
 )
@@ -148,14 +149,31 @@ def _compute_depth_waves(
     return waves
 
 
+def _flatten_schema_for_sql_graph(schema: NestedSchema) -> dict[str, dict[str, str]]:
+    """Flatten the nested database.schema.table schema for ``build_sql_graph``.
+
+    ``build_sql_graph`` predates the qualify()-oriented ``NestedSchema`` shape
+    and does fuzzy suffix matching (``key.endswith(".short_name")``) against a
+    flat ``{"db.schema.table": {col: type}}`` mapping — it doesn't need
+    ``qualify()``'s depth-aware lookup, just something to match table refs
+    against.
+    """
+    flat: dict[str, dict[str, str]] = {}
+    for database, schemas in schema.items():
+        for schema_name, tables in schemas.items():
+            for table, cols in tables.items():
+                flat[f"{database}.{schema_name}.{table}"] = cols
+    return flat
+
+
 # Module-level state for worker processes (set by _init_worker)
-_worker_schema: dict[str, dict[str, str]] = {}
+_worker_schema: NestedSchema = {}
 _worker_resolver: TableResolver | None = None
 _worker_dialect: str | None = None
 
 
 def _init_worker(
-    schema: dict[str, dict[str, str]],
+    schema: NestedSchema,
     resolver: TableResolver,
     dialect: str | None,
 ) -> None:
@@ -185,7 +203,7 @@ def _analyze_model_in_worker(
 def _analyze_single_model(
     uid: str,
     data: dict[str, Any],
-    schema: dict[str, dict[str, str]],
+    schema: NestedSchema,
     resolver: TableResolver,
     dialect: str | None,
     cached_entry: dict[str, Any] | None,
@@ -265,7 +283,7 @@ def _analyze_single_model(
         model_name=data.get("name", uid.rsplit(".", 1)[-1]),
         resolver=resolver,
         dialect=dialect,
-        schema=schema,
+        schema=_flatten_schema_for_sql_graph(schema),
         output_columns=known_columns or None,
     )
 
@@ -398,7 +416,7 @@ def serialize_shared_state(
 
 def deserialize_shared_state(
     blob: dict[str, Any],
-) -> tuple[TableResolver, dict[str, dict[str, str]], str | None]:
+) -> tuple[TableResolver, NestedSchema, str | None]:
     """Reconstruct ``(resolver, schema, dialect)`` from a serialized blob.
 
     Inverse of :func:`serialize_shared_state`. The returned tuple is the
@@ -411,7 +429,7 @@ def deserialize_shared_state(
         A ``(resolver, schema, dialect)`` tuple.
     """
     resolver = TableResolver.from_dict(blob["resolver"])
-    schema: dict[str, dict[str, str]] = blob.get("schema", {})
+    schema: NestedSchema = blob.get("schema", {})
     dialect: str | None = blob.get("dialect")
     return resolver, schema, dialect
 
@@ -419,7 +437,7 @@ def deserialize_shared_state(
 def analyze_one_model(
     uid: str,
     model_data: dict[str, Any],
-    shared_state: tuple[TableResolver, dict[str, dict[str, str]], str | None],
+    shared_state: tuple[TableResolver, NestedSchema, str | None],
 ) -> _ModelLineageResult:
     """Analyze column lineage for a single model given pre-built shared state.
 

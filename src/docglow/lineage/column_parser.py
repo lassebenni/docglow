@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from docglow.lineage.sql_ast import expression_sql as _expression_sql
 
 logger = logging.getLogger(__name__)
+
+# {database: {schema: {table: {column: type}}}} — nested schema shape used by
+# SQLGlot's qualify() to expand qualified star expressions.
+NestedSchema = dict[str, dict[str, dict[str, dict[str, str]]]]
 
 # Adapter type -> SQLGlot dialect mapping
 _DIALECT_MAP: dict[str, str] = {
@@ -58,7 +62,7 @@ def detect_dialect(adapter_type: str | None) -> str | None:
 
 def parse_column_lineage(
     compiled_sql: str,
-    schema: dict[str, dict[str, str]] | None = None,
+    schema: NestedSchema | None = None,
     dialect: str | None = None,
     known_columns: list[str] | None = None,
 ) -> dict[str, list[ColumnDependency]]:
@@ -100,15 +104,45 @@ def parse_column_lineage(
 
     # Get the outermost SELECT statement
     select_stmt = None
+    root_statement = None
     for statement in parsed:
         if statement is None:
             continue
         select_stmt = statement.find(exp.Select)
         if select_stmt:
+            root_statement = statement
             break
 
-    if select_stmt is None:
+    if select_stmt is None or root_statement is None:
         return {}
+
+    # Expand qualified stars (e.g. renamed.*) into their real columns using
+    # the nested schema, before we look at the SELECT clause. On any failure
+    # (schema too sparse, unresolvable ref, etc.) fall back to the unqualified
+    # tree — the existing star-handling below still applies to it. Attempted
+    # even with no external schema: qualify()'s infer_schema resolves
+    # `SELECT * FROM cte` structurally from the CTE's own definition.
+    effective_schema: NestedSchema = schema or {}
+    try:
+        from sqlglot.optimizer.qualify import qualify
+
+        qualified = qualify(
+            root_statement, schema=cast(dict[str, object], effective_schema), infer_schema=True
+        )
+        qualified_select = qualified.find(exp.Select)
+        if qualified_select is not None:
+            select_stmt = qualified_select
+    except Exception as e:  # noqa: BLE001
+        logger.debug("qualify() failed, falling back to unqualified tree: %s", e)
+
+    # qualify() gives up on expanding *any* star in the SELECT list if
+    # even one referenced table can't be resolved from schema (e.g. one
+    # side of a join points at a table missing from both schema and
+    # known_columns). Manually expand what qualify() left behind so a
+    # partially-resolvable join still reports the resolvable side's
+    # columns instead of degrading to nothing.
+    if any(_is_star_expr(e) for e in select_stmt.expressions):
+        select_stmt = _expand_resolvable_qualified_stars(select_stmt, effective_schema)
 
     # Extract output column names from the SELECT clause
     output_columns = _extract_output_columns(select_stmt)
@@ -116,12 +150,13 @@ def parse_column_lineage(
     # Check for SELECT * EXCLUDE(...) pattern
     excluded_cols = _get_excluded_columns(select_stmt)
 
-    # Detect if outermost SELECT uses * or * EXCLUDE
-    has_star = any(isinstance(expr, exp.Star) for expr in select_stmt.expressions)
+    # Detect if outermost SELECT uses * or * EXCLUDE (bare star or a qualified
+    # star like `a.*`, which sqlglot represents as Column(this=Star)).
+    has_star = any(_is_star_expr(expr) for expr in select_stmt.expressions)
     # UNION ALL of SELECT * — also treat as star (first arm already detected).
     if not has_star and parsed[0] is not None and parsed[0].find(exp.Union) is not None:
         has_star = any(
-            isinstance(expr, exp.Star)
+            _is_star_expr(expr)
             for sel in parsed[0].find_all(exp.Select)
             for expr in (sel.expressions or [])
         )
@@ -141,22 +176,26 @@ def parse_column_lineage(
         star_columns = [c for c in star_columns if c.lower() not in explicit_names]
         # Prepend star columns before explicit columns
         output_columns = star_columns + output_columns
-    elif has_star and not star_source:
-        # No catalog/manifest columns — try to resolve from the CTE definition
-        cte_columns = _resolve_star_from_cte(parsed[0], select_stmt, excluded_cols, dialect)
-        if cte_columns:
-            explicit_names = {c.lower() for c in output_columns}
-            cte_columns = [c for c in cte_columns if c.lower() not in explicit_names]
-            output_columns = cte_columns + output_columns
-            logger.debug(
-                "Resolved %d columns from CTE for SELECT * (no catalog data)",
-                len(cte_columns),
-            )
     elif not output_columns and known_columns:
         output_columns = list(known_columns)
 
     if not output_columns:
         return {}
+
+    # Star expansion across a join can produce the same output name from
+    # multiple sources (e.g. both sides of a join have an `id` column).
+    # Keep only the first occurrence so we trace and report it once.
+    deduped_columns = list(dict.fromkeys(output_columns))
+    if len(deduped_columns) != len(output_columns):
+        seen: set[str] = set()
+        for name in output_columns:
+            if name in seen:
+                logger.debug(
+                    "Collapsing duplicate star output column '%s' to its first source",
+                    name,
+                )
+            seen.add(name)
+    output_columns = deduped_columns
 
     # If the outermost SELECT uses *, rewrite it to explicit columns
     # so SQLGlot's lineage() can trace through
@@ -207,7 +246,7 @@ def _trace_column_in_executor(
     executor: Any,
     col_name: str,
     sql: str,
-    schema: dict[str, dict[str, str]],
+    schema: NestedSchema,
     dialect: str | None,
     timeout_seconds: int = 2,
 ) -> list[ColumnDependency]:
@@ -286,8 +325,8 @@ def _rewrite_star_to_columns(
     if outermost is None:
         return sql
 
-    # Only rewrite if the outermost SELECT contains a Star
-    has_star = any(isinstance(expr, exp.Star) for expr in outermost.expressions)
+    # Only rewrite if the outermost SELECT contains a star (bare or qualified)
+    has_star = any(_is_star_expr(expr) for expr in outermost.expressions)
     if not has_star:
         return sql
 
@@ -308,7 +347,7 @@ def _rewrite_star_to_columns(
     # position in the projection list.
     new_exprs = []
     for expression in outermost.expressions:
-        if isinstance(expression, exp.Star):
+        if _is_star_expr(expression):
             new_exprs.extend(star_exprs)
         else:
             new_exprs.append(expression)
@@ -319,6 +358,85 @@ def _rewrite_star_to_columns(
     return result
 
 
+def _expand_resolvable_qualified_stars(select: Any, schema: NestedSchema) -> Any:
+    """Expand qualified stars (``a.*``) whose table is present in ``schema``,
+    leaving stars for unresolvable tables untouched.
+
+    ``qualify()`` bails on expanding every star in the SELECT list if even one
+    referenced table can't be found in schema — this resolves what it can
+    directly against the flat schema mapping so a half-resolvable join still
+    reports the resolvable side's columns rather than nothing at all.
+    """
+    from sqlglot import exp
+
+    alias_to_table: dict[str, Any] = {}
+    for table in select.find_all(exp.Table):
+        alias = table.alias_or_name
+        if alias:
+            alias_to_table[alias.lower()] = table
+
+    new_expressions: list[Any] = []
+    changed = False
+    for expression in select.expressions:
+        if not (isinstance(expression, exp.Column) and _is_star_expr(expression)):
+            new_expressions.append(expression)
+            continue
+
+        table_id = expression.args.get("table")
+        alias = table_id.this if table_id is not None else None
+        table = alias_to_table.get(str(alias).lower()) if alias else None
+        columns = _lookup_schema_columns(schema, table) if table is not None else None
+
+        if not columns:
+            new_expressions.append(expression)
+            continue
+
+        excluded = _star_expr_excluded_columns(expression)
+        column_names = [name for name in columns if name.lower() not in excluded]
+
+        changed = True
+        new_expressions.extend(exp.column(column_name, table=alias) for column_name in column_names)
+
+    if changed:
+        select.set("expressions", new_expressions)
+    return select
+
+
+def _lookup_schema_columns(schema: NestedSchema, table: Any) -> dict[str, str] | None:
+    """Look up a table's column mapping in the nested schema dict.
+
+    Tries progressively shorter ``(catalog, db, name)`` suffixes against the
+    schema root to match schemas of varying nesting depth (table-only,
+    db.table, or catalog.db.table).
+    """
+    parts = [p for p in (table.catalog, table.db, table.name) if p]
+    for start in range(len(parts) - 1, -1, -1):
+        node: Any = schema
+        for part in parts[start:]:
+            if not isinstance(node, dict) or part not in node:
+                node = None
+                break
+            node = node[part]
+        if isinstance(node, dict) and node and all(not isinstance(v, dict) for v in node.values()):
+            return node
+    return None
+
+
+def _is_star_expr(expression: Any) -> bool:
+    """True for a bare star (``*``) or a qualified star (``a.*``).
+
+    SQLGlot represents a bare star as ``exp.Star`` but a qualified star as
+    ``exp.Column(this=exp.Star())`` — callers that only check ``isinstance(x,
+    exp.Star)`` silently miss the qualified form (e.g. when ``qualify()``
+    can't resolve the referenced table and leaves it in place).
+    """
+    from sqlglot import exp
+
+    if isinstance(expression, exp.Star):
+        return True
+    return isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star)
+
+
 def _extract_output_columns(select: Any) -> list[str]:
     """Extract output column names from a SELECT expression."""
     from sqlglot import exp
@@ -327,6 +445,10 @@ def _extract_output_columns(select: Any) -> list[str]:
     for expression in select.expressions:
         if isinstance(expression, exp.Alias):
             columns.append(expression.alias)
+        elif isinstance(expression, exp.Column) and isinstance(expression.this, exp.Star):
+            # Qualified star (e.g. renamed.* or a.*) — never emit a literal "*"
+            # as an output column name.
+            continue
         elif isinstance(expression, exp.Column):
             columns.append(expression.name)
         elif isinstance(expression, exp.Star):
@@ -340,7 +462,7 @@ def _extract_output_columns(select: Any) -> list[str]:
 
 def _star_columns_from_schema(
     tree: Any,
-    schema: dict[str, dict[str, str]] | None,
+    schema: NestedSchema | None,
     excluded_cols: set[str],
 ) -> list[str]:
     """Column names for ``SELECT *`` / ``UNION ALL`` arms from the schema map.
@@ -358,16 +480,7 @@ def _star_columns_from_schema(
             continue
         arm: set[str] = set()
         for table in sel.find_all(exp.Table):
-            name = getattr(table, "name", None) or ""
-            if not name:
-                continue
-            col_map = schema.get(name) or {}
-            db = getattr(table, "db", None) or ""
-            catalog = getattr(table, "catalog", None) or ""
-            if not col_map and db:
-                col_map = schema.get(f"{db}.{name}") or {}
-            if not col_map and catalog and db:
-                col_map = schema.get(f"{catalog}.{db}.{name}") or {}
+            col_map = _lookup_schema_columns(schema, table) or {}
             for col in col_map:
                 if col.lower() not in excluded_cols:
                     arm.add(col)
@@ -379,77 +492,31 @@ def _star_columns_from_schema(
     return sorted(shared)
 
 
-def _resolve_star_from_cte(
-    tree: Any,
-    outer_select: Any,
-    excluded_cols: set[str],
-    dialect: str | None,
-) -> list[str]:
-    """Resolve column names for SELECT * by inspecting the referenced CTE.
+def _star_expr_excluded_columns(expression: Any) -> set[str]:
+    """Extract EXCLUDE/EXCEPT column names from a star expression.
 
-    When the outermost SELECT is ``SELECT * FROM some_cte`` and we have no
-    catalog/manifest columns, we can look at the CTE definition to find the
-    output column names. This handles the common dbt pattern::
-
-        WITH renamed AS (
-            SELECT col_a, col_b AS alias_b, ...
-            FROM source
-        )
-        SELECT * FROM renamed
+    Handles both the bare-star form (``exp.Star``) and the qualified-star form
+    (``exp.Column(this=exp.Star())``, e.g. ``a.* EXCLUDE (x)``) — the EXCLUDE
+    clause hangs off the inner ``Star`` node either way.
     """
     from sqlglot import exp
 
-    # Find the FROM clause of the outermost SELECT
-    from_clause = outer_select.find(exp.From)
-    if not from_clause:
-        return []
+    star = expression.this if isinstance(expression, exp.Column) else expression
+    if not isinstance(star, exp.Star):
+        return set()
 
-    # Get the table name referenced in FROM
-    table = from_clause.find(exp.Table)
-    if not table:
-        return []
-
-    cte_name = table.name.lower()
-
-    # Find the matching CTE definition
-    for cte in tree.find_all(exp.CTE):
-        alias = cte.alias
-        if not alias or alias.lower() != cte_name:
-            continue
-
-        # Found the CTE — extract its output columns
-        cte_select = cte.find(exp.Select)
-        if not cte_select:
-            return []
-
-        # Check if the CTE itself uses SELECT *
-        cte_has_star = any(isinstance(e, exp.Star) for e in cte_select.expressions)
-        if cte_has_star:
-            # CTE also uses SELECT * — we can't resolve further without schema
-            return []
-
-        columns = _extract_output_columns(cte_select)
-
-        # Apply EXCLUDE filter
-        if excluded_cols:
-            columns = [c for c in columns if c.lower() not in excluded_cols]
-
-        return columns
-
-    return []
+    excluded: set[str] = set()
+    for child in star.walk():
+        if isinstance(child, exp.Column):
+            excluded.add(child.name.lower())
+    return excluded
 
 
 def _get_excluded_columns(select: Any) -> set[str]:
     """Extract column names from EXCLUDE/EXCEPT clause in SELECT * EXCLUDE(...)."""
-    from sqlglot import exp
-
     excluded: set[str] = set()
     for expression in select.expressions:
-        if isinstance(expression, exp.Star):
-            # Star may contain EXCLUDE/EXCEPT columns as children
-            for child in expression.walk():
-                if isinstance(child, exp.Column):
-                    excluded.add(child.name.lower())
+        excluded |= _star_expr_excluded_columns(expression)
     return excluded
 
 
@@ -804,13 +871,14 @@ def _is_constant_node(node: Any, exp: Any) -> bool:
 def build_schema_mapping(
     models: dict[str, dict[str, Any]],
     sources: dict[str, dict[str, Any]],
-) -> dict[str, dict[str, str]]:
+) -> NestedSchema:
     """Build a schema mapping for SQLGlot from docglow model/source data.
 
-    Returns a dict of {table_reference: {column_name: column_type}} that
-    SQLGlot can use to expand SELECT * expressions.
+    Returns a nested dict of {database: {schema: {table: {column: type}}}}
+    that SQLGlot's MappingSchema can use to expand SELECT * expressions,
+    including qualified stars (e.g. `alias.*`).
     """
-    schema: dict[str, dict[str, str]] = {}
+    schema: NestedSchema = {}
 
     for data in {**models, **sources}.values():
         name = data.get("name", "")
@@ -824,18 +892,9 @@ def build_schema_mapping(
             col_map[col["name"]] = col_type or "VARCHAR"
         if not col_map:
             continue
+        if not database or not schema_name:
+            continue
 
-        # Index by multiple key formats for flexible matching:
-        # bare name, schema.name, database.schema.name
-        schema.setdefault(name, col_map)
-        if schema_name:
-            schema[f"{schema_name}.{name}"] = col_map
-            if database:
-                schema[f"{database}.{schema_name}.{name}"] = col_map
-
-        # Also index by source_name.table_name for sources
-        source_name = data.get("source_name", "")
-        if source_name:
-            schema.setdefault(f"{source_name}.{name}", col_map)
+        schema.setdefault(database, {}).setdefault(schema_name, {})[name] = col_map
 
     return schema
