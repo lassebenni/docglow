@@ -106,16 +106,15 @@ class TestMultiStarJoin:
     def test_colliding_name_collapses_to_the_first_source(self, lineage: Lineage) -> None:
         """company_id appears in both stars; lineage keeps the first source only.
 
-        This is the deliberate choice in
-        adr-2026-09-10-nested-schema-mapping-for-star-expansion: sqlglot's own
-        lineage() resolves an ambiguous `id` to the first source, and the dbt
-        catalog is keyed by column name so it cannot hold two entries anyway.
-        The warehouse still emits a disambiguated `company_id_1` column, which
-        parse_column_lineage never sees traced SQL for (it isn't a real
-        expression in `select c.*, k.*`) — this fork's analyzer fills that gap
-        with an explicit `untraced` marker (`analyzer.py`'s "not silent gaps"
-        catalog backfill) rather than upstream's silent key omission, so both
-        catalog columns end up represented in `lineage`.
+        This is a deliberate choice: sqlglot's own lineage() resolves an
+        ambiguous `id` to the first source, and the dbt catalog is keyed by
+        column name so it cannot hold two entries anyway. The warehouse still
+        emits a disambiguated `company_id_1` column, which parse_column_lineage
+        never sees traced SQL for (it isn't a real expression in
+        `select c.*, k.*`) — this fork's analyzer fills that gap with an
+        explicit `untraced` marker (`analyzer.py`'s "not silent gaps" catalog
+        backfill) rather than upstream's silent key omission, so both catalog
+        columns end up represented in `lineage`.
         """
         columns = lineage[FCT_CONTRACTS]
         assert _upstream_models(columns["company_id"]) == {STG_COMPANIES}
