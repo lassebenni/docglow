@@ -799,13 +799,32 @@ class TestQualifiedStarGuard:
     def test_half_resolvable_join_reports_resolvable_side(self) -> None:
         """When one side of a join is in schema and the other side's table is
         absent from both schema and known_columns, the resolvable side's
-        columns are still reported and no exception is raised."""
+        columns are still reported and no exception is raised.
+
+        The table reference in the SQL (`raw.a`) only carries two identifier
+        parts (schema.table, no database prefix) — a normal shape for some
+        warehouses — while build_schema_mapping() always nests three levels
+        deep (database -> schema -> table). The lookup must resolve across
+        that depth mismatch instead of only matching a schema shaped to the
+        reference's own part count.
+        """
         sql = """
         SELECT a.*, b.*
         FROM raw.a AS a
         JOIN missing.b AS b ON a.id = b.id
         """
-        schema = {"raw": {"a": {"id": "INT", "x": "VARCHAR"}}}
+        models = {
+            "model.proj.a": {
+                "name": "a",
+                "schema": "raw",
+                "database": "analytics",
+                "columns": [
+                    {"name": "id", "data_type": "INT"},
+                    {"name": "x", "data_type": "VARCHAR"},
+                ],
+            }
+        }
+        schema = build_schema_mapping(models, {})
 
         result = parse_column_lineage(sql, schema=schema)
 

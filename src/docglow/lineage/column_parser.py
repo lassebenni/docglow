@@ -185,16 +185,17 @@ def parse_column_lineage(
     # Star expansion across a join can produce the same output name from
     # multiple sources (e.g. both sides of a join have an `id` column).
     # Keep only the first occurrence so we trace and report it once.
-    deduped_columns = list(dict.fromkeys(output_columns))
-    if len(deduped_columns) != len(output_columns):
-        seen: set[str] = set()
-        for name in output_columns:
-            if name in seen:
-                logger.debug(
-                    "Collapsing duplicate star output column '%s' to its first source",
-                    name,
-                )
-            seen.add(name)
+    seen: set[str] = set()
+    deduped_columns = []
+    for name in output_columns:
+        if name in seen:
+            logger.debug(
+                "Collapsing duplicate star output column '%s' to its first source",
+                name,
+            )
+            continue
+        seen.add(name)
+        deduped_columns.append(name)
     output_columns = deduped_columns
 
     # If the outermost SELECT uses *, rewrite it to explicit columns
@@ -405,21 +406,39 @@ def _expand_resolvable_qualified_stars(select: Any, schema: NestedSchema) -> Any
 def _lookup_schema_columns(schema: NestedSchema, table: Any) -> dict[str, str] | None:
     """Look up a table's column mapping in the nested schema dict.
 
-    Tries progressively shorter ``(catalog, db, name)`` suffixes against the
-    schema root to match schemas of varying nesting depth (table-only,
-    db.table, or catalog.db.table).
+    The schema built by ``build_schema_mapping()`` is always three levels
+    deep (database -> schema -> table -> column), regardless of how many
+    identifier parts the compiled SQL's table reference carries. A two-part
+    reference (``schema.table``, no database prefix) is a normal shape for
+    some warehouses, so this searches for a table-name match at any depth
+    rather than only at a depth matching the reference's own part count, and
+    confirms whatever qualifiers the reference does carry (catalog, db)
+    against that match's immediate parent chain.
     """
-    parts = [p for p in (table.catalog, table.db, table.name) if p]
-    for start in range(len(parts) - 1, -1, -1):
-        node: Any = schema
-        for part in parts[start:]:
-            if not isinstance(node, dict) or part not in node:
-                node = None
-                break
-            node = node[part]
-        if isinstance(node, dict) and node and all(not isinstance(v, dict) for v in node.values()):
-            return node
-    return None
+    name = table.name
+    if not name:
+        return None
+    required = [p.lower() for p in (table.catalog, table.db) if p]
+
+    def _search(node: Any, path: list[str]) -> dict[str, str] | None:
+        if not isinstance(node, dict):
+            return None
+        for key, value in node.items():
+            if (
+                key.lower() == name.lower()
+                and isinstance(value, dict)
+                and value
+                and all(not isinstance(v, dict) for v in value.values())
+            ):
+                suffix = [p.lower() for p in path[len(path) - len(required) :]]
+                if not required or suffix == required:
+                    return value
+            found = _search(value, [*path, key])
+            if found is not None:
+                return found
+        return None
+
+    return _search(schema, [])
 
 
 def _is_star_expr(expression: Any) -> bool:
