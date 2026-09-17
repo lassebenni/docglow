@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Fixed
-- **Qualified star expansion in column lineage** — `renamed.*` / `a.* JOIN b.*`-style qualified stars expanded to nothing instead of resolving to real columns. Ported from upstream docglow #159/#160 (nested `database.schema.table` schema mapping + `qualify()`-based expansion), adapted for this fork's independent CTE-fallback star resolution and `build_sql_graph`'s flat schema expectation.
-
 ### Changed
 - **Lineage node panel** — "View details" opens the resource page in a new tab instead of navigating away from the current lineage view.
 
@@ -17,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - **Seed Data tab** — `docglow generate` embeds each project seed's CSV (configurable row limit, default 1,000) as `sample_data` so seed pages show the same interactive Data tab as models. Columns with `meta.pii: true` or PII-like names are withheld. Disable via `seed_data.enabled: false` in `docglow.yml` or omit with `--slim`.
 
 ### Fixed
+- **Qualified star expansion in column lineage** — `renamed.*` / `a.* JOIN b.*`-style qualified stars expanded to nothing instead of resolving to real columns. Ported from upstream docglow #159/#160 (nested `database.schema.table` schema mapping + `qualify()`-based expansion), adapted for this fork's independent CTE-fallback star resolution and `build_sql_graph`'s flat schema expectation.
 - **Exposure column deep links** — URL-encoded characters in `#col-*` hashes on exposure pages are decoded before resolving the target column name.
 
 ## [0.8.3] - 2026-05-20

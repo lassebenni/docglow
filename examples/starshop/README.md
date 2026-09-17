@@ -6,7 +6,7 @@ expansion** in column-level lineage.
 ## Why this exists
 
 Column lineage has to expand `renamed.*` and `a.* / b.*` into real columns. Neither
-of the other example projects does that in an outermost `SELECT` — across 445 models
+of the other example projects does that in an outermost `SELECT` — across 96 models
 there was not a single case — so a regression here was invisible to both the test
 suite and the demo site. `starshop` makes it visible.
 
