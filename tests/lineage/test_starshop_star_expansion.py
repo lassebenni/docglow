@@ -110,14 +110,16 @@ class TestMultiStarJoin:
         adr-2026-09-10-nested-schema-mapping-for-star-expansion: sqlglot's own
         lineage() resolves an ambiguous `id` to the first source, and the dbt
         catalog is keyed by column name so it cannot hold two entries anyway.
-        The warehouse still emits a disambiguated `company_id_1` column, so the
-        catalog has 8 columns here while lineage has 7 — that gap is intended,
-        and this test exists so a future change to it is a decision, not a
-        surprise.
+        The warehouse still emits a disambiguated `company_id_1` column, which
+        parse_column_lineage never sees traced SQL for (it isn't a real
+        expression in `select c.*, k.*`) — this fork's analyzer fills that gap
+        with an explicit `untraced` marker (`analyzer.py`'s "not silent gaps"
+        catalog backfill) rather than upstream's silent key omission, so both
+        catalog columns end up represented in `lineage`.
         """
         columns = lineage[FCT_CONTRACTS]
         assert _upstream_models(columns["company_id"]) == {STG_COMPANIES}
-        assert "company_id_1" not in columns
+        assert columns["company_id_1"] == [{"transformation": "untraced"}]
 
     def test_no_literal_star_column(self, lineage: Lineage) -> None:
         assert "*" not in lineage[FCT_CONTRACTS]

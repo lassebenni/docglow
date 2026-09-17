@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **Qualified star expansion in column lineage** — `renamed.*` / `a.* JOIN b.*`-style qualified stars expanded to nothing instead of resolving to real columns. Ported from upstream docglow #159/#160 (nested `database.schema.table` schema mapping + `qualify()`-based expansion), adapted for this fork's independent CTE-fallback star resolution and `build_sql_graph`'s flat schema expectation.
+
 ### Changed
 - **Lineage node panel** — "View details" opens the resource page in a new tab instead of navigating away from the current lineage view.
 
