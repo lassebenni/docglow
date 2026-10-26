@@ -45,7 +45,7 @@ from docglow.cloud_hint import maybe_show_hint
     default=None,
     help="Only analyze column lineage for these models and their dependencies "
     "(e.g. fct_orders, +fct_orders, fct_orders+). Multiple patterns may be "
-    "comma- or space-separated. When --exposure-field-lineage is set, mart "
+    "comma- or space-separated. When --exposure-field-lineage or --powerbi-model "
     "models referenced by that sidecar are included automatically.",
 )
 @click.option(
@@ -119,6 +119,20 @@ from docglow.cloud_hint import maybe_show_hint
     "(e.g. Power BI measures) to dbt model columns for column-level lineage.",
 )
 @click.option(
+    "--powerbi-model",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Path to a Power BI TMDL semantic model folder (PBIP). Measures and "
+    "their column lineage are read from the DAX, no sidecar needed. "
+    "Needs --powerbi-exposure and pip install 'docglow[powerbi]'.",
+)
+@click.option(
+    "--powerbi-exposure",
+    type=str,
+    default=None,
+    help="Name of the dbt exposure the --powerbi-model measures belong to.",
+)
+@click.option(
     "--term-aliases",
     type=click.Path(exists=True, path_type=Path),
     default=None,
@@ -153,9 +167,19 @@ def generate(
     sample_data_dir: Path | None,
     docs_dir: Path | None,
     exposure_field_lineage: Path | None,
+    powerbi_model: Path | None,
+    powerbi_exposure: str | None,
     term_aliases: Path | None,
 ) -> None:
     """Generate the documentation site."""
+    # The two Power BI options are a pair: a model with no exposure has nothing
+    # to attach to, an exposure with no model has nothing to attach. Fail here
+    # rather than warning halfway through a build that then produces nothing.
+    if powerbi_model and not powerbi_exposure:
+        raise click.UsageError("--powerbi-model requires --powerbi-exposure")
+    if powerbi_exposure and not powerbi_model:
+        raise click.UsageError("--powerbi-exposure requires --powerbi-model")
+
     from docglow.cli import _parse_connection, _setup_logging, console
 
     _setup_logging(verbose)
@@ -268,6 +292,8 @@ def generate(
                 sample_data_dir=sample_data_dir,
                 docs_dir=docs_dir,
                 exposure_field_lineage_path=exposure_field_lineage,
+                powerbi_model_path=powerbi_model,
+                powerbi_exposure=powerbi_exposure,
                 term_aliases_path=term_aliases_path,
             )
             console.print(f"\n[bold green]Site generated at {output_path}[/bold green]")

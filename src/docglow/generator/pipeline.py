@@ -40,6 +40,8 @@ class PipelineContext:
     column_lineage_cache_dir: Any | None = None
     column_lineage_workers: int | None = None
     exposure_field_lineage_path: Any | None = None
+    powerbi_model_path: Any | None = None
+    powerbi_exposure: str | None = None
     exclude_packages: bool = True
     slim: bool = False
     enable_erd: bool = False
@@ -370,6 +372,8 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
         ctx.snapshots,
         max_workers=ctx.column_lineage_workers,
         exposure_field_lineage_path=ctx.exposure_field_lineage_path,
+        powerbi_model_path=ctx.powerbi_model_path,
+        known_model_names=_known_model_names(ctx),
     )
     ctx.column_lineage = column_lineage
     ctx.join_keys = join_keys
@@ -380,10 +384,42 @@ def stage_build_column_lineage(ctx: PipelineContext) -> None:
     # embedding was removed to avoid dual half-shaped payloads.
 
 
+def _known_model_names(ctx: PipelineContext) -> set[str]:
+    """Every dbt name a Power BI table could resolve to."""
+    known: set[str] = set()
+    for collection in (ctx.models, ctx.seeds, ctx.snapshots):
+        for data in collection.values():
+            name = data.get("name")
+            if isinstance(name, str) and name:
+                known.add(name)
+    return known
+
+
+def _powerbi_sidecar(ctx: PipelineContext) -> dict[str, Any] | None:
+    """Derive an exposure field lineage payload from a Power BI TMDL model."""
+    if not ctx.powerbi_exposure:
+        logger.warning(
+            "--powerbi-model needs --powerbi-exposure naming the dbt exposure to attach to"
+        )
+        return None
+
+    from docglow.lineage.powerbi_model import sidecar_from_model_dir
+
+    return sidecar_from_model_dir(
+        ctx.powerbi_model_path,
+        exposure_name=ctx.powerbi_exposure,
+        known_models=_known_model_names(ctx),
+    )
+
+
 def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
-    """Merge external exposure field lineage (measures → mart columns) into the payload."""
+    """Merge exposure field lineage (measures → mart columns) into the payload.
+
+    The fields come either from a hand-maintained sidecar JSON or, when
+    --powerbi-model is set, from parsing the semantic model's DAX directly.
+    """
     path = ctx.exposure_field_lineage_path
-    if path is None:
+    if path is None and ctx.powerbi_model_path is None:
         return
 
     from pathlib import Path
@@ -393,9 +429,13 @@ def stage_merge_exposure_field_lineage(ctx: PipelineContext) -> None:
         try_load_exposure_field_lineage,
     )
 
-    resolved = Path(path)
-    logger.info("Loading exposure field lineage from %s", resolved)
-    sidecar = try_load_exposure_field_lineage(resolved)
+    if path is not None:
+        resolved = Path(path)
+        logger.info("Loading exposure field lineage from %s", resolved)
+        sidecar = try_load_exposure_field_lineage(resolved)
+    else:
+        logger.info("Deriving exposure field lineage from %s", ctx.powerbi_model_path)
+        sidecar = _powerbi_sidecar(ctx)
     if sidecar is None:
         return
     ctx.column_lineage = apply_exposure_field_lineage(
@@ -542,7 +582,9 @@ def default_stages(ctx: PipelineContext) -> list[PipelineStage]:
         PipelineStage(
             "merge_exposure_field_lineage",
             stage_merge_exposure_field_lineage,
-            enabled=ctx.exposure_field_lineage_path is not None,
+            enabled=(
+                ctx.exposure_field_lineage_path is not None or ctx.powerbi_model_path is not None
+            ),
         ),
         PipelineStage(
             "enrich_search_aliases",

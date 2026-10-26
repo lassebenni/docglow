@@ -213,6 +213,32 @@ class DocglowData:
     relationships: list[ErdRelationship] = field(default_factory=list)
 
 
+def _powerbi_mart_names(path: Any, known_model_names: set[str]) -> set[str]:
+    """dbt models a TMDL model reads, for widening the column lineage subset.
+
+    Table names are enough here and cost only a file read; parsing every
+    measure's DAX to learn the same names would repeat the expensive half of
+    the work the merge stage does later.
+
+    Only names that are actually dbt models are returned: a semantic model is
+    mostly slicer, helper and field-parameter tables, and feeding those to the
+    subset builder produces one "no models matched" warning apiece.
+
+    Fail-soft: an unreadable model must not abort a docs build, it just means
+    the subset is not widened.
+    """
+    from pathlib import Path
+
+    from docglow.lineage.powerbi_tmdl import read_model
+
+    try:
+        tables = read_model(Path(path)).tables
+    except (OSError, ValueError) as exc:
+        logger.warning("Power BI model: cannot read %s (%s)", path, exc)
+        return set()
+    return tables & known_model_names
+
+
 def build_docglow_data(
     artifacts: LoadedArtifacts,
     *,
@@ -231,6 +257,8 @@ def build_docglow_data(
     slim: bool = False,
     enable_erd: bool = False,
     exposure_field_lineage_path: Any | None = None,
+    powerbi_model_path: Any | None = None,
+    powerbi_exposure: str | None = None,
     term_aliases_path: Any | None = None,
 ) -> dict[str, Any]:
     """Transform loaded artifacts into the unified DocglowData payload.
@@ -262,6 +290,8 @@ def build_docglow_data(
         slim=slim,
         enable_erd=enable_erd,
         exposure_field_lineage_path=exposure_field_lineage_path,
+        powerbi_model_path=powerbi_model_path,
+        powerbi_exposure=powerbi_exposure,
         term_aliases_path=term_aliases_path,
     )
 
@@ -283,6 +313,8 @@ def _build_column_lineage(
     snapshots: dict[str, Any],
     max_workers: int | None = None,
     exposure_field_lineage_path: Any | None = None,
+    powerbi_model_path: Any | None = None,
+    known_model_names: set[str] | None = None,
 ) -> tuple[
     dict[str, Any] | None,
     dict[str, list[dict[str, str]]] | None,
@@ -319,33 +351,39 @@ def _build_column_lineage(
 
     # Marts that only appear via exposure field lineage (e.g. Power BI measures)
     # must be analyzed too — otherwise Field path stops at those leaves.
-    if subset is not None and exposure_field_lineage_path is not None:
+    if subset is not None and (
+        exposure_field_lineage_path is not None or powerbi_model_path is not None
+    ):
         from docglow.lineage.exposure_field_lineage import (
             collect_mart_model_names,
             try_load_exposure_field_lineage,
         )
 
-        sidecar = try_load_exposure_field_lineage(_Path(exposure_field_lineage_path))
-        if sidecar is not None:
-            mart_names = collect_mart_model_names(sidecar)
-            if mart_names:
-                before = len(subset)
-                for name in sorted(mart_names):
-                    subset |= compute_column_lineage_subset(
-                        pattern=name,
-                        models=models,
-                        sources=sources,
-                        seeds=seeds,
-                        snapshots=snapshots,
-                        max_depth=depth,
-                    )
-                logger.info(
-                    "Expanded column lineage subset with %d exposure field lineage "
-                    "mart model(s): %d → %d unique_ids",
-                    len(mart_names),
-                    before,
-                    len(subset),
+        mart_names: set[str] = set()
+        if exposure_field_lineage_path is not None:
+            sidecar = try_load_exposure_field_lineage(_Path(exposure_field_lineage_path))
+            if sidecar is not None:
+                mart_names |= collect_mart_model_names(sidecar)
+        if powerbi_model_path is not None:
+            mart_names |= _powerbi_mart_names(powerbi_model_path, known_model_names or set())
+        if mart_names:
+            before = len(subset)
+            for name in sorted(mart_names):
+                subset |= compute_column_lineage_subset(
+                    pattern=name,
+                    models=models,
+                    sources=sources,
+                    seeds=seeds,
+                    snapshots=snapshots,
+                    max_depth=depth,
                 )
+            logger.info(
+                "Expanded column lineage subset with %d exposure field lineage "
+                "mart model(s): %d → %d unique_ids",
+                len(mart_names),
+                before,
+                len(subset),
+            )
 
     result = analyze_column_lineage(
         models=models,
