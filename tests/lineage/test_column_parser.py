@@ -59,6 +59,21 @@ class TestParseColumnLineage:
         assert all(d.transformation == "passthrough" for d in result["id"])
         assert all(d.transformation == "passthrough" for d in result["name"])
 
+    def test_quoted_columns_are_recorded_without_their_quotes(self) -> None:
+        """dbt_utils.union_relations quotes every column; the dependency must name the bare one.
+
+        Downstream lookups key on the bare name, so a recorded `"amt"` breaks the chain there.
+        """
+        sql = (
+            'SELECT "amt" AS "amt", "doc_no" AS "doc_no" FROM ('
+            'SELECT "amt", "doc_no" FROM prod.stg_pos UNION ALL '
+            'SELECT "amt", "doc_no" FROM prod.stg_invoice) AS unioned'
+        )
+        result = parse_column_lineage(sql, dialect="postgres")
+        deps = result["amt"]
+        assert {d.source_column for d in deps} == {"amt"}
+        assert {d.source_table.split(".")[-1] for d in deps} == {"stg_pos", "stg_invoice"}
+
     def test_aliased_column(self) -> None:
         sql = "SELECT id AS user_id FROM users"
         result = parse_column_lineage(sql)

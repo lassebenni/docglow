@@ -753,10 +753,13 @@ def _table_to_string(table: Any) -> str:
 
 
 def _extract_column_from_node_name(name: str) -> str:
-    """Extract the column name from a lineage node name like 'table.column'."""
-    if "." in name:
-        return name.rsplit(".", 1)[1]
-    return name
+    """Extract the column name from a lineage node name like 'table.column'.
+
+    Surrounding identifier quotes are dropped: sqlglot keeps them on quoted columns (what
+    dbt_utils.union_relations emits), and every later lookup keys on the bare name.
+    """
+    column = name.rsplit(".", 1)[1] if "." in name else name
+    return column.strip('"`')
 
 
 # Keep ordered in sync with TRANSFORMATION_STRENGTH in @docglow/shared-types.
